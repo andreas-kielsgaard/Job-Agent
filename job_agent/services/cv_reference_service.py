@@ -44,7 +44,11 @@ class CvReferenceService:
     def resolve_profile_file(self, filename: str) -> Path:
         target_dir = self.target_dir.resolve()
         path = (target_dir / filename).resolve()
-        if not str(path).startswith(str(target_dir)) or not path.exists():
+        try:
+            path.relative_to(target_dir)
+        except ValueError as exc:
+            raise FileNotFoundError(filename) from exc
+        if not path.exists():
             raise FileNotFoundError(filename)
         return path
 

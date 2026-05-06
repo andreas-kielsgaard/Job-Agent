@@ -126,7 +126,7 @@ class RunStore:
     def list_runs(
         self, include_archived: bool = False, include_deleted: bool = False, include_tests: bool = True
     ) -> list[RunRecord]:
-        data = read_json(self.registry_path, [])
+        data = read_json(self.registry_path, [], strict=True)
         records = [self._record_from_mapping(item) for item in data]
         if not include_archived:
             records = [record for record in records if record.visibility != "archived"]

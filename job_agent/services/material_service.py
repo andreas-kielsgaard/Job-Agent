@@ -48,9 +48,10 @@ class MaterialService:
         package = self.packages.find_package(job_id)
         if not package:
             raise KeyError(f"Job package not found: {job_id}")
+        missing = self.packages.validate_package(package)
+        if missing:
+            raise ValueError(f"Job package missing required files: {', '.join(missing)}")
         files = self.packages.read_package_files(package)
-        if not files.get("job") or not files.get("match"):
-            raise ValueError("Job or match JSON missing")
         job = Job.from_mapping(json.loads(files["job"]))
         match = MatchResult(**json.loads(files["match"]))
         profile = load_profile(self.root)

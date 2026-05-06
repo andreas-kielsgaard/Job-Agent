@@ -15,6 +15,9 @@ def lines_to_list(value: str) -> list[str]:
     return [line.strip() for line in value.splitlines() if line.strip()]
 
 
+KNOWN_SOURCE_TYPES = {"local_yaml", "generic_html", "search_page", "recruiter_site", "manual_or_api_limited"}
+
+
 class SetupService:
     def __init__(self, root: Path = ROOT) -> None:
         self.root = root
@@ -152,6 +155,7 @@ class SetupService:
         write_yaml(path, data)
 
     def add_source(self, *, name: str, url: str, source_type: str, keywords: str, enabled: bool) -> None:
+        self._validate_source_entry(name=name, url=url, source_type=source_type)
         path = self.root / "sources" / "recruiting-sites.yaml"
         data = read_yaml(path, {"sources": []})
         entry: dict[str, Any] = {"name": name, "type": source_type, "enabled": enabled}
@@ -186,5 +190,24 @@ class SetupService:
         return path.read_text(encoding="utf-8") if path.exists() else ""
 
     def write_env(self, values: dict[str, str]) -> None:
-        lines = [f"{key}={value}" for key, value in values.items() if value is not None]
+        lines = [f"{key}={self._format_env_value(value)}" for key, value in values.items() if value is not None]
         atomic_write_text(self.root / ".env", "\n".join(lines) + "\n", encoding="utf-8")
+
+    @staticmethod
+    def _format_env_value(value: str) -> str:
+        if "\n" in value or "\r" in value:
+            raise ValueError("Environment values cannot contain newlines.")
+        if any(character.isspace() for character in value) or "#" in value or '"' in value:
+            return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+        return value
+
+    @staticmethod
+    def _validate_source_entry(*, name: str, url: str, source_type: str) -> None:
+        if not name.strip():
+            raise ValueError("Source name is required.")
+        if source_type not in KNOWN_SOURCE_TYPES:
+            raise ValueError(f"Unsupported source type: {source_type}")
+        if source_type in {"generic_html", "search_page"} and not url.strip():
+            raise ValueError("URL is required for HTML/search sources.")
+        if source_type == "local_yaml" and not url.strip():
+            raise ValueError("A local YAML path is required for local_yaml sources.")

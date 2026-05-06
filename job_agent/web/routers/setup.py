@@ -112,7 +112,10 @@ def add_source(
     keywords: str = Form(""),
     enabled: bool = Form(True),
 ) -> RedirectResponse:
-    setup_service().add_source(name=name, url=url, source_type=source_type, keywords=keywords, enabled=enabled)
+    try:
+        setup_service().add_source(name=name, url=url, source_type=source_type, keywords=keywords, enabled=enabled)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return RedirectResponse(url="/setup#sources", status_code=303)
 
 

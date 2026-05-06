@@ -34,6 +34,13 @@ class StoreTests(unittest.TestCase):
             state = store.classify([changed], today=date(2026, 5, 7))[0]
             self.assertEqual(state.status, "changed")
 
+    def test_corrupt_seen_store_raises(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            store = JobStore(Path(directory))
+            store.path.write_text("{not-json", encoding="utf-8")
+            with self.assertRaises(ValueError):
+                store.classify([Job(title="SAP ABAP")])
+
 
 if __name__ == "__main__":
     unittest.main()

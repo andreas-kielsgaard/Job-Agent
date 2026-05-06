@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
+from job_agent.application_status_store import APPLICATION_STATUSES
 from job_agent.services.material_service import MaterialUpdate
 from job_agent.web.dependencies import application_status_store, material_service, package_service, templates
 from job_agent.web.view_models.jobs import build_job_detail_view, build_jobs_view
@@ -25,6 +26,8 @@ def jobs_page(request: Request) -> HTMLResponse:
 def bulk_job_status(
     job_ids: list[str] = Form(...), status: str = Form(...), return_to: str = Form("/jobs")
 ) -> RedirectResponse:
+    if status not in APPLICATION_STATUSES:
+        raise HTTPException(status_code=400, detail="Unsupported application status")
     status_store = application_status_store()
     packages = package_service()
     for job_id in job_ids:

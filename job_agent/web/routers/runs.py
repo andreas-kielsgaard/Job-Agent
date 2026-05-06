@@ -54,6 +54,8 @@ def run_list(request: Request, view: str = "active") -> HTMLResponse:
 def bulk_runs(
     run_ids: list[str] = Form(...), action: str = Form(...), return_to: str = Form("/runs")
 ) -> RedirectResponse:
+    if action not in {"archive", "delete", "restore"}:
+        raise HTTPException(status_code=400, detail="Unsupported bulk run action")
     store = run_store()
     for run_id in run_ids:
         try:

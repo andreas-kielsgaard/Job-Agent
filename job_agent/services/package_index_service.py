@@ -57,6 +57,14 @@ class PackageIndexService:
                 result[key] = path.read_text(encoding="utf-8")
         return result
 
+    def validate_package(self, package: dict[str, Any]) -> list[str]:
+        missing = []
+        for key in ["job", "match"]:
+            path_text = package.get("paths", {}).get(key)
+            if not path_text or not Path(path_text).exists():
+                missing.append(key)
+        return missing
+
     def mark_package_materials_generated(self, package: dict[str, Any], generated: bool) -> None:
         index_path = package.get("_index_path")
         if not index_path:

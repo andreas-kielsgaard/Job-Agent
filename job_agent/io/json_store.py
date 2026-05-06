@@ -7,12 +7,14 @@ from typing import Any
 from .atomic import atomic_write_text
 
 
-def read_json(path: Path, default: Any) -> Any:
+def read_json(path: Path, default: Any, *, strict: bool = False) -> Any:
     if not path.exists():
         return default
     try:
         return json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
+    except json.JSONDecodeError as exc:
+        if strict:
+            raise ValueError(f"Invalid JSON in {path}") from exc
         return default
 
 

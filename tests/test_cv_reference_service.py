@@ -18,6 +18,7 @@ class CvReferenceServiceTests(unittest.TestCase):
             self.assertEqual(reference["filename"], "reference-cv.md")
             self.assertIn("ABAP and RAP", reference["extracted_text"])
             self.assertIn("ABAP and RAP", (root / "profile" / "canonical-cv.md").read_text(encoding="utf-8"))
+            self.assertEqual(service.resolve_profile_file("reference-cv.md").name, "reference-cv.md")
 
     def test_rejects_unsupported_extension_and_blocks_traversal(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

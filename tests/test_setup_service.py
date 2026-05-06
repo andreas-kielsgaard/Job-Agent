@@ -10,17 +10,30 @@ from job_agent.services.setup_service import SetupService
 
 
 class SetupServiceTests(unittest.TestCase):
+    def test_ensure_private_profile_copies_example(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "profile.example").mkdir()
+            (root / "profile.example" / "canonical-cv.md").write_text("example", encoding="utf-8")
+
+            SetupService(root).ensure_private_profile()
+
+            self.assertEqual((root / "profile" / "canonical-cv.md").read_text(encoding="utf-8"), "example")
+
     def test_env_preserves_existing_keys_and_blank_api_key(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / ".env").write_text("ANTHROPIC_API_KEY=secret\nOTHER=keep\n", encoding="utf-8")
 
-            SetupService(root).save_env_settings("", "claude-sonnet-4-0", True)
+            SetupService(root).save_env_settings("", "claude sonnet", True)
 
             env = (root / ".env").read_text(encoding="utf-8")
             self.assertIn("ANTHROPIC_API_KEY=secret", env)
             self.assertIn("OTHER=keep", env)
+            self.assertIn('CLAUDE_MODEL="claude sonnet"', env)
             self.assertIn("CLAUDE_USE_BY_DEFAULT=true", env)
+            with self.assertRaises(ValueError):
+                SetupService(root).save_env_settings("bad\nkey", "model", True)
 
     def test_saves_contact_and_preferences(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -64,6 +77,15 @@ class SetupServiceTests(unittest.TestCase):
             )
             sources = yaml.safe_load(source_path.read_text(encoding="utf-8"))["sources"]
             self.assertEqual(sources[-1]["keywords"], ["ABAP", "RAP"])
+
+            with self.assertRaises(ValueError):
+                service.add_source(
+                    name="", url="https://example.com", source_type="generic_html", keywords="", enabled=True
+                )
+            with self.assertRaises(ValueError):
+                service.add_source(name="Bad", url="", source_type="generic_html", keywords="", enabled=True)
+            with self.assertRaises(ValueError):
+                service.add_source(name="Bad", url="x", source_type="unknown", keywords="", enabled=True)
 
             service.save_setup_file("canonical_cv", "CV text")
             self.assertEqual((root / "profile" / "canonical-cv.md").read_text(encoding="utf-8"), "CV text")

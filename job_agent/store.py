@@ -109,7 +109,7 @@ class JobStore:
         return hashlib.sha256(content.encode("utf-8")).hexdigest()[:16]
 
     def _load_records(self) -> list[SeenJobRecord]:
-        data = read_json(self.path, [])
+        data = read_json(self.path, [], strict=True)
         if data and isinstance(data[0], str):
             return [
                 SeenJobRecord(

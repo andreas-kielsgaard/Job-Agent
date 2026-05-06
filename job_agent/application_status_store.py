@@ -82,7 +82,7 @@ class ApplicationStatusStore:
         return None
 
     def list_all(self) -> list[ApplicationStatusRecord]:
-        data = read_json(self.path, [])
+        data = read_json(self.path, [], strict=True)
         return [ApplicationStatusRecord(**item) for item in data]
 
     def upsert(self, record: ApplicationStatusRecord) -> None:

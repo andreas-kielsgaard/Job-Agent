@@ -225,16 +225,20 @@ Production-ish behavior already present:
 ## Tests
 
 ```powershell
-python -m unittest discover -s tests
+pip install -r requirements.txt
+pip install -r requirements-dev.txt
+pytest
+pytest --cov=job_agent --cov-report=term-missing
 ```
 
-Development tooling:
+Lint and formatting:
 
 ```powershell
-pip install -r requirements-dev.txt
 python -m ruff check .
-python -m ruff format .
+python -m ruff format --check .
 ```
+
+The tests use temporary project roots and block accidental external network/API calls by default. Coverage is configured as a diagnostic with no required percentage yet; the goal is meaningful coverage of file persistence, setup writes, package indexes, run lifecycle, generated material handling, and route smoke/error behavior.
 
 Basic smoke checks:
 

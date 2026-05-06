@@ -28,6 +28,11 @@ class PackageIndexServiceTests(unittest.TestCase):
             self.assertEqual(read_json(Path(paths["index"]), {})["application_status"], "interesting")
             service.mark_package_materials_generated(package, False)
             self.assertFalse(read_json(Path(paths["index"]), {})["materials_generated"])
+            self.assertEqual(service.validate_package(package), [])
+            self.assertEqual(service.infer_package_date(package).isoformat(), "2026-05-06")
+
+            Path(package["paths"]["job"]).unlink()
+            self.assertEqual(service.validate_package(package), ["job"])
 
     def test_unique_jobs_keeps_latest_run_for_same_stable_id(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
