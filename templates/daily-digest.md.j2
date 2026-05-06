@@ -1,36 +1,64 @@
 # Daily SAP Contract Digest - {{ run_date }}
 
-{% if jobs %}
-{% for item in jobs %}
-## {{ loop.index }}. {{ item.job.title }}
+## Summary
 
+- Total loaded: {{ summary.total_loaded }}
+- New roles: {{ summary.new_roles }}
+- Changed roles: {{ summary.changed_roles }}
+- Strong matches: {{ summary.strong_matches }}
+- Exploratory matches: {{ summary.exploratory_matches }}
+- Weak matches: {{ summary.weak_matches }}
+- Excluded roles: {{ summary.excluded_roles }}
+- Source errors/warnings: {{ summary.source_warnings }}
+
+{% if source_warnings %}
+## Source Warnings
+
+{% for warning in source_warnings -%}
+- {{ warning.source }}: {{ warning.message }}{% if warning.url %} ({{ warning.url }}){% endif %}
+{% endfor %}
+{% endif %}
+
+{% if jobs %}
+## Included Roles
+
+{% for item in jobs %}
+### {{ loop.index }}. {{ item.job.title }}
+
+Company / recruiter: {{ item.job.company }}{% if item.job.recruiter %} / {{ item.job.recruiter }}{% endif %}  
 Source: [{{ item.job.source }}]({{ item.job.url }})  
-Company / recruiter: {{ item.job.company }}  
+Application link: {{ item.job.application_url or item.job.url }}  
 Location: {{ item.job.location }}  
 Remote / onsite: {{ item.job.remote }}  
 Rate / salary: {{ item.job.rate }}  
-Contract duration: {{ item.job.contract_duration }}  
+Duration: {{ item.job.contract_duration }}  
 Start date: {{ item.job.start_date }}  
-Match: {{ item.match.score }}%
+Posted / deadline / freshness: {{ item.job.posted_date }} / {{ item.job.deadline }} / {{ item.job.freshness_confidence }}  
+Match: {{ item.match.total_score }}% ({{ item.match.category }})  
+State: {{ item.state.status }}
 
-Why this is relevant:
+Why this fits:
 {% for reason in item.match.reasons -%}
 - {{ reason }}
 {% endfor %}
 
 {% if item.match.concerns %}
-Concerns / mismatch flags:
+Concerns:
 {% for concern in item.match.concerns -%}
 - {{ concern }}
 {% endfor %}
 {% endif %}
 
+Recommended angle:
+{{ item.match.recommended_angle }}
+
 Generated:
 - At-a-glance CV: {{ item.paths.cv }}
 - Application text: {{ item.paths.application }}
 - Form answers: {{ item.paths.form_answers }}
+- Match analysis: {{ item.paths.match_analysis }}
 
 {% endfor %}
 {% else %}
-No new roles met the digest threshold today.
+No new or changed roles met the digest threshold today.
 {% endif %}

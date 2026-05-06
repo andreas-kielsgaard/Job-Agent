@@ -1,0 +1,37 @@
+# Excluded and Weak Roles - {{ run_date }}
+
+{% if source_warnings %}
+## Source Warnings
+
+{% for warning in source_warnings -%}
+- {{ warning.source }}: {{ warning.message }}{% if warning.url %} ({{ warning.url }}){% endif %}
+{% endfor %}
+{% endif %}
+
+{% if excluded %}
+## Filtered Roles
+
+{% for item in excluded %}
+### {{ loop.index }}. {{ item.job.title }}
+
+Company / recruiter: {{ item.job.company }}  
+Source: [{{ item.job.source }}]({{ item.job.url }})  
+Location: {{ item.job.location }}  
+Posted / deadline: {{ item.job.posted_date }} / {{ item.job.deadline }}  
+Score/category: {{ item.match.total_score }}% / {{ item.match.category }}  
+State: {{ item.state.status }}
+
+Reason:
+{{ item.match.exclusion_reason or "Below inclusion threshold." }}
+
+Concerns:
+{% for concern in item.match.concerns -%}
+- {{ concern }}
+{% else -%}
+- None recorded.
+{% endfor %}
+
+{% endfor %}
+{% else %}
+No roles were filtered out.
+{% endif %}

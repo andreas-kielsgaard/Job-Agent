@@ -1,26 +1,158 @@
 jobs:
+  - title: SAP ABAP RAP Consultant - S/4HANA
+    company: Example Recruiter
+    recruiter: Example Recruiter
+    end_client: Manufacturing client
+    source: Sample Jobs
+    url: "https://example.com/sap-abap-rap-consultant"
+    application_url: "https://example.com/apply/sap-abap-rap-consultant"
+    location: Malmo, Sweden
+    remote: Hybrid, 2 days onsite
+    rate: EUR 850/day
+    contract_duration: 9 months
+    start_date: 2026-06-01
+    posted_date: 2026-05-04
+    deadline: 2026-05-24
+    workload: Full time
+    languages:
+      - English
+    required_languages:
+      - English
+    required_skills:
+      - ABAP
+      - RAP
+      - CDS Views
+      - OData
+      - S/4HANA
+      - Clean Core
+    required_modules:
+      - MM
+      - QM
+    role_category: technical_consultant
+    seniority: senior
+    source_confidence: high
+    description: |
+      Contract role for a senior SAP ABAP/RAP consultant on an S/4HANA program. Strong ABAP OO, RAP, CDS Views, OData/SAP Gateway, Clean Core, debugging and HANA performance experience required. English required. Hybrid setup in Malmo with remote flexibility.
+
   - title: SAP Fullstack Developer - Brussels
     company: Example Recruiter
+    recruiter: Example Recruiter
     source: Sample Jobs
     url: "https://example.com/sap-fullstack-brussels"
+    application_url: "https://example.com/apply/sap-fullstack-brussels"
     location: Brussels, Belgium
     remote: Hybrid, 2-3 days onsite
     rate: Not listed
     contract_duration: 6 months
     start_date: ASAP
     posted_date: 2026-05-06
+    deadline: 2026-05-29
+    workload: Full time
+    languages:
+      - English
+      - French nice to have
+      - Dutch nice to have
+    required_languages:
+      - English
+    required_skills:
+      - ABAP
+      - SAP Gateway
+      - OData
+      - CDS Views
+      - Fiori
+      - UI5 awareness
+    role_category: fiori_adjacent_backend
+    seniority: mid-senior
+    source_confidence: high
     description: |
       Contract role for an SAP Fullstack Developer with strong ABAP, SAP Gateway/OData, CDS Views, debugging, and S/4HANA experience. Fiori/UI5 knowledge is useful, but backend integration is central. English required; French or Dutch nice to have.
 
   - title: SAP Project Manager - Manufacturing
     company: Example Consulting
+    recruiter: Example Consulting
     source: Sample Jobs
     url: "https://example.com/sap-project-manager-manufacturing"
+    application_url: "https://example.com/apply/sap-project-manager-manufacturing"
     location: Copenhagen, Denmark
     remote: Mostly onsite
     rate: EUR 750/day
     contract_duration: 12 months
-    start_date: June 2026
+    start_date: 2026-06-15
     posted_date: 2026-05-06
+    deadline: 2026-06-01
+    workload: Full time
+    languages:
+      - Danish
+      - English
+    required_languages:
+      - Danish
+      - English
+    required_skills:
+      - SAP process knowledge
+      - stakeholder coordination
+      - delivery tracking
+    role_category: exploratory_project_management
+    seniority: mid
+    source_confidence: high
     description: |
-      SAP project manager needed for a manufacturing rollout. The role requires stakeholder coordination, delivery tracking, SAP process knowledge, and vendor management. Technical SAP background is helpful. Formal project management experience preferred.
+      SAP project manager needed for a manufacturing rollout. The role requires stakeholder coordination, delivery tracking, SAP process knowledge, and vendor management. SAP technical background is helpful. Formal project management experience preferred.
+
+  - title: SAP ABAP Entwickler - German Mandatory
+    company: Example DACH Recruiter
+    recruiter: Example DACH Recruiter
+    source: Sample Jobs
+    url: "https://example.com/sap-abap-entwickler-german"
+    application_url: "https://example.com/apply/sap-abap-entwickler-german"
+    location: Munich, Germany
+    remote: Hybrid
+    rate: EUR 820/day
+    contract_duration: 6 months
+    start_date: 2026-06-01
+    posted_date: 2026-05-03
+    deadline: 2026-05-20
+    workload: Full time
+    languages:
+      - German mandatory
+    required_languages:
+      - German mandatory
+    required_skills:
+      - ABAP
+      - BADI
+      - User Exits
+      - ECC
+    required_modules:
+      - SD
+      - MM
+    role_category: technical_consultant
+    seniority: senior
+    source_confidence: high
+    description: |
+      SAP ABAP Entwickler required for ECC enhancement work using BADI, BAPI and User Exits. Fluent German required and German is mandatory for workshops. English alone is not sufficient.
+
+  - title: Old SAP ABAP Support Consultant
+    company: Example Archive Recruiter
+    recruiter: Example Archive Recruiter
+    source: Sample Jobs
+    url: "https://example.com/old-sap-abap-support"
+    application_url: "https://example.com/apply/old-sap-abap-support"
+    location: Remote EU
+    remote: Remote
+    rate: EUR 700/day
+    contract_duration: 3 months
+    start_date: 2025-11-01
+    posted_date: 2025-10-01
+    deadline: 2025-10-20
+    workload: Part time
+    languages:
+      - English
+    required_languages:
+      - English
+    required_skills:
+      - ABAP
+      - Debugging
+      - ECC
+    role_category: technical_support
+    seniority: mid
+    source_confidence: high
+    description: |
+      Old archived SAP ABAP support role. This should be excluded because the posting and deadline are stale.

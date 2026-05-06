@@ -1,4 +1,9 @@
-# Form Answers - {{ job.title }}
+# Standard Form Answer Package - {{ job.title }}
+
+These answers are generic copy-paste drafts. No application form was inspected for this package.
+
+Application link:
+{{ job.application_url or job.url }}
 
 First name:
 {{ contact.first_name | default(contact.name.split(" ")[0]) }}
@@ -23,6 +28,9 @@ Currently based in {{ contact.location }}. {{ location_policy.onsite_roles }}
 
 Expected rate:
 [Manual confirmation recommended]
+
+Language requirements:
+{{ job.required_languages | join(", ") if job.required_languages else "Manual confirmation recommended" }}
 
 Message:
 {{ application_text }}

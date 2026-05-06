@@ -13,11 +13,17 @@ from .models import GeneratedPackage, Job, MatchResult
 def generate_materials(job: Job, match: MatchResult, profile: dict, use_llm: bool = False, root: Path = ROOT) -> GeneratedPackage:
     selected_experience = select_experience(job, profile)
     top_skills = select_skills(job, match, profile)
-    role_summary = build_role_summary(job, match, top_skills)
-    caveat_text = build_caveat_text(job, match)
+    role_summary = build_role_summary(job, top_skills)
+    caveat_text = build_caveat_text(job, match, profile)
     application_opening = build_application_opening(job, match)
+    generation_notes: list[str] = []
 
-    llm_application = maybe_generate_application_with_llm(job, match, profile, selected_experience, top_skills) if use_llm else ""
+    llm_application = ""
+    if use_llm:
+        llm_application = maybe_generate_application_with_llm(job, match, profile, selected_experience, top_skills, generation_notes)
+    else:
+        generation_notes.append("Claude disabled; deterministic application template used.")
+
     env = Environment(
         loader=FileSystemLoader(root / "templates"),
         autoescape=select_autoescape(default=False),
@@ -33,9 +39,10 @@ def generate_materials(job: Job, match: MatchResult, profile: dict, use_llm: boo
         "role_summary": role_summary,
         "top_skills": top_skills,
         "selected_experience": selected_experience,
-        "keyword_line": ", ".join(match.matched_keywords + top_skills),
+        "keyword_line": ", ".join(_dedupe(match.matched_keywords + top_skills)),
         "opening": application_opening,
         "caveat_text": caveat_text,
+        "generation_notes": generation_notes,
     }
 
     cv = env.get_template("at-a-glance-cv.md.j2").render(**context).strip() + "\n"
@@ -45,25 +52,34 @@ def generate_materials(job: Job, match: MatchResult, profile: dict, use_llm: boo
         application_text=application,
         cv_path="[generated alongside this form-answer file]",
     ).strip() + "\n"
+    match_analysis = env.get_template("match-analysis.md.j2").render(**context).strip() + "\n"
 
-    return GeneratedPackage(cv=cv, application=application, form_answers=form_answers, selected_experience=selected_experience, top_skills=top_skills)
+    return GeneratedPackage(
+        cv=cv,
+        application=application,
+        form_answers=form_answers,
+        match_analysis=match_analysis,
+        selected_experience=selected_experience,
+        top_skills=top_skills,
+        generation_notes=generation_notes,
+    )
 
 
 def select_skills(job: Job, match: MatchResult, profile: dict) -> list[str]:
-    text = f"{job.title} {job.description}".lower()
+    text = f"{job.title} {job.description} {' '.join(job.required_skills)}".lower()
     all_skills = profile.get("skills", {}).get("strongest", [])
     ranked = sorted(all_skills, key=lambda skill: (skill.lower() not in text, all_skills.index(skill)))
     return ranked[:5]
 
 
 def select_experience(job: Job, profile: dict) -> list[dict[str, str]]:
-    text = f"{job.title} {job.description}".lower()
+    text = f"{job.title} {job.description} {' '.join(job.required_skills)} {' '.join(job.required_modules)}".lower()
     scored = []
-    for item in profile.get("experience", []):
+    for index, item in enumerate(profile.get("experience", [])):
         keywords = item.get("keywords", [])
         score = sum(1 for keyword in keywords if keyword.lower() in text)
-        scored.append((score, item))
-    selected = [item for _, item in sorted(scored, key=lambda pair: pair[0], reverse=True)[:2]]
+        scored.append((score, -index, item))
+    selected = [item for _, _, item in sorted(scored, reverse=True)[:2]]
     result = []
     for item in selected:
         highlights = item.get("highlights", [])
@@ -77,25 +93,36 @@ def select_experience(job: Job, profile: dict) -> list[dict[str, str]]:
     return result
 
 
-def build_role_summary(job: Job, match: MatchResult, top_skills: list[str]) -> str:
+def build_role_summary(job: Job, top_skills: list[str]) -> str:
+    onsite = ""
+    if any(term in f"{job.remote} {job.location}".lower() for term in ["onsite", "hybrid"]):
+        onsite = " Includes availability for hybrid or onsite setup where logistics are workable."
     return (
-        f"Relevant SAP consultant profile for {job.title}, emphasizing "
-        f"{', '.join(top_skills[:3])}. Match score is {match.score}%, with the strongest signals coming from "
-        f"{', '.join(match.matched_keywords[:6]) or 'the role description'}."
+        f"SAP technical consultant profile aligned with {job.title}, with emphasis on "
+        f"{', '.join(top_skills[:3])}. Background combines hands-on delivery, debugging, integration work, "
+        f"and clear communication around scope and partial matches.{onsite}"
     )
 
 
 def build_application_opening(job: Job, match: MatchResult) -> str:
     return (
-        f"I am interested in the {job.title} role. Based on the description, the strongest overlap is "
-        f"{', '.join(match.matched_keywords[:6]) or 'SAP technical consulting'}, supported by concrete SAP delivery experience."
+        f"I am contacting you regarding the {job.title} role. The strongest overlap is "
+        f"{', '.join(match.matched_keywords[:6]) or 'SAP technical consulting'}, supported by concrete SAP project delivery."
     )
 
 
-def build_caveat_text(job: Job, match: MatchResult) -> str:
-    if match.concerns:
-        return "Points to clarify: " + " ".join(match.concerns)
-    return "I have kept the application focused on the parts of the role where my background is strongest."
+def build_caveat_text(job: Job, match: MatchResult, profile: dict) -> str:
+    caveats = []
+    text = f"{job.title} {job.description}".lower()
+    if "fiori" in text or "ui5" in text:
+        caveats.append(profile.get("skills", {}).get("caveats", {}).get("fiori", "Clarify Fiori/UI5 depth."))
+    if "project manager" in text or "transition manager" in text or "service delivery manager" in text:
+        caveats.append(profile.get("skills", {}).get("caveats", {}).get("project_management", "Clarify project management ownership depth."))
+    if match.components.get("language_risk", 0) < 0:
+        caveats.append("Language requirements should be confirmed before applying.")
+    if caveats:
+        return " ".join(caveats)
+    return "The application keeps the focus on the parts of the role where the background is strongest."
 
 
 def maybe_generate_application_with_llm(
@@ -104,56 +131,58 @@ def maybe_generate_application_with_llm(
     profile: dict,
     selected_experience: list[dict[str, str]],
     top_skills: list[str],
+    generation_notes: list[str],
 ) -> str:
     load_dotenv()
-    if not os.getenv("ANTHROPIC_API_KEY"):
+    api_key = os.getenv("ANTHROPIC_API_KEY")
+    model = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-20250514")
+    if not api_key or api_key.startswith("replace_with"):
+        generation_notes.append("Claude requested but ANTHROPIC_API_KEY is missing or placeholder; deterministic fallback used.")
         return ""
 
     try:
         from anthropic import Anthropic
 
-        client = Anthropic()
-        model = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-20250514")
-        prompt = f"""
-Write a concise application for this SAP contract role.
-
-Rules:
-- Use direct consultant tone.
-- Do not use "passionate", "excited", "dynamic", or "perfect fit".
-- Do not exaggerate skills.
-- Explicitly mention partial matches when relevant.
-- Emphasize relocation policy if onsite work is required.
-- Mention immediate availability with logistics caveat.
-- Prefer concrete project references over generic traits.
-
-Profile:
-{profile.get("canonical_cv", "")}
-
-Writing style:
-{profile.get("writing_style", "")}
-
-Top selected skills:
-{", ".join(top_skills)}
-
-Selected experience:
-{selected_experience}
-
-Job:
-Title: {job.title}
-Company: {job.company}
-Location: {job.location}
-Remote: {job.remote}
-Description:
-{job.description}
-
-Match concerns:
-{match.concerns}
-"""
+        client = Anthropic(api_key=api_key)
+        prompt = _load_prompt("generate_application.md").format(
+            canonical_cv=profile.get("canonical_cv", ""),
+            writing_style=profile.get("writing_style", ""),
+            top_skills=", ".join(top_skills),
+            selected_experience=selected_experience,
+            title=job.title,
+            company=job.company,
+            location=job.location,
+            remote=job.remote,
+            description=job.description,
+            concerns=match.concerns,
+            recommended_angle=match.recommended_angle,
+            availability=profile.get("availability", {}),
+            location_policy=profile.get("location_policy", {}),
+        )
         response = client.messages.create(
             model=model,
             max_tokens=700,
             messages=[{"role": "user", "content": prompt}],
         )
+        generation_notes.append(f"Claude application generation succeeded with model {model}.")
         return "".join(block.text for block in response.content if block.type == "text").strip() + "\n"
-    except Exception:
+    except Exception as exc:
+        generation_notes.append(f"Claude application generation failed with model {model}: {exc}. Deterministic fallback used.")
         return ""
+
+
+def _load_prompt(name: str) -> str:
+    path = ROOT / "prompts" / name
+    if path.exists():
+        return path.read_text(encoding="utf-8")
+    return "{canonical_cv}\n\nWrite application for {title}."
+
+
+def _dedupe(items: list[str]) -> list[str]:
+    seen = set()
+    result = []
+    for item in items:
+        if item and item not in seen:
+            result.append(item)
+            seen.add(item)
+    return result

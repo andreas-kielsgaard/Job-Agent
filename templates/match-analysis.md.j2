@@ -1,0 +1,49 @@
+# Match Analysis - {{ job.title }}
+
+Score: {{ match.total_score }}%  
+Category: {{ match.category }}
+
+{% if match.exclusion_reason %}
+Exclusion reason:
+{{ match.exclusion_reason }}
+{% endif %}
+
+## Components
+
+{% for name, score in match.components.items() -%}
+- {{ name }}: {{ score }}
+{% endfor %}
+
+## Reasons
+
+{% for reason in match.reasons -%}
+- {{ reason }}
+{% endfor %}
+
+## Concerns
+
+{% for concern in match.concerns -%}
+- {{ concern }}
+{% else -%}
+- None recorded.
+{% endfor %}
+
+## Missing Information
+
+{% for item in match.missing_information -%}
+- {{ item }}
+{% else -%}
+- None recorded.
+{% endfor %}
+
+## Recommended Angle
+
+{{ match.recommended_angle }}
+
+## Generation Notes
+
+{% for note in generation_notes -%}
+- {{ note }}
+{% else -%}
+- No generation notes.
+{% endfor %}

@@ -10,6 +10,9 @@ Relevant background:
 {{ caveat_text }}
 
 Availability: {{ availability.available_from }}. {{ availability.logistics }}
+{% if "onsite" in job.remote | lower or "hybrid" in job.remote | lower %}
+Location: {{ location_policy.onsite_roles }}
+{% endif %}
 
 Best regards,  
 {{ contact.name }}
