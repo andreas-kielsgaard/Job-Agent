@@ -4,8 +4,8 @@ import unittest
 
 from fastapi.testclient import TestClient
 
-from job_agent.web.app import app
 from job_agent.run_store import RunOptions
+from job_agent.web.app import app
 
 
 class WebTests(unittest.TestCase):
@@ -43,7 +43,9 @@ class WebTests(unittest.TestCase):
 
     def test_jobs_multi_filters_load(self) -> None:
         client = TestClient(app)
-        response = client.get("/jobs?app_status=interesting&app_status=not_interesting&category=strong&category=exploratory")
+        response = client.get(
+            "/jobs?app_status=interesting&app_status=not_interesting&category=strong&category=exploratory"
+        )
         self.assertEqual(response.status_code, 200)
         self.assertIn("clickable-row", response.text)
 
@@ -53,7 +55,9 @@ class WebTests(unittest.TestCase):
 
     def test_ai_edit_context_endpoint(self) -> None:
         client = TestClient(app)
-        response = client.get("/api/ai-edit/context", params={"field_id": "profile.skills", "button_id": "setup.skills"})
+        response = client.get(
+            "/api/ai-edit/context", params={"field_id": "profile.skills", "button_id": "setup.skills"}
+        )
         self.assertEqual(response.status_code, 200)
         data = response.json()
         self.assertIn("blocks", data)

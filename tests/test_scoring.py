@@ -6,7 +6,6 @@ from datetime import date
 from job_agent.models import Job
 from job_agent.scoring import score_job
 
-
 PROFILE = {
     "location_policy": {"preferred_regions": ["Denmark", "Sweden", "Remote EU/UK"]},
     "skills": {

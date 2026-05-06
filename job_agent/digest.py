@@ -49,7 +49,10 @@ def write_job_package(
         package.form_answers.replace("[generated alongside this form-answer file]", str(paths["cv"])),
         encoding="utf-8",
     )
-    write_json(paths["index"], _package_index(job, match, slug, paths, run_id, stable_id, fuzzy_key, state, application_status, True))
+    write_json(
+        paths["index"],
+        _package_index(job, match, slug, paths, run_id, stable_id, fuzzy_key, state, application_status, True),
+    )
 
     return {name: str(path) for name, path in paths.items()}
 
@@ -76,26 +79,37 @@ def write_placeholder_job_package(
     }
     write_json(paths["job"], asdict(job))
     write_json(paths["match"], asdict(match))
-    write_json(paths["index"], _package_index(job, match, slug, paths, run_id, stable_id, fuzzy_key, state, application_status, False))
+    write_json(
+        paths["index"],
+        _package_index(job, match, slug, paths, run_id, stable_id, fuzzy_key, state, application_status, False),
+    )
     return {name: str(path) for name, path in paths.items()}
 
 
-def write_daily_digest(summary: dict, items: list[dict], source_warnings: list[SourceWarning], run_date: date, root: Path = ROOT) -> Path:
+def write_daily_digest(
+    summary: dict, items: list[dict], source_warnings: list[SourceWarning], run_date: date, root: Path = ROOT
+) -> Path:
     env = _env(root)
     output_dir = root / "output" / "daily-digests"
     output_dir.mkdir(parents=True, exist_ok=True)
     digest_path = output_dir / f"{run_date}-digest.md"
-    content = env.get_template("daily-digest.md.j2").render(run_date=run_date, summary=summary, jobs=items, source_warnings=source_warnings)
+    content = env.get_template("daily-digest.md.j2").render(
+        run_date=run_date, summary=summary, jobs=items, source_warnings=source_warnings
+    )
     atomic_write_text(digest_path, content.strip() + "\n", encoding="utf-8")
     return digest_path
 
 
-def write_excluded_summary(excluded_items: list[dict], source_warnings: list[SourceWarning], run_date: date, root: Path = ROOT) -> Path:
+def write_excluded_summary(
+    excluded_items: list[dict], source_warnings: list[SourceWarning], run_date: date, root: Path = ROOT
+) -> Path:
     env = _env(root)
     output_dir = root / "output" / "daily-digests"
     output_dir.mkdir(parents=True, exist_ok=True)
     path = output_dir / f"{run_date}-excluded.md"
-    content = env.get_template("excluded-summary.md.j2").render(run_date=run_date, excluded=excluded_items, source_warnings=source_warnings)
+    content = env.get_template("excluded-summary.md.j2").render(
+        run_date=run_date, excluded=excluded_items, source_warnings=source_warnings
+    )
     atomic_write_text(path, content.strip() + "\n", encoding="utf-8")
     return path
 

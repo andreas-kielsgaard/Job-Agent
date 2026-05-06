@@ -33,7 +33,9 @@ def build_run_list_view(view: str, root: Path = ROOT) -> dict:
     return {"runs": runs, "view": view}
 
 
-def build_run_detail_view(run_id: str, category: str = "", app_status: str = "", source: str = "", root: Path = ROOT) -> dict:
+def build_run_detail_view(
+    run_id: str, category: str = "", app_status: str = "", source: str = "", root: Path = ROOT
+) -> dict:
     store = RunStore(root)
     record = store.get(run_id)
     if not record:

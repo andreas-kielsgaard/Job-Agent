@@ -33,15 +33,69 @@ class SetupService:
 
     def setup_files(self) -> dict[str, dict[str, str]]:
         return {
-            "skills": {"label": "Skills and caveats", "field_id": "profile.skills", "path": "profile/skills.yaml", "content": self.read_text("profile/skills.yaml"), "help": "Skills are used by scoring and generation. Keep caveats honest; they are explicitly referenced in application text."},
-            "experience": {"label": "Experience", "field_id": "profile.experience", "path": "profile/experience.yaml", "content": self.read_text("profile/experience.yaml"), "help": "Experience entries are scored by keywords. The two most relevant entries are selected for the at-a-glance CV."},
-            "canonical_cv": {"label": "Canonical CV text", "field_id": "profile.canonical_cv", "path": "profile/canonical-cv.md", "content": self.read_text("profile/canonical-cv.md"), "help": "This is the main source-of-truth text given to Claude for writing."},
-            "writing_style": {"label": "Writing style", "field_id": "profile.writing_style", "path": "profile/writing-style.md", "content": self.read_text("profile/writing-style.md"), "help": "Used in Claude prompts and as guidance for deterministic writing."},
-            "sources": {"label": "Sources", "field_id": "sources", "path": "sources/recruiting-sites.yaml", "content": self.read_text("sources/recruiting-sites.yaml"), "help": "Enabled sources are read by the run service. local_yaml is safest; generic_html is best-effort."},
-            "cv_template": {"label": "At-a-glance CV template", "field_id": "template.cv", "path": "templates/at-a-glance-cv.md.j2", "content": self.read_text("templates/at-a-glance-cv.md.j2"), "help": "Jinja template. Use {{ contact.name }}, {{ top_skills }}, {{ selected_experience }}, etc."},
-            "application_template": {"label": "Application template", "field_id": "template.application", "path": "templates/application-letter.md.j2", "content": self.read_text("templates/application-letter.md.j2"), "help": "Deterministic fallback template used when Claude is disabled or fails."},
-            "form_template": {"label": "Form answers template", "field_id": "template.form", "path": "templates/form-answers.md.j2", "content": self.read_text("templates/form-answers.md.j2"), "help": "Standard form answer package. Do not imply actual form inspection here."},
-            "application_prompt": {"label": "Claude application prompt", "field_id": "prompt.application", "path": "prompts/generate_application.md", "content": self.read_text("prompts/generate_application.md"), "help": "Prompt template for Claude application generation. Variables use Python .format style: {canonical_cv}, {title}, {description}."},
+            "skills": {
+                "label": "Skills and caveats",
+                "field_id": "profile.skills",
+                "path": "profile/skills.yaml",
+                "content": self.read_text("profile/skills.yaml"),
+                "help": "Skills are used by scoring and generation. Keep caveats honest; they are explicitly referenced in application text.",
+            },
+            "experience": {
+                "label": "Experience",
+                "field_id": "profile.experience",
+                "path": "profile/experience.yaml",
+                "content": self.read_text("profile/experience.yaml"),
+                "help": "Experience entries are scored by keywords. The two most relevant entries are selected for the at-a-glance CV.",
+            },
+            "canonical_cv": {
+                "label": "Canonical CV text",
+                "field_id": "profile.canonical_cv",
+                "path": "profile/canonical-cv.md",
+                "content": self.read_text("profile/canonical-cv.md"),
+                "help": "This is the main source-of-truth text given to Claude for writing.",
+            },
+            "writing_style": {
+                "label": "Writing style",
+                "field_id": "profile.writing_style",
+                "path": "profile/writing-style.md",
+                "content": self.read_text("profile/writing-style.md"),
+                "help": "Used in Claude prompts and as guidance for deterministic writing.",
+            },
+            "sources": {
+                "label": "Sources",
+                "field_id": "sources",
+                "path": "sources/recruiting-sites.yaml",
+                "content": self.read_text("sources/recruiting-sites.yaml"),
+                "help": "Enabled sources are read by the run service. local_yaml is safest; generic_html is best-effort.",
+            },
+            "cv_template": {
+                "label": "At-a-glance CV template",
+                "field_id": "template.cv",
+                "path": "templates/at-a-glance-cv.md.j2",
+                "content": self.read_text("templates/at-a-glance-cv.md.j2"),
+                "help": "Jinja template. Use {{ contact.name }}, {{ top_skills }}, {{ selected_experience }}, etc.",
+            },
+            "application_template": {
+                "label": "Application template",
+                "field_id": "template.application",
+                "path": "templates/application-letter.md.j2",
+                "content": self.read_text("templates/application-letter.md.j2"),
+                "help": "Deterministic fallback template used when Claude is disabled or fails.",
+            },
+            "form_template": {
+                "label": "Form answers template",
+                "field_id": "template.form",
+                "path": "templates/form-answers.md.j2",
+                "content": self.read_text("templates/form-answers.md.j2"),
+                "help": "Standard form answer package. Do not imply actual form inspection here.",
+            },
+            "application_prompt": {
+                "label": "Claude application prompt",
+                "field_id": "prompt.application",
+                "path": "prompts/generate_application.md",
+                "content": self.read_text("prompts/generate_application.md"),
+                "help": "Prompt template for Claude application generation. Variables use Python .format style: {canonical_cv}, {title}, {description}.",
+            },
         }
 
     def save_env_settings(self, anthropic_api_key: str, claude_model: str, claude_use_by_default: bool) -> None:

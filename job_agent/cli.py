@@ -15,8 +15,12 @@ def main() -> None:
     daily.add_argument("--include-seen", action="store_true", help="Process jobs even if already seen.")
     daily.add_argument("--mark-seen", action="store_true", help="Mark processed jobs as seen after the run.")
     daily.add_argument("--include-weak", action="store_true", help="Generate packages for weak matches too.")
-    daily.add_argument("--skip-materials", action="store_true", help="Skip CV/application/form material generation during discovery.")
-    daily.add_argument("--test-run", action="store_true", help="Mark this as a test run; it will not update seen-job state.")
+    daily.add_argument(
+        "--skip-materials", action="store_true", help="Skip CV/application/form material generation during discovery."
+    )
+    daily.add_argument(
+        "--test-run", action="store_true", help="Mark this as a test run; it will not update seen-job state."
+    )
 
     args = parser.parse_args()
     if args.command == "run-daily":
@@ -30,9 +34,23 @@ def main() -> None:
         )
 
 
-def run_daily(use_llm: bool = False, include_seen: bool = False, mark_seen: bool = False, include_weak: bool = False, generate_materials: bool = True, is_test: bool = False) -> None:
+def run_daily(
+    use_llm: bool = False,
+    include_seen: bool = False,
+    mark_seen: bool = False,
+    include_weak: bool = False,
+    generate_materials: bool = True,
+    is_test: bool = False,
+) -> None:
     result = run_daily_agent(
-        RunOptions(use_llm=use_llm, include_seen=include_seen, include_weak=include_weak, mark_seen=mark_seen, generate_materials=generate_materials, is_test=is_test)
+        RunOptions(
+            use_llm=use_llm,
+            include_seen=include_seen,
+            include_weak=include_weak,
+            mark_seen=mark_seen,
+            generate_materials=generate_materials,
+            is_test=is_test,
+        )
     )
     record = result.record
     print(f"Run: {record.run_id}")

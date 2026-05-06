@@ -1,9 +1,9 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
-from typing import Callable
 
 from .application_status_store import ApplicationStatusStore
 from .config import ROOT, load_profile
@@ -14,7 +14,6 @@ from .scoring import score_job
 from .sources import load_jobs_from_sources
 from .store import JobStore
 from .token_usage import TokenUsageStore
-
 
 ProgressCallback = Callable[[RunEvent], None]
 
@@ -38,7 +37,15 @@ def run_daily_agent(
         record = run_store.create_run(options)
     run_id = record.run_id
 
-    def emit(event_type: str, message: str, phase: str = "", status: str = "running", current_source: str = "", current_job: str = "", counts: dict | None = None) -> None:
+    def emit(
+        event_type: str,
+        message: str,
+        phase: str = "",
+        status: str = "running",
+        current_source: str = "",
+        current_job: str = "",
+        counts: dict | None = None,
+    ) -> None:
         event = RunEvent(
             run_id=run_id,
             event_type=event_type,
@@ -63,12 +70,19 @@ def run_daily_agent(
         source_result = load_jobs_from_sources(root)
         for warning in source_result.warnings:
             emit("source_warning", warning.message, "source_ingestion", current_source=warning.source)
-        emit("jobs_loaded", f"Loaded {len(source_result.jobs)} jobs.", "source_ingestion", counts={"total_loaded": len(source_result.jobs)})
+        emit(
+            "jobs_loaded",
+            f"Loaded {len(source_result.jobs)} jobs.",
+            "source_ingestion",
+            counts={"total_loaded": len(source_result.jobs)},
+        )
 
         store = JobStore(root)
         status_store = ApplicationStatusStore(root)
         states = store.classify(source_result.jobs)
-        candidate_states = states if options.include_seen else [state for state in states if state.status in {"new", "changed"}]
+        candidate_states = (
+            states if options.include_seen else [state for state in states if state.status in {"new", "changed"}]
+        )
         threshold = int(profile.get("thresholds", {}).get("minimum_digest_score", 45))
         run_date = date.today()
         digest_items: list[dict] = []
@@ -94,7 +108,12 @@ def run_daily_agent(
                 application_url=job.application_url,
             )
             match = score_job(job, profile)
-            emit("job_scored", f"{job.title} scored {match.total_score}% ({match.category}).", "scoring", current_job=job.title)
+            emit(
+                "job_scored",
+                f"{job.title} scored {match.total_score}% ({match.category}).",
+                "scoring",
+                current_job=job.title,
+            )
             item = {"job": job, "match": match, "state": state, "application_status": app_status}
 
             should_include = (
@@ -127,7 +146,9 @@ def run_daily_agent(
                         state=state.status,
                         application_status=app_status.status,
                     )
-                    emit("package_generated", f"Generated package for {job.title}.", "generation", current_job=job.title)
+                    emit(
+                        "package_generated", f"Generated package for {job.title}.", "generation", current_job=job.title
+                    )
                 else:
                     paths = write_placeholder_job_package(
                         job,
@@ -140,7 +161,12 @@ def run_daily_agent(
                         state=state.status,
                         application_status=app_status.status,
                     )
-                    emit("package_skipped", f"Skipped material generation for {job.title}.", "generation", current_job=job.title)
+                    emit(
+                        "package_skipped",
+                        f"Skipped material generation for {job.title}.",
+                        "generation",
+                        current_job=job.title,
+                    )
                 item["paths"] = paths
                 digest_items.append(item)
             else:

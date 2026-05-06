@@ -5,7 +5,9 @@ from pathlib import Path
 from job_agent.application_status_store import APPLICATION_STATUSES, ApplicationStatusStore
 from job_agent.config import ROOT
 from job_agent.services.cv_reference_service import CvReferenceService
-from job_agent.services.package_index_service import PackageIndexService, markdown_to_html
+from job_agent.services.package_index_service import PackageIndexService
+from job_agent.services.review_bundle_service import ReviewBundleService
+from job_agent.web.formatting import markdown_to_html
 
 
 def build_jobs_view(app_statuses: list[str], categories: list[str], root: Path = ROOT) -> dict:
@@ -31,5 +33,5 @@ def build_job_detail_view(job_id: str, run_id: str = "", root: Path = ROOT) -> d
         "statuses": sorted(APPLICATION_STATUSES),
         "render_md": markdown_to_html,
         "cv_reference": CvReferenceService(root).get_cv_reference(),
-        "review_bundle": service.build_review_bundle(package, files, status),
+        "review_bundle": ReviewBundleService().build(package, files, status),
     }

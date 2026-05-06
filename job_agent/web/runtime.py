@@ -5,7 +5,7 @@ import os
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from job_agent.config import ROOT
@@ -40,7 +40,7 @@ class WebRuntime:
         active_run = self.active_run()
         return {
             "status": "ok",
-            "time": datetime.now(timezone.utc).isoformat(),
+            "time": datetime.now(UTC).isoformat(),
             "app_version": self.app_version or compute_app_version(self.root),
             "active_run_id": active_run.run_id if active_run else "",
             "active_run_status": active_run.status if active_run else "",
@@ -68,6 +68,9 @@ class WebRuntime:
                 continue
             if self.has_active_run():
                 continue
+            # Intentional local-launcher shutdown path. The double-click Windows launcher starts a private
+            # localhost server for one user; if the browser has been idle and no agent run is active, a hard
+            # process exit avoids leaving a background server behind. This is not intended for hosted use.
             os._exit(0)
 
 

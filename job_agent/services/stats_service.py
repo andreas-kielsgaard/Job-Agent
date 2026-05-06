@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -23,7 +23,7 @@ class StatsService:
         active_run = next((run for run in runs if run.status in {"pending", "running"}), None)
         today_runs = [run for run in runs if run.started_at.startswith(today)]
         statuses = ApplicationStatusStore(self.root).list_all()
-        seven_days_ago = datetime.now(timezone.utc).timestamp() - 7 * 24 * 60 * 60
+        seven_days_ago = datetime.now(UTC).timestamp() - 7 * 24 * 60 * 60
         applied_last_7 = 0
         for record in statuses:
             if record.status != "applied" or not record.applied_at:

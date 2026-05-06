@@ -39,7 +39,9 @@ class JobStore:
             else:
                 status = "previously_seen"
                 job.first_seen_date = existing.first_seen_date
-            states.append(JobState(job=job, stable_id=stable_id, fuzzy_key=fuzzy_key, content_hash=content_hash, status=status))
+            states.append(
+                JobState(job=job, stable_id=stable_id, fuzzy_key=fuzzy_key, content_hash=content_hash, status=status)
+            )
 
         return states
 
@@ -100,7 +102,10 @@ class JobStore:
 
     @staticmethod
     def content_hash(job: Job) -> str:
-        content = "|".join(str(part) for part in [job.title, job.company, job.location, job.rate, job.description, job.deadline, job.posted_date])
+        content = "|".join(
+            str(part)
+            for part in [job.title, job.company, job.location, job.rate, job.description, job.deadline, job.posted_date]
+        )
         return hashlib.sha256(content.encode("utf-8")).hexdigest()[:16]
 
     def _load_records(self) -> list[SeenJobRecord]:

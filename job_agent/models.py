@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from datetime import date
 from typing import Any
 
 
@@ -91,7 +90,7 @@ class Job:
             )
 
     @classmethod
-    def from_mapping(cls, data: dict[str, Any]) -> "Job":
+    def from_mapping(cls, data: dict[str, Any]) -> Job:
         allowed = cls.__dataclass_fields__.keys()
         return cls(**{name: data[name] for name in allowed if name in data})
 

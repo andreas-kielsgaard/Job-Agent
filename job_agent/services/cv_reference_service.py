@@ -5,7 +5,6 @@ from pathlib import Path
 from job_agent.config import ROOT
 from job_agent.io.atomic import atomic_write_bytes, atomic_write_text
 
-
 ALLOWED_CV_SUFFIXES = {".pdf", ".docx", ".txt", ".md"}
 
 

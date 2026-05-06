@@ -9,9 +9,9 @@ from job_agent.prompt_context import (
     EditContextPreference,
     EditContextPreferenceStore,
     PromptContextProvider,
-    run_ai_edit,
 )
 
+from .llm_service import LlmService
 from .package_index_service import PackageIndexService
 
 
@@ -33,6 +33,7 @@ class AiEditService:
         self.provider = PromptContextProvider(root)
         self.preferences = EditContextPreferenceStore(root)
         self.packages = PackageIndexService(root)
+        self.llm = LlmService(root)
 
     def context_payload(self, field_id: str, button_id: str, job_id: str = "", run_id: str = "") -> dict:
         package = self.packages.find_package(job_id, run_id) if job_id else None
@@ -68,5 +69,11 @@ class AiEditService:
                 disabled_blocks=request.disabled_blocks,
             )
         )
-        revised, model = run_ai_edit(prompt, self.root)
-        return {"revised_text": revised, "prompt": prompt, "model": model}
+        completion = self.llm.complete(
+            prompt,
+            max_tokens=2200,
+            purpose="ai_edit",
+            run_id=request.run_id,
+            associated_job_id=request.job_id,
+        )
+        return {"revised_text": completion.text, "prompt": prompt, "model": completion.model}

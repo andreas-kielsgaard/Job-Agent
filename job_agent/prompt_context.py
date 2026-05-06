@@ -1,16 +1,13 @@
 from __future__ import annotations
 
 import json
-import os
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-from dotenv import load_dotenv
-
 from .config import ROOT
 from .io.json_store import read_json, write_json
-
+from .services.llm_service import LlmService
 
 APP_CONTEXT = """This is a local-first SAP freelance job preparation application.
 It discovers SAP freelance/contract roles, scores them against a private profile,
@@ -54,11 +51,15 @@ class PromptContextProvider:
     def __init__(self, root: Path = ROOT) -> None:
         self.root = root
 
-    def available_blocks(self, job_package: dict[str, Any] | None = None, job_files: dict[str, str] | None = None) -> dict[str, ContextBlock]:
+    def available_blocks(
+        self, job_package: dict[str, Any] | None = None, job_files: dict[str, str] | None = None
+    ) -> dict[str, ContextBlock]:
         blocks = {
             "app_context": ContextBlock("app_context", "App context", APP_CONTEXT),
             "personal_info": ContextBlock("personal_info", "Personal/contact info", self._read("profile/contact.yaml")),
-            "preferences": ContextBlock("preferences", "Availability/preferences", self._read("profile/preferences.yaml")),
+            "preferences": ContextBlock(
+                "preferences", "Availability/preferences", self._read("profile/preferences.yaml")
+            ),
             "canonical_cv": ContextBlock("canonical_cv", "Canonical CV", self._read("profile/canonical-cv.md")),
             "skills": ContextBlock("skills", "Skills YAML", self._read("profile/skills.yaml")),
             "experience": ContextBlock("experience", "Experience YAML", self._read("profile/experience.yaml")),
@@ -66,7 +67,11 @@ class PromptContextProvider:
             "sources": ContextBlock("sources", "Sources YAML", self._read("sources/recruiting-sites.yaml")),
         }
         if job_package:
-            blocks["job_package"] = ContextBlock("job_package", "Job package index", json.dumps({k: v for k, v in job_package.items() if k != "_index_path"}, indent=2, ensure_ascii=False))
+            blocks["job_package"] = ContextBlock(
+                "job_package",
+                "Job package index",
+                json.dumps({k: v for k, v in job_package.items() if k != "_index_path"}, indent=2, ensure_ascii=False),
+            )
         if job_files:
             if job_files.get("job"):
                 blocks["job_json"] = ContextBlock("job_json", "Job JSON", job_files["job"])
@@ -78,7 +83,17 @@ class PromptContextProvider:
 
     def default_blocks_for_field(self, field_id: str) -> list[str]:
         if field_id.startswith("job."):
-            return ["app_context", "personal_info", "canonical_cv", "skills", "experience", "writing_style", "job_package", "job_json", "match_json"]
+            return [
+                "app_context",
+                "personal_info",
+                "canonical_cv",
+                "skills",
+                "experience",
+                "writing_style",
+                "job_package",
+                "job_json",
+                "match_json",
+            ]
         if field_id in {"profile.skills", "profile.experience"}:
             return ["app_context", "personal_info", "canonical_cv", "skills", "experience"]
         if field_id == "profile.writing_style":
@@ -102,7 +117,9 @@ class PromptContextProvider:
     ) -> str:
         blocks = self.available_blocks(job_package, job_files)
         included = [key for key in selected_blocks if key in blocks and key not in disabled_blocks]
-        context_text = "\n\n".join(f"## {blocks[key].label}\n{blocks[key].content}" for key in included if blocks[key].content.strip())
+        context_text = "\n\n".join(
+            f"## {blocks[key].label}\n{blocks[key].content}" for key in included if blocks[key].content.strip()
+        )
         field_context = FIELD_CONTEXTS.get(field_id, "We are editing a text field in the Job Agent application.")
         return f"""You are helping edit content inside Job Agent.
 
@@ -146,18 +163,5 @@ class EditContextPreferenceStore:
 
 
 def run_ai_edit(prompt: str, root: Path = ROOT) -> tuple[str, str]:
-    load_dotenv(root / ".env")
-    api_key = os.getenv("ANTHROPIC_API_KEY")
-    model = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-0")
-    if not api_key or api_key.startswith("replace_with"):
-        raise RuntimeError("ANTHROPIC_API_KEY is missing or placeholder.")
-    from anthropic import Anthropic
-
-    client = Anthropic(api_key=api_key)
-    response = client.messages.create(
-        model=model,
-        max_tokens=2200,
-        messages=[{"role": "user", "content": prompt}],
-    )
-    text = "".join(block.text for block in response.content if block.type == "text").strip()
-    return text, model
+    completion = LlmService(root).complete(prompt, max_tokens=2200, purpose="ai_edit")
+    return completion.text, completion.model

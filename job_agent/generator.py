@@ -69,11 +69,16 @@ def generate_materials(
 
     cv = env.get_template("at-a-glance-cv.md.j2").render(**context).strip() + "\n"
     application = llm_application or env.get_template("application-letter.md.j2").render(**context).strip() + "\n"
-    form_answers = env.get_template("form-answers.md.j2").render(
-        **context,
-        application_text=application,
-        cv_path="[generated alongside this form-answer file]",
-    ).strip() + "\n"
+    form_answers = (
+        env.get_template("form-answers.md.j2")
+        .render(
+            **context,
+            application_text=application,
+            cv_path="[generated alongside this form-answer file]",
+        )
+        .strip()
+        + "\n"
+    )
     match_analysis = env.get_template("match-analysis.md.j2").render(**context).strip() + "\n"
 
     return GeneratedPackage(
@@ -139,7 +144,11 @@ def build_caveat_text(job: Job, match: MatchResult, profile: dict) -> str:
     if "fiori" in text or "ui5" in text:
         caveats.append(profile.get("skills", {}).get("caveats", {}).get("fiori", "Clarify Fiori/UI5 depth."))
     if "project manager" in text or "transition manager" in text or "service delivery manager" in text:
-        caveats.append(profile.get("skills", {}).get("caveats", {}).get("project_management", "Clarify project management ownership depth."))
+        caveats.append(
+            profile.get("skills", {})
+            .get("caveats", {})
+            .get("project_management", "Clarify project management ownership depth.")
+        )
     if match.components.get("language_risk", 0) < 0:
         caveats.append("Language requirements should be confirmed before applying.")
     if caveats:
@@ -163,15 +172,31 @@ def maybe_generate_application_with_llm(
     api_key = os.getenv("ANTHROPIC_API_KEY")
     model = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-0")
     if not api_key or api_key.startswith("replace_with"):
-        generation_notes.append("Claude requested but ANTHROPIC_API_KEY is missing or placeholder; deterministic fallback used.")
-        _emit(progress_callback, run_id, "claude_skipped", "Claude key missing or placeholder; deterministic fallback used.", "generation", job.title)
+        generation_notes.append(
+            "Claude requested but ANTHROPIC_API_KEY is missing or placeholder; deterministic fallback used."
+        )
+        _emit(
+            progress_callback,
+            run_id,
+            "claude_skipped",
+            "Claude key missing or placeholder; deterministic fallback used.",
+            "generation",
+            job.title,
+        )
         return ""
 
     try:
         from anthropic import Anthropic
 
         client = Anthropic(api_key=api_key)
-        _emit(progress_callback, run_id, "claude_started", f"Claude application generation started with model {model}.", "generation", job.title)
+        _emit(
+            progress_callback,
+            run_id,
+            "claude_started",
+            f"Claude application generation started with model {model}.",
+            "generation",
+            job.title,
+        )
         prompt = _load_prompt("generate_application.md").format(
             canonical_cv=profile.get("canonical_cv", ""),
             writing_style=profile.get("writing_style", ""),
@@ -202,11 +227,27 @@ def maybe_generate_application_with_llm(
             )
             TokenUsageStore(root).append(record)
         generation_notes.append(f"Claude application generation succeeded with model {model}.")
-        _emit(progress_callback, run_id, "claude_completed", f"Claude application generation completed with model {model}.", "generation", job.title)
+        _emit(
+            progress_callback,
+            run_id,
+            "claude_completed",
+            f"Claude application generation completed with model {model}.",
+            "generation",
+            job.title,
+        )
         return "".join(block.text for block in response.content if block.type == "text").strip() + "\n"
     except Exception as exc:
-        generation_notes.append(f"Claude application generation failed with model {model}: {exc}. Deterministic fallback used.")
-        _emit(progress_callback, run_id, "claude_failed", f"Claude application generation failed with model {model}: {exc}.", "generation", job.title)
+        generation_notes.append(
+            f"Claude application generation failed with model {model}: {exc}. Deterministic fallback used."
+        )
+        _emit(
+            progress_callback,
+            run_id,
+            "claude_failed",
+            f"Claude application generation failed with model {model}: {exc}.",
+            "generation",
+            job.title,
+        )
         return ""
 
 
@@ -229,4 +270,6 @@ def _dedupe(items: list[str]) -> list[str]:
 
 def _emit(progress_callback, run_id: str, event_type: str, message: str, phase: str, current_job: str) -> None:
     if progress_callback and run_id:
-        progress_callback(RunEvent(run_id=run_id, event_type=event_type, message=message, phase=phase, current_job=current_job))
+        progress_callback(
+            RunEvent(run_id=run_id, event_type=event_type, message=message, phase=phase, current_job=current_job)
+        )

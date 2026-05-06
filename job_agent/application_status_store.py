@@ -7,7 +7,6 @@ from .config import ROOT
 from .io.json_store import read_json, write_json
 from .run_store import utc_now
 
-
 APPLICATION_STATUSES = {"unreviewed", "interesting", "not_interesting", "applied", "archived"}
 
 
@@ -34,7 +33,9 @@ class ApplicationStatusStore:
         if not self.path.exists():
             write_json(self.path, [])
 
-    def ensure_for_job(self, *, stable_id: str, fuzzy_key: str, title: str, company: str, source: str, url: str, application_url: str) -> ApplicationStatusRecord:
+    def ensure_for_job(
+        self, *, stable_id: str, fuzzy_key: str, title: str, company: str, source: str, url: str, application_url: str
+    ) -> ApplicationStatusRecord:
         existing = self.get(stable_id)
         if existing:
             return existing

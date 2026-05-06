@@ -5,9 +5,8 @@ from pathlib import Path
 from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
 
-from job_agent.config import ROOT
-from job_agent.run_store import RunOptions, RunStore
-from job_agent.web.dependencies import templates
+from job_agent.run_store import RunOptions
+from job_agent.web.dependencies import run_store, templates
 from job_agent.web.runtime import runtime
 from job_agent.web.view_models.runs import build_run_detail_view, build_run_list_view
 
@@ -37,7 +36,7 @@ def launch_run(
 
 @router.get("/api/runs/{run_id}/status")
 def run_status(run_id: str) -> JSONResponse:
-    store = RunStore(ROOT)
+    store = run_store()
     record = store.get(run_id)
     if not record:
         raise HTTPException(status_code=404, detail="Run not found")
@@ -52,8 +51,10 @@ def run_list(request: Request, view: str = "active") -> HTMLResponse:
 
 
 @router.post("/api/runs/bulk")
-def bulk_runs(run_ids: list[str] = Form(...), action: str = Form(...), return_to: str = Form("/runs")) -> RedirectResponse:
-    store = RunStore(ROOT)
+def bulk_runs(
+    run_ids: list[str] = Form(...), action: str = Form(...), return_to: str = Form("/runs")
+) -> RedirectResponse:
+    store = run_store()
     for run_id in run_ids:
         try:
             if action == "archive":
@@ -69,24 +70,26 @@ def bulk_runs(run_ids: list[str] = Form(...), action: str = Form(...), return_to
 
 @router.post("/api/runs/{run_id}/archive")
 def archive_run(run_id: str, return_to: str = Form("/runs")) -> RedirectResponse:
-    RunStore(ROOT).archive(run_id)
+    run_store().archive(run_id)
     return RedirectResponse(url=return_to, status_code=303)
 
 
 @router.post("/api/runs/{run_id}/delete")
 def delete_run(run_id: str, return_to: str = Form("/runs")) -> RedirectResponse:
-    RunStore(ROOT).soft_delete(run_id)
+    run_store().soft_delete(run_id)
     return RedirectResponse(url=return_to, status_code=303)
 
 
 @router.post("/api/runs/{run_id}/restore")
 def restore_run(run_id: str, return_to: str = Form("/runs")) -> RedirectResponse:
-    RunStore(ROOT).restore(run_id)
+    run_store().restore(run_id)
     return RedirectResponse(url=return_to, status_code=303)
 
 
 @router.get("/runs/{run_id}", response_class=HTMLResponse)
-def run_detail(request: Request, run_id: str, category: str = "", app_status: str = "", source: str = "") -> HTMLResponse:
+def run_detail(
+    request: Request, run_id: str, category: str = "", app_status: str = "", source: str = ""
+) -> HTMLResponse:
     try:
         view = build_run_detail_view(run_id, category, app_status, source)
     except KeyError:
@@ -96,16 +99,20 @@ def run_detail(request: Request, run_id: str, category: str = "", app_status: st
 
 @router.get("/runs/{run_id}/log", response_class=HTMLResponse)
 def run_log(request: Request, run_id: str) -> HTMLResponse:
-    record = RunStore(ROOT).get(run_id)
+    record = run_store().get(run_id)
     if not record:
         raise HTTPException(status_code=404, detail="Run not found")
-    log_text = Path(record.run_log_path).read_text(encoding="utf-8") if record.run_log_path and Path(record.run_log_path).exists() else ""
+    log_text = (
+        Path(record.run_log_path).read_text(encoding="utf-8")
+        if record.run_log_path and Path(record.run_log_path).exists()
+        else ""
+    )
     return templates.TemplateResponse(request, "log.html", {"request": request, "run": record, "log_text": log_text})
 
 
 @router.get("/api/runs/{run_id}/log")
 def run_log_text(run_id: str) -> PlainTextResponse:
-    record = RunStore(ROOT).get(run_id)
+    record = run_store().get(run_id)
     if not record:
         raise HTTPException(status_code=404, detail="Run not found")
     path = Path(record.run_log_path)

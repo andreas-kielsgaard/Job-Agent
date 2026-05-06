@@ -9,7 +9,10 @@ target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
-ignore = []
+ignore = [
+  "B008", # FastAPI intentionally uses Form/File/Query marker calls as defaults.
+  "E501", # The app has long prompt/help strings; formatter handles normal wrapping.
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -45,7 +45,9 @@ class ServiceBoundaryTests(unittest.TestCase):
 
             MaterialService(root).save_job_materials(
                 "stable-1",
-                MaterialUpdate(cv="new cv", application="new app", form_answers="new forms", match_analysis="new analysis"),
+                MaterialUpdate(
+                    cv="new cv", application="new app", form_answers="new forms", match_analysis="new analysis"
+                ),
             )
 
             files = PackageIndexService(root).read_package_files(PackageIndexService(root).find_package("stable-1"))

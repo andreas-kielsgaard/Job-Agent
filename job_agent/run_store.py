@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -10,12 +10,11 @@ from uuid import uuid4
 from .config import ROOT
 from .io.json_store import read_json, write_json
 
-
 RUN_STATUSES = {"pending", "running", "completed", "failed", "cancelled", "crashed"}
 
 
 def utc_now() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    return datetime.now(UTC).replace(microsecond=0).isoformat()
 
 
 @dataclass
@@ -114,13 +113,19 @@ class RunStore:
         self.upsert(record)
         return record
 
-    def get(self, run_id: str, include_archived: bool = True, include_deleted: bool = True, include_tests: bool = True) -> RunRecord | None:
-        for record in self.list_runs(include_archived=include_archived, include_deleted=include_deleted, include_tests=include_tests):
+    def get(
+        self, run_id: str, include_archived: bool = True, include_deleted: bool = True, include_tests: bool = True
+    ) -> RunRecord | None:
+        for record in self.list_runs(
+            include_archived=include_archived, include_deleted=include_deleted, include_tests=include_tests
+        ):
             if record.run_id == run_id:
                 return record
         return None
 
-    def list_runs(self, include_archived: bool = False, include_deleted: bool = False, include_tests: bool = True) -> list[RunRecord]:
+    def list_runs(
+        self, include_archived: bool = False, include_deleted: bool = False, include_tests: bool = True
+    ) -> list[RunRecord]:
         data = read_json(self.registry_path, [])
         records = [self._record_from_mapping(item) for item in data]
         if not include_archived:
@@ -133,17 +138,25 @@ class RunStore:
 
     def archive(self, run_id: str) -> RunRecord:
         record = self.update(run_id, visibility="archived", archived_at=utc_now())
-        self.append_event(RunEvent(run_id, "run_archived", "Run archived.", phase="run_lifecycle", status=record.status))
+        self.append_event(
+            RunEvent(run_id, "run_archived", "Run archived.", phase="run_lifecycle", status=record.status)
+        )
         return record
 
     def soft_delete(self, run_id: str) -> RunRecord:
         record = self.update(run_id, visibility="deleted", deleted_at=utc_now())
-        self.append_event(RunEvent(run_id, "run_deleted", "Run moved to deleted runs.", phase="run_lifecycle", status=record.status))
+        self.append_event(
+            RunEvent(run_id, "run_deleted", "Run moved to deleted runs.", phase="run_lifecycle", status=record.status)
+        )
         return record
 
     def restore(self, run_id: str) -> RunRecord:
         record = self.update(run_id, visibility="active", archived_at="", deleted_at="")
-        self.append_event(RunEvent(run_id, "run_restored", "Run restored to active runs.", phase="run_lifecycle", status=record.status))
+        self.append_event(
+            RunEvent(
+                run_id, "run_restored", "Run restored to active runs.", phase="run_lifecycle", status=record.status
+            )
+        )
         return record
 
     def append_event(self, event: RunEvent) -> None:
@@ -153,7 +166,9 @@ class RunStore:
         with (run_dir / "events.jsonl").open("a", encoding="utf-8") as handle:
             handle.write(event_line + "\n")
         with (run_dir / "run.log").open("a", encoding="utf-8") as handle:
-            current = f" [{event.current_source or event.current_job}]" if event.current_source or event.current_job else ""
+            current = (
+                f" [{event.current_source or event.current_job}]" if event.current_source or event.current_job else ""
+            )
             handle.write(f"{event.timestamp} {event.status.upper()} {event.phase}{current}: {event.message}\n")
 
     def read_events(self, run_id: str, limit: int | None = None) -> list[dict[str, Any]]:
@@ -171,7 +186,10 @@ class RunStore:
             if record.status in {"pending", "running"} or record.status not in RUN_STATUSES:
                 record.status = "crashed"
                 record.finished_at = record.finished_at or utc_now()
-                record.error_message = record.error_message or "Marked crashed on app startup because the previous process exited without completing this run."
+                record.error_message = (
+                    record.error_message
+                    or "Marked crashed on app startup because the previous process exited without completing this run."
+                )
                 self.upsert(record)
                 self.append_event(
                     RunEvent(

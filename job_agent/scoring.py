@@ -5,7 +5,6 @@ from datetime import date, datetime
 
 from .models import Job, MatchResult
 
-
 TECH_TERMS = {
     "abap": 14,
     "abap oo": 8,
@@ -66,10 +65,7 @@ def score_job(job: Job, profile: dict, today: date | None = None) -> MatchResult
     if exclusion_reason:
         category = "excluded"
         total_score = 0
-    elif _is_fiori_adjacent_partial(text):
-        category = "exploratory"
-        total_score = min(total_score, 68)
-    elif _is_exploratory_pm(text, components):
+    elif _is_fiori_adjacent_partial(text) or _is_exploratory_pm(text, components):
         category = "exploratory"
         total_score = min(total_score, 68)
     elif total_score >= 70:
@@ -243,7 +239,11 @@ def _add_concerns(job: Job, components: dict[str, int], text: str, profile: dict
     if "fiori" in text or "ui5" in text:
         concerns.append(profile.get("skills", {}).get("caveats", {}).get("fiori", "Clarify Fiori/UI5 depth."))
     if any(term in text for term in PROJECT_TERMS):
-        concerns.append(profile.get("skills", {}).get("caveats", {}).get("project_management", "Clarify project management ownership depth."))
+        concerns.append(
+            profile.get("skills", {})
+            .get("caveats", {})
+            .get("project_management", "Clarify project management ownership depth.")
+        )
     if components["freshness_risk"] < 0 and components["freshness_risk"] > -100:
         concerns.append("Freshness is uncertain because no reliable posting date or deadline was found.")
     if components["rate_visibility_or_rate_fit"] < 0:
