@@ -1,0 +1,72 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from pathlib import Path
+
+from job_agent.config import ROOT
+from job_agent.prompt_context import (
+    FIELD_CONTEXTS,
+    EditContextPreference,
+    EditContextPreferenceStore,
+    PromptContextProvider,
+    run_ai_edit,
+)
+
+from .package_index_service import PackageIndexService
+
+
+@dataclass
+class AiEditRequest:
+    field_id: str
+    button_id: str
+    current_text: str
+    user_instruction: str
+    selected_blocks: list[str]
+    disabled_blocks: list[str]
+    job_id: str = ""
+    run_id: str = ""
+
+
+class AiEditService:
+    def __init__(self, root: Path = ROOT) -> None:
+        self.root = root
+        self.provider = PromptContextProvider(root)
+        self.preferences = EditContextPreferenceStore(root)
+        self.packages = PackageIndexService(root)
+
+    def context_payload(self, field_id: str, button_id: str, job_id: str = "", run_id: str = "") -> dict:
+        package = self.packages.find_package(job_id, run_id) if job_id else None
+        files = self.packages.read_package_files(package) if package else {}
+        blocks = self.provider.available_blocks(package, files)
+        defaults = self.provider.default_blocks_for_field(field_id)
+        pref = self.preferences.get(button_id, defaults)
+        return {
+            "field_id": field_id,
+            "button_id": button_id,
+            "field_context": FIELD_CONTEXTS.get(field_id, "We are editing a text field in Job Agent."),
+            "blocks": [block.__dict__ for block in blocks.values()],
+            "selected_blocks": pref.selected_blocks,
+            "disabled_blocks": pref.disabled_blocks,
+        }
+
+    def generate(self, request: AiEditRequest) -> dict:
+        package = self.packages.find_package(request.job_id, request.run_id) if request.job_id else None
+        files = self.packages.read_package_files(package) if package else {}
+        prompt = self.provider.build_prompt(
+            field_id=request.field_id,
+            current_text=request.current_text,
+            user_instruction=request.user_instruction,
+            selected_blocks=request.selected_blocks,
+            disabled_blocks=request.disabled_blocks,
+            job_package=package,
+            job_files=files,
+        )
+        self.preferences.save(
+            EditContextPreference(
+                button_id=request.button_id,
+                selected_blocks=request.selected_blocks,
+                disabled_blocks=request.disabled_blocks,
+            )
+        )
+        revised, model = run_ai_edit(prompt, self.root)
+        return {"revised_text": revised, "prompt": prompt, "model": model}

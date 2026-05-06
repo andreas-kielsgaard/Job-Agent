@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from .config import ROOT
+from .io.json_store import read_json, write_json
 from .run_store import utc_now
 
 
@@ -32,7 +32,7 @@ class ApplicationStatusStore:
         self.path = root / "jobs" / "application_status.json"
         self.path.parent.mkdir(parents=True, exist_ok=True)
         if not self.path.exists():
-            self.path.write_text("[]", encoding="utf-8")
+            write_json(self.path, [])
 
     def ensure_for_job(self, *, stable_id: str, fuzzy_key: str, title: str, company: str, source: str, url: str, application_url: str) -> ApplicationStatusRecord:
         existing = self.get(stable_id)
@@ -81,11 +81,11 @@ class ApplicationStatusStore:
         return None
 
     def list_all(self) -> list[ApplicationStatusRecord]:
-        data = json.loads(self.path.read_text(encoding="utf-8"))
+        data = read_json(self.path, [])
         return [ApplicationStatusRecord(**item) for item in data]
 
     def upsert(self, record: ApplicationStatusRecord) -> None:
         records = [item for item in self.list_all() if item.stable_id != record.stable_id]
         records.append(record)
         records.sort(key=lambda item: item.status_updated_at, reverse=True)
-        self.path.write_text(json.dumps([asdict(item) for item in records], indent=2, ensure_ascii=False), encoding="utf-8")
+        write_json(self.path, [asdict(item) for item in records])

@@ -228,12 +228,35 @@ Production-ish behavior already present:
 python -m unittest discover -s tests
 ```
 
+Development tooling:
+
+```powershell
+pip install -r requirements-dev.txt
+python -m ruff check .
+python -m ruff format .
+```
+
 Basic smoke checks:
 
 ```powershell
 python -m job_agent.cli run-daily --include-seen
 python -m job_agent.web.app
 ```
+
+## Architecture
+
+The app is split into small local-first layers:
+
+- `job_agent/run_service.py` orchestrates daily discovery, scoring, packaging, logging, and run summaries.
+- `job_agent/run_store.py`, `store.py`, `application_status_store.py`, and `token_usage.py` persist local state as ignored JSON/JSONL files.
+- `job_agent/services/` contains reusable operations for package indexes, generated materials, setup/profile editing, CV reference files, stats, and AI-assisted editing.
+- `job_agent/io/` contains atomic JSON/YAML/text write helpers used by local stores and services.
+- `job_agent/web/app.py` only creates the FastAPI app, registers middleware/startup hooks, and includes routers.
+- `job_agent/web/routers/` contains HTTP routes grouped by dashboard, runs, jobs, setup, files, stats, health, and AI edit.
+- `job_agent/web/view_models/` builds template contexts so routes stay thin.
+- `job_agent/web/templates/` and `job_agent/web/static/` are the presentation layer.
+
+Runtime output and private profile data remain local and ignored by Git.
 
 ## Daily Automation On Windows
 

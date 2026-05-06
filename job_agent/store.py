@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import hashlib
-import json
 from dataclasses import asdict
 from datetime import date
 from pathlib import Path
 
 from .config import ROOT
+from .io.json_store import read_json, write_json
 from .models import Job, JobState, SeenJobRecord, normalize_text
 
 
@@ -15,7 +15,7 @@ class JobStore:
         self.path = root / "jobs" / "seen_jobs.json"
         self.path.parent.mkdir(parents=True, exist_ok=True)
         if not self.path.exists():
-            self.path.write_text("[]", encoding="utf-8")
+            write_json(self.path, [])
 
     def classify(self, jobs: list[Job], today: date | None = None) -> list[JobState]:
         today_text = str(today or date.today())
@@ -77,7 +77,7 @@ class JobStore:
                     status=state.status,
                 )
 
-        self.path.write_text(json.dumps([asdict(record) for record in by_stable.values()], indent=2, ensure_ascii=False), encoding="utf-8")
+        write_json(self.path, [asdict(record) for record in by_stable.values()])
 
     @staticmethod
     def job_id(job: Job) -> str:
@@ -104,7 +104,7 @@ class JobStore:
         return hashlib.sha256(content.encode("utf-8")).hexdigest()[:16]
 
     def _load_records(self) -> list[SeenJobRecord]:
-        data = json.loads(self.path.read_text(encoding="utf-8"))
+        data = read_json(self.path, [])
         if data and isinstance(data[0], str):
             return [
                 SeenJobRecord(

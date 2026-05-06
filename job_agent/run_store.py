@@ -8,6 +8,7 @@ from typing import Any
 from uuid import uuid4
 
 from .config import ROOT
+from .io.json_store import read_json, write_json
 
 
 RUN_STATUSES = {"pending", "running", "completed", "failed", "cancelled", "crashed"}
@@ -76,7 +77,7 @@ class RunStore:
         self.registry_path = self.base_dir / "runs.json"
         self.base_dir.mkdir(parents=True, exist_ok=True)
         if not self.registry_path.exists():
-            self.registry_path.write_text("[]", encoding="utf-8")
+            write_json(self.registry_path, [])
 
     def create_run(self, options: RunOptions) -> RunRecord:
         run_id = self.new_run_id()
@@ -95,10 +96,14 @@ class RunStore:
         return record
 
     def upsert(self, record: RunRecord) -> None:
-        records = [item for item in self.list_runs() if item.run_id != record.run_id]
+        records = [
+            item
+            for item in self.list_runs(include_archived=True, include_deleted=True, include_tests=True)
+            if item.run_id != record.run_id
+        ]
         records.append(record)
         records.sort(key=lambda item: item.started_at, reverse=True)
-        self.registry_path.write_text(json.dumps([asdict(item) for item in records], indent=2, ensure_ascii=False), encoding="utf-8")
+        write_json(self.registry_path, [asdict(item) for item in records])
 
     def update(self, run_id: str, **updates: Any) -> RunRecord:
         record = self.get(run_id, include_archived=True, include_deleted=True, include_tests=True)
@@ -116,7 +121,7 @@ class RunStore:
         return None
 
     def list_runs(self, include_archived: bool = False, include_deleted: bool = False, include_tests: bool = True) -> list[RunRecord]:
-        data = json.loads(self.registry_path.read_text(encoding="utf-8"))
+        data = read_json(self.registry_path, [])
         records = [self._record_from_mapping(item) for item in data]
         if not include_archived:
             records = [record for record in records if record.visibility != "archived"]

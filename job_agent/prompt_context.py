@@ -9,6 +9,7 @@ from typing import Any
 from dotenv import load_dotenv
 
 from .config import ROOT
+from .io.json_store import read_json, write_json
 
 
 APP_CONTEXT = """This is a local-first SAP freelance job preparation application.
@@ -129,19 +130,19 @@ class EditContextPreferenceStore:
         self.path = root / "profile" / "ai_edit_contexts.json"
         self.path.parent.mkdir(parents=True, exist_ok=True)
         if not self.path.exists():
-            self.path.write_text("{}", encoding="utf-8")
+            write_json(self.path, {})
 
     def get(self, button_id: str, defaults: list[str]) -> EditContextPreference:
-        data = json.loads(self.path.read_text(encoding="utf-8"))
+        data = read_json(self.path, {})
         item = data.get(button_id)
         if not item:
             return EditContextPreference(button_id=button_id, selected_blocks=defaults)
         return EditContextPreference(**item)
 
     def save(self, preference: EditContextPreference) -> None:
-        data = json.loads(self.path.read_text(encoding="utf-8"))
+        data = read_json(self.path, {})
         data[preference.button_id] = asdict(preference)
-        self.path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+        write_json(self.path, data)
 
 
 def run_ai_edit(prompt: str, root: Path = ROOT) -> tuple[str, str]:
