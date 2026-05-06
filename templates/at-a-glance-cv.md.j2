@@ -1,0 +1,23 @@
+# {{ contact.name }}
+## {{ contact.title }}
+
+{{ contact.location }}-based | {{ availability.available_from | capitalize }} availability | Open to relocation for onsite roles  
+{{ contact.phone }} | {{ contact.email }} | {{ contact.linkedin }}
+
+### Relevant Profile
+{{ role_summary }}
+
+### 5 Most Relevant Skills
+{% for skill in top_skills -%}
+- {{ skill }}
+{% endfor %}
+
+### Relevant SAP Experience
+{% for item in selected_experience %}
+#### {{ item.company }} - {{ item.role }}
+{{ item.relevance }}
+
+{% endfor -%}
+
+### Additional SAP Keywords
+{{ keyword_line }}

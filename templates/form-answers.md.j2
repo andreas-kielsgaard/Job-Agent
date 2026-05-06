@@ -1,0 +1,31 @@
+# Form Answers - {{ job.title }}
+
+First name:
+{{ contact.first_name | default(contact.name.split(" ")[0]) }}
+
+Last name:
+{{ contact.last_name | default(contact.name.split(" ")[-1]) }}
+
+Email:
+{{ contact.email }}
+
+Phone:
+{{ contact.phone }}
+
+LinkedIn:
+{{ contact.linkedin }}
+
+Availability:
+{{ availability.available_from | capitalize }}. {{ availability.logistics }}
+
+Location / relocation:
+Currently based in {{ contact.location }}. {{ location_policy.onsite_roles }}
+
+Expected rate:
+[Manual confirmation recommended]
+
+Message:
+{{ application_text }}
+
+Upload CV:
+Use generated file: {{ cv_path }}

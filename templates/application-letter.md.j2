@@ -1,0 +1,15 @@
+Hi,
+
+{{ opening }}
+
+Relevant background:
+{% for item in selected_experience -%}
+- {{ item.company }}: {{ item.relevance }}
+{% endfor %}
+
+{{ caveat_text }}
+
+Availability: {{ availability.available_from }}. {{ availability.logistics }}
+
+Best regards,  
+{{ contact.name }}

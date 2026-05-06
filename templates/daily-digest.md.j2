@@ -1,0 +1,36 @@
+# Daily SAP Contract Digest - {{ run_date }}
+
+{% if jobs %}
+{% for item in jobs %}
+## {{ loop.index }}. {{ item.job.title }}
+
+Source: [{{ item.job.source }}]({{ item.job.url }})  
+Company / recruiter: {{ item.job.company }}  
+Location: {{ item.job.location }}  
+Remote / onsite: {{ item.job.remote }}  
+Rate / salary: {{ item.job.rate }}  
+Contract duration: {{ item.job.contract_duration }}  
+Start date: {{ item.job.start_date }}  
+Match: {{ item.match.score }}%
+
+Why this is relevant:
+{% for reason in item.match.reasons -%}
+- {{ reason }}
+{% endfor %}
+
+{% if item.match.concerns %}
+Concerns / mismatch flags:
+{% for concern in item.match.concerns -%}
+- {{ concern }}
+{% endfor %}
+{% endif %}
+
+Generated:
+- At-a-glance CV: {{ item.paths.cv }}
+- Application text: {{ item.paths.application }}
+- Form answers: {{ item.paths.form_answers }}
+
+{% endfor %}
+{% else %}
+No new roles met the digest threshold today.
+{% endif %}

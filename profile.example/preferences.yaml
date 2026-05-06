@@ -1,0 +1,25 @@
+availability:
+  available_from: immediate
+  logistics: "Add your availability and relocation/travel caveat here."
+
+location_policy:
+  current_base: Your Country
+  onsite_roles: "Describe whether you can relocate or travel for onsite roles."
+  preferred_regions:
+    - Remote
+    - Your preferred region
+
+role_preferences:
+  preferred_contract_types:
+    - freelance
+    - contract
+  avoid_contract_types:
+    - permanent employee
+  interests:
+    - SAP ABAP development
+    - SAP RAP
+    - SAP Gateway / OData
+    - SAP technical consulting
+
+thresholds:
+  minimum_digest_score: 45

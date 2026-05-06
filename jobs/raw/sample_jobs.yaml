@@ -1,0 +1,26 @@
+jobs:
+  - title: SAP Fullstack Developer - Brussels
+    company: Example Recruiter
+    source: Sample Jobs
+    url: "https://example.com/sap-fullstack-brussels"
+    location: Brussels, Belgium
+    remote: Hybrid, 2-3 days onsite
+    rate: Not listed
+    contract_duration: 6 months
+    start_date: ASAP
+    posted_date: 2026-05-06
+    description: |
+      Contract role for an SAP Fullstack Developer with strong ABAP, SAP Gateway/OData, CDS Views, debugging, and S/4HANA experience. Fiori/UI5 knowledge is useful, but backend integration is central. English required; French or Dutch nice to have.
+
+  - title: SAP Project Manager - Manufacturing
+    company: Example Consulting
+    source: Sample Jobs
+    url: "https://example.com/sap-project-manager-manufacturing"
+    location: Copenhagen, Denmark
+    remote: Mostly onsite
+    rate: EUR 750/day
+    contract_duration: 12 months
+    start_date: June 2026
+    posted_date: 2026-05-06
+    description: |
+      SAP project manager needed for a manufacturing rollout. The role requires stakeholder coordination, delivery tracking, SAP process knowledge, and vendor management. Technical SAP background is helpful. Formal project management experience preferred.
