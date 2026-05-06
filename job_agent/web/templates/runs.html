@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="panel">
+  <h1>Runs</h1>
+  <div class="row">
+    <a class="button light" href="/runs">Active runs</a>
+    <a class="button light" href="/runs?view=test">Test runs</a>
+    <a class="button light" href="/runs?view=archived">Archived runs</a>
+    <a class="button light" href="/runs?view=deleted">Deleted runs</a>
+  </div>
+  <p class="muted">Current view: {{ view }}. Click a row to open the run. Use checkboxes for bulk actions.</p>
+</div>
+
+<div class="panel">
+  <form method="post" action="/api/runs/bulk">
+    <input type="hidden" name="return_to" value="/runs?view={{ view }}">
+    <div class="row">
+      <select name="action" style="max-width:220px;">
+        <option value="archive">Archive selected</option>
+        <option value="delete">Delete selected</option>
+        <option value="restore">Restore selected</option>
+      </select>
+      <button type="submit">Apply to selected</button>
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th><input type="checkbox" onchange="toggleAll(this, '.run-check')"></th>
+          <th>Run</th><th>Status</th><th>Started</th><th>Finished</th><th>Loaded</th><th>Generated</th><th>Flags</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for run in runs %}
+        <tr class="clickable-row" onclick="goToRow(event, '/runs/{{ run.run_id }}')">
+          <td><input class="run-check" type="checkbox" name="run_ids" value="{{ run.run_id }}"></td>
+          <td>{{ run.run_id }}</td>
+          <td><span class="badge {{ run.status }}">{{ run.status }}</span></td>
+          <td>{{ run.started_at }}</td>
+          <td>{{ run.finished_at }}</td>
+          <td>{{ run.total_loaded }}</td>
+          <td>{{ run.generated_job_count }}</td>
+          <td>{% if run.is_test %}<span class="badge">test</span>{% endif %} <span class="badge">{{ run.visibility }}</span></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </form>
+</div>
+{% endblock %}

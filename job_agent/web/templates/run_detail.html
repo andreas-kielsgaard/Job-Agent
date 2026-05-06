@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="panel" id="run-panel">
+  <h1>Run {{ run.run_id }}</h1>
+  <div class="grid">
+    <div class="stat"><span>Status</span><strong>{{ run.status }}</strong></div>
+    <div class="stat"><span>Loaded</span><strong>{{ run.total_loaded }}</strong></div>
+    <div class="stat"><span>Generated</span><strong>{{ run.generated_job_count }}</strong></div>
+    <div class="stat"><span>Warnings</span><strong>{{ run.source_warnings }}</strong></div>
+  </div>
+  <p class="muted">Options: {{ run.options }}</p>
+  {% if run.is_test %}<p><span class="badge">Test run</span> This run is excluded from normal run views and does not mark jobs as seen.</p>{% endif %}
+  <p class="muted">Visibility: {{ run.visibility }}</p>
+  <div class="row">
+    {% if run.digest_path %}<a class="button light" href="/runs/{{ run.run_id }}/log">Open log</a>{% endif %}
+    {% if run.digest_path %}<span class="muted">Digest: {{ run.digest_path }}</span>{% endif %}
+  </div>
+</div>
+
+{% if run.status in ["pending", "running"] %}
+<script>
+  setTimeout(() => location.reload(), 2000);
+</script>
+{% endif %}
+
+<div class="panel">
+  <h2>Recent Events</h2>
+  {% for event in events %}
+  <p><span class="badge">{{ event.event_type }}</span> {{ event.timestamp }} {{ event.message }}</p>
+  {% else %}
+  <p>No events yet.</p>
+  {% endfor %}
+</div>
+
+<div class="panel">
+  <h2>Filters</h2>
+  <form method="get" class="grid">
+    <div><label>Category</label><select name="category"><option value="">All</option><option value="strong">strong</option><option value="exploratory">exploratory</option><option value="weak">weak</option></select></div>
+    <div><label>Application status</label><select name="app_status"><option value="">All</option><option value="unreviewed">unreviewed</option><option value="interesting">interesting</option><option value="not_interesting">not interesting</option><option value="applied">applied</option><option value="archived">archived</option></select></div>
+    <div><label>Source contains</label><input name="source" value="{{ filters.source }}"></div>
+    <div><button type="submit">Apply filters</button></div>
+  </form>
+</div>
+
+<div class="panel">
+  <h2>Proposed Jobs</h2>
+  <table>
+    <thead><tr><th>Role</th><th>Company</th><th>Location</th><th>Rate</th><th>Match</th><th>Status</th><th>Angle</th><th>Actions</th></tr></thead>
+    <tbody>
+      {% for pkg in packages %}
+      <tr>
+        <td><strong>{{ pkg.title }}</strong><br><span class="muted">{{ pkg.state }}</span></td>
+        <td>{{ pkg.company }}{% if pkg.recruiter %}<br><span class="muted">{{ pkg.recruiter }}</span>{% endif %}</td>
+        <td>{{ pkg.location }}<br><span class="muted">{{ pkg.remote }}</span></td>
+        <td>{{ pkg.rate }}</td>
+        <td><span class="badge {{ pkg.match_category }}">{{ pkg.match_score }}% {{ pkg.match_category }}</span></td>
+        <td><span class="badge {{ pkg.application_status }}">{{ pkg.application_status }}</span></td>
+        <td>{{ pkg.recommended_angle }}</td>
+        <td>
+          <a href="/jobs/{{ pkg.stable_id }}?run_id={{ run.run_id }}">Open</a>
+          <form method="post" action="/api/jobs/{{ pkg.stable_id }}/status">
+            <input type="hidden" name="return_to" value="/runs/{{ run.run_id }}">
+            <input type="hidden" name="status" value="not_interesting">
+            <button class="light" type="submit">Not interesting</button>
+          </form>
+          <form method="post" action="/api/jobs/{{ pkg.stable_id }}/status">
+            <input type="hidden" name="return_to" value="/runs/{{ run.run_id }}">
+            <input type="hidden" name="status" value="applied">
+            <button class="secondary" type="submit">Applied</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

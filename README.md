@@ -14,7 +14,7 @@ The daily run:
 4. Records whether a job is new, changed, or previously seen.
 5. Scores roles with component-based SAP contract matching.
 6. Generates recruiter-facing materials for included roles.
-7. Writes a daily digest and an excluded/weak-role summary.
+7. Writes a daily digest, excluded/weak-role summary, per-run log, run registry entry, event stream, token usage records, and package indexes.
 
 Generated package per included role:
 
@@ -62,9 +62,78 @@ Set:
 ```text
 ANTHROPIC_API_KEY=your_private_key
 CLAUDE_MODEL=claude-sonnet-4-20250514
+CLAUDE_USE_BY_DEFAULT=false
 ```
 
 Claude use is explicit in generated `match-analysis.md` notes. If the key is missing or a call fails, the output says that deterministic fallback text was used.
+
+## Local Web UI
+
+Start the frontend on localhost:
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+python -m job_agent.web.app
+```
+
+Open:
+
+```text
+http://127.0.0.1:8765
+```
+
+On Windows you can also double-click:
+
+```text
+scripts/open_frontend.bat
+```
+
+The launcher starts the web app only if it is not already running, then opens the browser. In launcher mode, the web app shuts itself down after 2 minutes with no open page activity and no active agent run.
+
+The web UI supports:
+
+- launching a daily run with options
+- overview dashboard with latest-run status, daily-run action, jobs found today, unreviewed jobs, and applications in the last 7 days
+- test runs that are hidden from normal run views and never mark jobs as seen
+- skipping automatic CV/application/form generation to save tokens, then generating materials manually from a job page
+- monitoring the active run through run events and logs
+- reviewing previous runs
+- opening generated job packages
+- viewing match analysis, CV, application text, and form answers
+- copying generated text
+- copying a non-AI external-agent review bundle from each job page
+- editing generated CV, application, form answers, and match analysis directly in the browser
+- browsing all unique jobs across runs from the Jobs page
+- bulk-updating selected jobs to unreviewed/seen, interesting, not interesting, applied, or archived
+- viewing a Stats page with run, package, match, and application-status metrics
+- archiving, soft-deleting, restoring, and viewing archived/deleted/test runs from the Runs page
+- using "Edit with AI" on setup text blocks and job materials with a reusable context-aware prompt builder
+- selecting which context blocks are included for each AI edit button, with saved per-button preferences
+- marking jobs as `unreviewed`, `interesting`, `not_interesting`, `applied`, or `archived`
+- guided setup for common profile and preference fields
+- address setup with street address, post code, city, country, and kommune
+- choosing a Claude model from simplified quality/cost/speed options
+- editing local setup files such as skills, experience, sources, templates, and prompts
+- uploading a full reference CV as PDF, DOCX, TXT, or Markdown
+- extracting uploaded CV text into `profile/canonical-cv.md` when requested
+
+The server binds to `127.0.0.1` by default. It is intended for one local user, not public hosting.
+
+### Setup Guidance
+
+The setup page is designed for low-technical editing first:
+
+- Profile basics and availability/preferences use normal form fields.
+- Sources can be enabled/disabled or added through a simple source form.
+- Advanced files such as skills, experience, templates, and prompts remain editable as text with inline instructions.
+- Template variables are documented on the setup page. Recruiter-facing templates should avoid internal score language.
+- Template variable docs are hidden behind a clickable reference so the page stays approachable.
+- "Edit with AI" buttons build prompts from relevant context such as app purpose, profile data, canonical CV, skills, experience, writing style, job JSON, and match data.
+
+The uploaded reference CV is stored under ignored `profile/files/` and is linked from each posting detail page so it is easy to upload manually alongside the generated at-a-glance CV.
+
+The default Claude setting is the Sonnet 4 alias `claude-sonnet-4-0`, so it tracks the newest Sonnet 4 snapshot. Anthropic notes that aliases are convenient for development, while stable model IDs such as `claude-sonnet-4-20250514` are better when consistent output matters.
 
 ## Private Data
 
@@ -84,6 +153,7 @@ profile/
 .env
 output/
 jobs/seen_jobs.json
+jobs/application_status.json
 ```
 
 `profile/` is where your real name, contact details, address, CV, skills, preferences, and work history belong. It is ignored by Git.
@@ -144,6 +214,10 @@ Production-ish behavior already present:
 - source adapter pattern
 - component scoring
 - structured seen-job storage
+- structured application-status storage
+- run registry and per-run event logs
+- package index JSON files for UI consumption
+- token usage capture for Claude responses where available
 - included and excluded daily outputs
 - deterministic fallback generation
 - lightweight tests
@@ -152,6 +226,13 @@ Production-ish behavior already present:
 
 ```powershell
 python -m unittest discover -s tests
+```
+
+Basic smoke checks:
+
+```powershell
+python -m job_agent.cli run-daily --include-seen
+python -m job_agent.web.app
 ```
 
 ## Daily Automation On Windows

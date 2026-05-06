@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="panel">
+  <h1>{{ package.title }}</h1>
+  <div class="grid">
+    <div class="stat"><span>Match</span><strong>{{ package.match_score }}%</strong><span>{{ package.match_category }}</span></div>
+    <div class="stat"><span>Status</span><strong>{{ package.application_status }}</strong></div>
+    <div class="stat"><span>Location</span><strong>{{ package.location }}</strong><span>{{ package.remote }}</span></div>
+    <div class="stat"><span>Rate</span><strong>{{ package.rate }}</strong></div>
+  </div>
+  <p>Source: <a href="{{ package.source_url }}">{{ package.source_url }}</a></p>
+  <p>Application: <a href="{{ package.application_url }}">{{ package.application_url }}</a></p>
+  {% if cv_reference %}
+  <p><strong>Reference CV for upload:</strong> <a href="{{ cv_reference.url }}">{{ cv_reference.filename }}</a><br><span class="muted">{{ cv_reference.path }}</span></p>
+  {% else %}
+  <p class="muted">No full reference CV uploaded yet. Add one in Setup if you want easy access here.</p>
+  {% endif %}
+  <p><strong>Recommended angle:</strong> {{ package.recommended_angle }}</p>
+  {% if package.concerns %}
+  <p><strong>Concerns:</strong> {{ package.concerns | join("; ") }}</p>
+  {% endif %}
+  <div class="row">
+    <button class="light" type="button" onclick="copyText('review-bundle')">Copy external-agent review bundle</button>
+    <form method="post" action="/api/jobs/{{ package.stable_id }}/generate">
+      <input type="hidden" name="return_to" value="/jobs/{{ package.stable_id }}">
+      <label class="check"><input type="checkbox" name="use_llm"> Use Claude</label>
+      <button type="submit">Generate / regenerate materials</button>
+    </form>
+  </div>
+  <pre id="review-bundle" class="copy-source" style="display:none;">{{ review_bundle }}</pre>
+</div>
+
+<div class="panel">
+  <h2>Status</h2>
+  <form method="post" action="/api/jobs/{{ package.stable_id }}/status" class="grid">
+    <div>
+      <label>Status</label>
+      <select name="status">
+        {% for item in statuses %}
+        <option value="{{ item }}" {% if status and status.status == item %}selected{% endif %}>{{ item }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div><label>Not interesting reason</label><input name="not_interesting_reason" value="{{ status.not_interesting_reason if status else '' }}"></div>
+    <div style="grid-column: 1 / -1;"><label>Notes</label><textarea name="notes">{{ status.notes if status else "" }}</textarea></div>
+    <button type="submit">Save status</button>
+  </form>
+</div>
+
+<div class="panel">
+  <h2>Generated Materials</h2>
+  <p class="muted">You can edit these texts directly. Saving does not call Claude; it only updates the local generated files.</p>
+  <form method="post" action="/api/jobs/{{ package.stable_id }}/materials">
+    <input type="hidden" name="return_to" value="/jobs/{{ package.stable_id }}">
+  {% for key, label in [("cv", "At-a-glance CV"), ("application", "Application text"), ("form_answers", "Form answers"), ("match_analysis", "Match analysis")] %}
+    <h3>{{ label }}</h3>
+    <button class="light" type="button" onclick="copyText('{{ key }}-field')">Copy</button>
+    <button class="light" type="button" onclick="openAiEdit(this)" data-target="{{ key }}-field" data-field-id="job.{{ key }}" data-button-id="job.{{ key }}" data-job-id="{{ package.stable_id }}" data-run-id="{{ package.run_id }}">Edit with AI</button>
+    <textarea id="{{ key }}-field" name="{{ key }}">{{ files.get(key, '') }}</textarea>
+  {% endfor %}
+    <button type="submit">Save edited materials</button>
+  </form>
+</div>
+
+{% if files.get("job") %}
+<div class="panel">
+  <h2>Job JSON</h2>
+  <pre class="copy-source">{{ files.job }}</pre>
+</div>
+{% endif %}
+{% endblock %}

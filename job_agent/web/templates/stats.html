@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="panel">
+  <h1>Stats</h1>
+  <p class="muted">A quick read on how the local job pipeline is performing.</p>
+  <div class="grid">
+    <div class="stat"><span>Total runs</span><strong>{{ stats.total_runs }}</strong></div>
+    <div class="stat"><span>Completed runs</span><strong>{{ stats.completed_runs }}</strong></div>
+    <div class="stat"><span>Total loaded roles</span><strong>{{ stats.total_loaded }}</strong></div>
+    <div class="stat"><span>Unique jobs</span><strong>{{ stats.unique_jobs }}</strong></div>
+    <div class="stat"><span>Generated packages</span><strong>{{ stats.total_generated }}</strong></div>
+    <div class="stat"><span>Average score</span><strong>{{ stats.avg_score }}</strong></div>
+    <div class="stat"><span>Strong jobs</span><strong>{{ stats.strong_jobs }}</strong></div>
+    <div class="stat"><span>Exploratory jobs</span><strong>{{ stats.exploratory_jobs }}</strong></div>
+    <div class="stat"><span>Applied</span><strong>{{ stats.applied_total }}</strong></div>
+    <div class="stat"><span>Interesting</span><strong>{{ stats.interesting_total }}</strong></div>
+    <div class="stat"><span>Not interesting</span><strong>{{ stats.not_interesting_total }}</strong></div>
+  </div>
+</div>
+
+<div class="panel">
+  <h2>Latest Runs</h2>
+  <table>
+    <thead><tr><th>Started</th><th>Status</th><th>Loaded</th><th>Generated</th><th>Strong</th><th>Exploratory</th></tr></thead>
+    <tbody>
+      {% for run in runs %}
+      <tr>
+        <td>{{ run.started_at }}</td>
+        <td>{{ run.status }}</td>
+        <td>{{ run.total_loaded }}</td>
+        <td>{{ run.generated_job_count }}</td>
+        <td>{{ run.strong_matches }}</td>
+        <td>{{ run.exploratory_matches }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

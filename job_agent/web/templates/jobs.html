@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="panel">
+  <h1>Jobs</h1>
+  <p class="muted">Browse unique jobs across all runs. Click a row to open the job. Use checkboxes for bulk status actions.</p>
+  <form method="get" class="grid">
+    <div>
+      <label>Categories</label>
+      <select class="compact-select" name="category" multiple>
+        {% for item in ["strong", "exploratory", "weak", "excluded"] %}
+        <option value="{{ item }}" {% if item in filters.categories %}selected{% endif %}>{{ item }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div>
+      <label>Application statuses</label>
+      <select class="compact-select" name="app_status" multiple>
+        {% for item in ["unreviewed", "interesting", "not_interesting", "applied", "archived"] %}
+        <option value="{{ item }}" {% if item in filters.app_statuses %}selected{% endif %}>{{ item }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div><button type="submit">Filter</button><a class="button light" href="/jobs">Clear</a></div>
+  </form>
+</div>
+
+<div class="panel">
+  <form method="post" action="/api/jobs/bulk-status">
+    <input type="hidden" name="return_to" value="/jobs">
+    <div class="row">
+      <select name="status" style="max-width:260px;">
+        <option value="unreviewed">Mark unreviewed/seen</option>
+        <option value="interesting">Mark interesting</option>
+        <option value="not_interesting">Mark not interesting</option>
+        <option value="applied">Mark applied</option>
+        <option value="archived">Archive</option>
+      </select>
+      <button type="submit">Apply to selected</button>
+    </div>
+    <table>
+      <thead><tr><th><input type="checkbox" onchange="toggleAll(this, '.job-check')"></th><th>Role</th><th>Company</th><th>Location</th><th>Match</th><th>Status</th><th>Run</th></tr></thead>
+      <tbody>
+        {% for job in jobs %}
+        <tr class="clickable-row" onclick="goToRow(event, '/jobs/{{ job.stable_id }}?run_id={{ job.run_id }}')">
+          <td><input class="job-check" type="checkbox" name="job_ids" value="{{ job.stable_id }}"></td>
+          <td><strong>{{ job.title }}</strong><br><span class="muted">{{ job.state }}</span></td>
+          <td>{{ job.company }}{% if job.recruiter %}<br><span class="muted">{{ job.recruiter }}</span>{% endif %}</td>
+          <td>{{ job.location }}<br><span class="muted">{{ job.remote }}</span></td>
+          <td><span class="badge {{ job.match_category }}">{{ job.match_score }}% {{ job.match_category }}</span></td>
+          <td><span class="badge {{ job.application_status }}">{{ job.application_status }}</span></td>
+          <td>{{ job.run_id }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </form>
+</div>
+{% endblock %}

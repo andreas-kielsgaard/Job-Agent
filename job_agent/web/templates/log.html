@@ -1,0 +1,8 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="panel">
+  <h1>Run Log</h1>
+  <p>{{ run.run_id }}</p>
+  <pre class="log">{{ log_text }}</pre>
+</div>
+{% endblock %}

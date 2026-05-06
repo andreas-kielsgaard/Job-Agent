@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{ title or "Job Agent" }}</title>
+    <link rel="stylesheet" href="/static/app.css">
+    <script>
+      function copyText(id) {
+        const el = document.getElementById(id);
+        navigator.clipboard.writeText(el.innerText || el.value || "");
+      }
+      setInterval(() => {
+        fetch("/api/health", { cache: "no-store" }).catch(() => {});
+      }, 30000);
+
+      let aiEditState = {};
+
+      async function openAiEdit(button) {
+        const targetId = button.dataset.target;
+        const field = document.getElementById(targetId);
+        aiEditState = {
+          targetId,
+          fieldId: button.dataset.fieldId,
+          buttonId: button.dataset.buttonId || button.dataset.fieldId,
+          jobId: button.dataset.jobId || "",
+          runId: button.dataset.runId || "",
+          originalText: field.value || field.innerText || ""
+        };
+        document.getElementById("ai-edit-modal").style.display = "flex";
+        document.getElementById("ai-user-instruction").value = "";
+        document.getElementById("ai-old-text").value = aiEditState.originalText;
+        document.getElementById("ai-new-text").value = "";
+        document.getElementById("ai-error").innerText = "";
+        document.getElementById("ai-context-list").innerHTML = "Loading context...";
+        const params = new URLSearchParams({ field_id: aiEditState.fieldId, button_id: aiEditState.buttonId, job_id: aiEditState.jobId, run_id: aiEditState.runId });
+        const response = await fetch(`/api/ai-edit/context?${params.toString()}`);
+        const data = await response.json();
+        document.getElementById("ai-field-context").innerText = data.field_context;
+        const list = document.getElementById("ai-context-list");
+        list.innerHTML = "";
+        data.blocks.forEach(block => {
+          const selected = data.selected_blocks.includes(block.key);
+          const disabled = data.disabled_blocks.includes(block.key);
+          const row = document.createElement("div");
+          row.className = "row";
+          row.innerHTML = `
+            <label class="check"><input type="checkbox" class="ai-context-selected" value="${block.key}" ${selected ? "checked" : ""}> ${block.label}</label>
+            <label class="check"><input type="checkbox" class="ai-context-disabled" value="${block.key}" ${disabled ? "checked" : ""}> Temporarily disable</label>
+          `;
+          list.appendChild(row);
+        });
+      }
+
+      function closeAiEdit() {
+        document.getElementById("ai-edit-modal").style.display = "none";
+      }
+
+      async function runAiEdit() {
+        const selected = [...document.querySelectorAll(".ai-context-selected:checked")].map(x => x.value);
+        const disabled = [...document.querySelectorAll(".ai-context-disabled:checked")].map(x => x.value);
+        document.getElementById("ai-spinner").classList.add("active");
+        document.getElementById("ai-error").innerText = "";
+        const response = await fetch("/api/ai-edit/generate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            field_id: aiEditState.fieldId,
+            button_id: aiEditState.buttonId,
+            job_id: aiEditState.jobId,
+            run_id: aiEditState.runId,
+            current_text: document.getElementById("ai-old-text").value,
+            user_instruction: document.getElementById("ai-user-instruction").value,
+            selected_blocks: selected,
+            disabled_blocks: disabled
+          })
+        });
+        const data = await response.json();
+        document.getElementById("ai-spinner").classList.remove("active");
+        if (!data.ok) {
+          document.getElementById("ai-error").innerText = data.error || "AI edit failed.";
+          document.getElementById("ai-generated-prompt").value = data.prompt || "";
+          return;
+        }
+        document.getElementById("ai-new-text").value = data.revised_text;
+        document.getElementById("ai-generated-prompt").value = data.prompt;
+      }
+
+      function keepAiEdit() {
+        const field = document.getElementById(aiEditState.targetId);
+        field.value = document.getElementById("ai-new-text").value;
+        closeAiEdit();
+      }
+
+      function goToRow(event, url) {
+        if (event.target.closest("a, button, input, select, textarea, label, form")) return;
+        window.location.href = url;
+      }
+
+      function toggleAll(source, selector) {
+        document.querySelectorAll(selector).forEach(box => box.checked = source.checked);
+      }
+    </script>
+  </head>
+  <body>
+    <header class="topbar">
+      <nav class="nav">
+        <div class="brand">Job Agent</div>
+        <a class="nav-button" href="/">Dashboard</a>
+        <a class="nav-button" href="/jobs">Jobs</a>
+        <a class="nav-button" href="/runs">Runs</a>
+        <a class="nav-button" href="/stats">Stats</a>
+        <a class="nav-button" href="/setup">Setup</a>
+      </nav>
+    </header>
+    <main class="shell">
+      {% block content %}{% endblock %}
+    </main>
+    <div class="modal-backdrop" id="ai-edit-modal">
+      <div class="modal">
+        <div class="row">
+          <h2 style="margin-right:auto;">Edit with AI</h2>
+          <button class="light" type="button" onclick="closeAiEdit()">Close</button>
+        </div>
+        <p id="ai-field-context" class="muted"></p>
+        <label>Your instruction</label>
+        <textarea id="ai-user-instruction" placeholder="Example: I updated my CV. Add anything important that is missing, but preserve structure and do not invent details."></textarea>
+        <details>
+          <summary>Context provided to the prompt</summary>
+          <p class="muted">Checked blocks are included. Temporarily disabled blocks are saved for this specific button, so you can re-enable them later without rebuilding the selection.</p>
+          <div id="ai-context-list"></div>
+        </details>
+        <div class="row">
+          <button type="button" onclick="runAiEdit()">Generate revision</button>
+          <span id="ai-spinner" class="spinner">Working on prompt...</span>
+          <span id="ai-error" class="muted"></span>
+        </div>
+        <div class="compare">
+          <div>
+            <label>Old text</label>
+            <textarea id="ai-old-text"></textarea>
+          </div>
+          <div>
+            <label>New text</label>
+            <textarea id="ai-new-text"></textarea>
+          </div>
+        </div>
+        <details>
+          <summary>Generated prompt</summary>
+          <textarea id="ai-generated-prompt"></textarea>
+        </details>
+        <div class="row">
+          <button type="button" onclick="keepAiEdit()">Keep new text</button>
+          <button class="secondary" type="button" onclick="closeAiEdit()">Discard</button>
+        </div>
+      </div>
+    </div>
+  </body>
+</html>

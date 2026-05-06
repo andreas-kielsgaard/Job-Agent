@@ -8,9 +8,20 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from .config import ROOT
 from .models import GeneratedPackage, Job, MatchResult
+from .run_store import RunEvent
+from .token_usage import TokenUsageStore, token_record_from_anthropic_response
 
 
-def generate_materials(job: Job, match: MatchResult, profile: dict, use_llm: bool = False, root: Path = ROOT) -> GeneratedPackage:
+def generate_materials(
+    job: Job,
+    match: MatchResult,
+    profile: dict,
+    use_llm: bool = False,
+    root: Path = ROOT,
+    run_id: str = "",
+    stable_id: str = "",
+    progress_callback=None,
+) -> GeneratedPackage:
     selected_experience = select_experience(job, profile)
     top_skills = select_skills(job, match, profile)
     role_summary = build_role_summary(job, top_skills)
@@ -20,7 +31,18 @@ def generate_materials(job: Job, match: MatchResult, profile: dict, use_llm: boo
 
     llm_application = ""
     if use_llm:
-        llm_application = maybe_generate_application_with_llm(job, match, profile, selected_experience, top_skills, generation_notes)
+        llm_application = maybe_generate_application_with_llm(
+            job,
+            match,
+            profile,
+            selected_experience,
+            top_skills,
+            generation_notes,
+            run_id=run_id,
+            stable_id=stable_id,
+            root=root,
+            progress_callback=progress_callback,
+        )
     else:
         generation_notes.append("Claude disabled; deterministic application template used.")
 
@@ -132,18 +154,24 @@ def maybe_generate_application_with_llm(
     selected_experience: list[dict[str, str]],
     top_skills: list[str],
     generation_notes: list[str],
+    run_id: str = "",
+    stable_id: str = "",
+    root: Path = ROOT,
+    progress_callback=None,
 ) -> str:
     load_dotenv()
     api_key = os.getenv("ANTHROPIC_API_KEY")
-    model = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-20250514")
+    model = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-0")
     if not api_key or api_key.startswith("replace_with"):
         generation_notes.append("Claude requested but ANTHROPIC_API_KEY is missing or placeholder; deterministic fallback used.")
+        _emit(progress_callback, run_id, "claude_skipped", "Claude key missing or placeholder; deterministic fallback used.", "generation", job.title)
         return ""
 
     try:
         from anthropic import Anthropic
 
         client = Anthropic(api_key=api_key)
+        _emit(progress_callback, run_id, "claude_started", f"Claude application generation started with model {model}.", "generation", job.title)
         prompt = _load_prompt("generate_application.md").format(
             canonical_cv=profile.get("canonical_cv", ""),
             writing_style=profile.get("writing_style", ""),
@@ -164,10 +192,21 @@ def maybe_generate_application_with_llm(
             max_tokens=700,
             messages=[{"role": "user", "content": prompt}],
         )
+        if run_id:
+            record = token_record_from_anthropic_response(
+                run_id=run_id,
+                purpose="application_generation",
+                model=model,
+                associated_job_id=stable_id,
+                response=response,
+            )
+            TokenUsageStore(root).append(record)
         generation_notes.append(f"Claude application generation succeeded with model {model}.")
+        _emit(progress_callback, run_id, "claude_completed", f"Claude application generation completed with model {model}.", "generation", job.title)
         return "".join(block.text for block in response.content if block.type == "text").strip() + "\n"
     except Exception as exc:
         generation_notes.append(f"Claude application generation failed with model {model}: {exc}. Deterministic fallback used.")
+        _emit(progress_callback, run_id, "claude_failed", f"Claude application generation failed with model {model}: {exc}.", "generation", job.title)
         return ""
 
 
@@ -186,3 +225,8 @@ def _dedupe(items: list[str]) -> list[str]:
             result.append(item)
             seen.add(item)
     return result
+
+
+def _emit(progress_callback, run_id: str, event_type: str, message: str, phase: str, current_job: str) -> None:
+    if progress_callback and run_id:
+        progress_callback(RunEvent(run_id=run_id, event_type=event_type, message=message, phase=phase, current_job=current_job))

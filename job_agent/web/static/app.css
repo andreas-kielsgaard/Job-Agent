@@ -1,0 +1,313 @@
+:root {
+  color-scheme: light;
+  --bg: #f7f8fa;
+  --panel: #ffffff;
+  --text: #16202a;
+  --muted: #667085;
+  --line: #d8dee8;
+  --accent: #0f766e;
+  --accent-soft: #e7f5f2;
+  --warn: #9a3412;
+  --bad: #991b1b;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: "Segoe UI", system-ui, sans-serif;
+  font-size: 15px;
+}
+
+a {
+  color: #075985;
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+.shell {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 24px;
+}
+
+.topbar {
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+}
+
+.nav {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 14px 24px;
+  display: flex;
+  gap: 18px;
+  align-items: center;
+}
+
+.brand {
+  font-weight: 700;
+  margin-right: auto;
+}
+
+.nav-button {
+  display: inline-block;
+  padding: 9px 13px;
+  border-radius: 7px;
+  background: #eef2f6;
+  color: #1f2937;
+  font-weight: 700;
+}
+
+.nav-button:hover {
+  background: var(--accent-soft);
+  text-decoration: none;
+}
+
+.hero-status {
+  border-left: 6px solid var(--accent);
+}
+
+.hero-status.today {
+  background: #f0fdf4;
+}
+
+.hero-status.running {
+  border-left-color: #f59e0b;
+  background: #fffbeb;
+}
+
+.faded {
+  opacity: 0.55;
+}
+
+.big-action {
+  font-size: 18px;
+  padding: 14px 18px;
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 18px;
+  margin-bottom: 18px;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 14px;
+}
+
+.row {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.stat {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  background: #fbfcfd;
+}
+
+.stat strong {
+  display: block;
+  font-size: 22px;
+}
+
+.button,
+button {
+  border: 0;
+  background: var(--accent);
+  color: #fff;
+  border-radius: 6px;
+  padding: 9px 12px;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.button.secondary,
+button.secondary {
+  background: #344054;
+}
+
+.button.light,
+button.light {
+  background: var(--accent-soft);
+  color: #115e59;
+}
+
+input,
+textarea,
+select {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 8px;
+  font: inherit;
+  background: #fff;
+}
+
+textarea {
+  min-height: 260px;
+  font-family: Consolas, monospace;
+}
+
+label {
+  display: block;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+
+.check {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-weight: 500;
+}
+
+.check input {
+  width: auto;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+tr.clickable-row {
+  cursor: pointer;
+}
+
+tr.clickable-row:hover td {
+  background: #f8fafc;
+}
+
+.compact-select {
+  min-height: 120px;
+}
+
+th,
+td {
+  text-align: left;
+  border-bottom: 1px solid var(--line);
+  padding: 10px;
+  vertical-align: top;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.badge {
+  display: inline-block;
+  border-radius: 999px;
+  padding: 3px 8px;
+  background: #eef2f6;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.badge.strong {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.badge.exploratory {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.badge.excluded,
+.badge.not_interesting {
+  background: #fee2e2;
+  color: var(--bad);
+}
+
+.badge.applied {
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+
+.markdown {
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 14px;
+}
+
+.copy-source {
+  white-space: pre-wrap;
+  font-family: Consolas, monospace;
+  background: #f9fafb;
+}
+
+.tabs {
+  display: grid;
+  gap: 12px;
+}
+
+.log {
+  white-space: pre-wrap;
+  font-family: Consolas, monospace;
+  background: #111827;
+  color: #f9fafb;
+  border-radius: 8px;
+  padding: 16px;
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.55);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  z-index: 20;
+}
+
+.modal {
+  background: #fff;
+  width: min(980px, 100%);
+  max-height: 92vh;
+  overflow: auto;
+  border-radius: 8px;
+  padding: 18px;
+  border: 1px solid var(--line);
+}
+
+.small-modal {
+  width: min(620px, 100%);
+}
+
+.modal textarea {
+  min-height: 140px;
+}
+
+.compare {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 12px;
+}
+
+.spinner {
+  display: none;
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.spinner.active {
+  display: inline-block;
+}

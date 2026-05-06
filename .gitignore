@@ -4,5 +4,7 @@ __pycache__/
 *.pyc
 
 profile/
+profile/ai_edit_contexts.json
 jobs/seen_jobs.json
+jobs/application_status.json
 output/

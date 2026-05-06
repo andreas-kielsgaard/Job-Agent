@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="panel hero-status {% if dashboard_stats.active_run %}running{% elif dashboard_stats.latest_is_today %}today{% endif %}">
+  <h1>Overview</h1>
+  {% if dashboard_stats.active_run %}
+  <p><span class="badge exploratory">Run in progress</span> {{ dashboard_stats.active_run.run_id }}</p>
+  {% elif dashboard_stats.latest_is_today %}
+  <p><span class="badge strong">Daily run completed today</span></p>
+  {% else %}
+  <p><span class="badge">No daily run completed today</span></p>
+  {% endif %}
+  {% if latest_run %}
+  <p class="muted">Latest run: {{ latest_run.started_at }} / {{ latest_run.status }}</p>
+  {% endif %}
+
+  <div class="grid">
+    <div class="stat"><span>Jobs found today</span><strong>{{ dashboard_stats.jobs_found_today }}</strong></div>
+    <div class="stat"><span>New roles today</span><strong>{{ dashboard_stats.new_roles_today }}</strong></div>
+    <div class="stat"><span>Unreviewed new/changed jobs</span><strong>{{ dashboard_stats.unseen_jobs }}</strong></div>
+    <div class="stat"><span>Applied last 7 days</span><strong>{{ dashboard_stats.applied_last_7 }}</strong></div>
+  </div>
+
+  <div class="row">
+    <button class="big-action {% if dashboard_stats.latest_is_today and not dashboard_stats.active_run %}faded{% endif %}" type="button" onclick="document.getElementById('run-settings-modal').style.display='flex'">Perform daily run</button>
+    {% if dashboard_stats.active_run %}<a class="button light" href="/runs/{{ dashboard_stats.active_run.run_id }}">Open active run</a>{% endif %}
+  </div>
+</div>
+
+<div class="panel">
+  <h2>Recent Runs</h2>
+  {% if runs %}
+  <table>
+    <thead><tr><th>Started</th><th>Status</th><th>Found</th><th>New</th><th>Matches</th><th>Warnings</th><th>Tokens</th><th></th></tr></thead>
+    <tbody>
+      {% for run in runs %}
+      <tr>
+        <td>{{ run.started_at }}</td>
+        <td><span class="badge {{ run.status }}">{{ run.status }}</span></td>
+        <td>{{ run.total_loaded }}</td>
+        <td>{{ run.new_roles }}</td>
+        <td>{{ run.strong_matches }} strong / {{ run.exploratory_matches }} exploratory</td>
+        <td>{{ run.source_warnings }}</td>
+        <td>{{ run.token_usage.get("input_tokens", 0) }} in / {{ run.token_usage.get("output_tokens", 0) }} out</td>
+        <td><a href="/runs/{{ run.run_id }}">Detail</a></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p>No runs yet.</p>
+  {% endif %}
+</div>
+
+<div class="modal-backdrop" id="run-settings-modal">
+  <div class="modal small-modal">
+    <div class="row">
+      <h2 style="margin-right:auto;">Daily Run Settings</h2>
+      <button class="light" type="button" onclick="document.getElementById('run-settings-modal').style.display='none'">Close</button>
+    </div>
+    <p class="muted">Settings are prefilled from the latest run when available.</p>
+    <form method="post" action="/api/run" class="grid">
+      <label class="check"><input type="checkbox" name="use_llm" {% if default_options.get("use_llm", true) or env.get("CLAUDE_USE_BY_DEFAULT", "true") == "true" %}checked{% endif %}> Use Claude</label>
+      <label class="check"><input type="checkbox" name="include_seen" {% if default_options.get("include_seen") %}checked{% endif %}> Include seen</label>
+      <label class="check"><input type="checkbox" name="include_weak" {% if default_options.get("include_weak") %}checked{% endif %}> Include weak</label>
+      <label class="check"><input type="checkbox" name="mark_seen" {% if default_options.get("mark_seen", true) %}checked{% endif %}> Mark seen after run</label>
+      <label class="check"><input type="checkbox" name="generate_materials_option" {% if default_options.get("generate_materials", true) %}checked{% endif %}> Generate CV/application materials</label>
+      <label class="check"><input type="checkbox" name="is_test"> Test run</label>
+      <div><button type="submit">Start run</button></div>
+    </form>
+    <p class="muted">Test runs are hidden from normal run views and never mark jobs as seen.</p>
+  </div>
+</div>
+{% endblock %}
