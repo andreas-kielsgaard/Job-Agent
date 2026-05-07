@@ -59,7 +59,10 @@
     </div>
     <p class="muted">Settings are prefilled from the latest run when available.</p>
     <form method="post" action="/api/run" class="grid">
-      <label class="check"><input type="checkbox" name="use_llm" {% if default_options.get("use_llm", true) or env.get("CLAUDE_USE_BY_DEFAULT", "true") == "true" %}checked{% endif %}> Use Claude for material generation</label>
+      <div>
+        <label class="check"><input type="checkbox" name="use_llm" {% if default_options.get("use_llm", true) or env.get("CLAUDE_USE_BY_DEFAULT", "true") == "true" %}checked{% endif %}> Use Claude for material generation</label>
+        <p class="muted">Only relevant when material generation is enabled.</p>
+      </div>
       <div>
         <label class="check"><input type="checkbox" name="ai_enhanced_search" {% if default_options.get("ai_enhanced_search") %}checked{% endif %}> AI-enhanced search summaries</label>
         <p class="muted">Uses Claude to interpret promising postings against your profile and write short relevance summaries. Does not generate application materials.</p>
@@ -67,7 +70,10 @@
       <label class="check"><input type="checkbox" name="include_seen" {% if default_options.get("include_seen") %}checked{% endif %}> Include seen</label>
       <label class="check"><input type="checkbox" name="include_weak" {% if default_options.get("include_weak") %}checked{% endif %}> Include weak</label>
       <label class="check"><input type="checkbox" name="mark_seen" {% if default_options.get("mark_seen", true) %}checked{% endif %}> Mark seen after run</label>
-      <label class="check"><input type="checkbox" name="generate_materials_option" {% if default_options.get("generate_materials", true) %}checked{% endif %}> Generate CV/application materials</label>
+      <div>
+        <label class="check"><input type="checkbox" name="generate_materials_option"> Generate materials during run (slower / may use tokens)</label>
+        <p class="muted">Usually leave this off. You can generate materials later from each job page.</p>
+      </div>
       <label class="check"><input type="checkbox" name="is_test"> Test run</label>
       <div><button type="submit">Start run</button></div>
     </form>

@@ -78,6 +78,10 @@ def write_placeholder_job_package(
 
     paths = {
         "job": base / "job.json",
+        "cv": base / "cv-at-a-glance.md",
+        "application": base / "application.md",
+        "form_answers": base / "form-answers.md",
+        "match_analysis": base / "match-analysis.md",
         "match": base / "match.json",
         "index": base / "index.json",
     }
@@ -170,6 +174,7 @@ def _package_index(
         "state": state,
         "application_status": application_status,
         "materials_generated": materials_generated,
+        "material_status": "generated" if materials_generated else "missing",
         "paths": {name: str(path) for name, path in paths.items() if name != "index"},
     }
     if ai_evaluation:

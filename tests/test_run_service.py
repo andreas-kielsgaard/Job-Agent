@@ -31,6 +31,31 @@ def test_run_daily_agent_completes_and_writes_outputs(local_yaml_source_project:
 
 def test_run_options_ai_enhanced_search_defaults_false() -> None:
     assert RunOptions().ai_enhanced_search is False
+    assert RunOptions().generate_materials is False
+
+
+def test_default_run_writes_placeholder_package_without_calling_generator(
+    monkeypatch: pytest.MonkeyPatch, local_yaml_source_project: Path
+) -> None:
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError("generate_materials should not be called by default")
+
+    monkeypatch.setattr("job_agent.run_service.generate_materials", fail_if_called)
+
+    result = run_daily_agent(RunOptions(include_seen=True), root=local_yaml_source_project)
+
+    assert result.record.status == "completed"
+    index = read_json(next((local_yaml_source_project / "output").glob("*/*/index.json")), {})
+    assert index["materials_generated"] is False
+    assert index["material_status"] == "missing"
+
+
+def test_explicit_material_generation_writes_generated_status(local_yaml_source_project: Path) -> None:
+    run_daily_agent(RunOptions(include_seen=True, generate_materials=True), root=local_yaml_source_project)
+
+    index = read_json(next((local_yaml_source_project / "output").glob("*/*/index.json")), {})
+    assert index["materials_generated"] is True
+    assert index["material_status"] == "generated"
 
 
 def test_run_without_ai_enhanced_search_does_not_call_ai_service(

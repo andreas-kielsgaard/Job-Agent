@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -29,6 +30,10 @@ def test_app_creation_health_and_basic_routes_use_temp_root(client: TestClient, 
         assert client.get(path).status_code == 200
 
     assert (project_root / "output" / "runs" / "runs.json").exists()
+    dashboard = client.get("/").text
+    material_checkbox = re.search(r'<input[^>]+name="generate_materials_option"[^>]*>', dashboard)
+    assert material_checkbox
+    assert "checked" not in material_checkbox.group(0)
 
 
 def test_missing_resources_and_invalid_bulk_actions_return_errors(client: TestClient) -> None:

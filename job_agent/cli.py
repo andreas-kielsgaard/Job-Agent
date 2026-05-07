@@ -24,6 +24,9 @@ def main() -> None:
         "--skip-materials", action="store_true", help="Skip CV/application/form material generation during discovery."
     )
     daily.add_argument(
+        "--generate-materials", action="store_true", help="Generate CV/application/form materials during discovery."
+    )
+    daily.add_argument(
         "--test-run", action="store_true", help="Mark this as a test run; it will not update seen-job state."
     )
 
@@ -35,7 +38,7 @@ def main() -> None:
             include_seen=args.include_seen,
             mark_seen=args.mark_seen,
             include_weak=args.include_weak,
-            generate_materials=not args.skip_materials,
+            generate_materials=args.generate_materials and not args.skip_materials,
             is_test=args.test_run,
         )
 
@@ -46,7 +49,7 @@ def run_daily(
     include_seen: bool = False,
     mark_seen: bool = False,
     include_weak: bool = False,
-    generate_materials: bool = True,
+    generate_materials: bool = False,
     is_test: bool = False,
 ) -> None:
     result = run_daily_agent(

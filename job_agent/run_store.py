@@ -24,7 +24,7 @@ class RunOptions:
     include_seen: bool = False
     include_weak: bool = False
     mark_seen: bool = False
-    generate_materials: bool = True
+    generate_materials: bool = False
     is_test: bool = False
 
 

@@ -25,7 +25,9 @@ def test_save_job_materials_writes_files_and_marks_generated(project_root: Path)
     assert files["application"] == "updated app"
     assert files["form_answers"] == "updated forms"
     assert files["match_analysis"] == "updated analysis"
-    assert read_json(Path(package["_index_path"]), {})["materials_generated"] is True
+    index = read_json(Path(package["_index_path"]), {})
+    assert index["materials_generated"] is True
+    assert index["material_status"] == "generated"
 
 
 def test_save_job_materials_missing_package_raises(project_root: Path) -> None:
@@ -48,6 +50,7 @@ def test_generate_job_materials_deterministically_regenerates_package(template_p
     refreshed = MaterialService(template_project).generate_job_materials("stable-1", use_llm=False)
 
     assert refreshed["materials_generated"] is True
+    assert refreshed["material_status"] == "generated"
     package = MaterialService(template_project).packages.find_package("stable-1")
     files = MaterialService(template_project).packages.read_package_files(package)
     assert "SAP ABAP Consultant" in files["cv"]

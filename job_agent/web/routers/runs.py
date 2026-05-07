@@ -20,7 +20,7 @@ def launch_run(
     include_seen: bool = Form(False),
     include_weak: bool = Form(False),
     mark_seen: bool = Form(False),
-    generate_materials_option: bool = Form(True),
+    generate_materials_option: bool = Form(False),
     is_test: bool = Form(False),
 ) -> RedirectResponse:
     options = RunOptions(

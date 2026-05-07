@@ -29,7 +29,8 @@ class WebTests(unittest.TestCase):
         client = TestClient(app)
         response = client.get("/")
         self.assertEqual(response.status_code, 200)
-        self.assertIn("Generate CV/application materials", response.text)
+        self.assertIn("Generate materials during run", response.text)
+        self.assertIn("Usually leave this off", response.text)
 
     def test_jobs_and_stats_pages_load(self) -> None:
         client = TestClient(app)
@@ -51,7 +52,7 @@ class WebTests(unittest.TestCase):
 
     def test_run_options_include_material_generation_flag(self) -> None:
         options = RunOptions()
-        self.assertTrue(options.generate_materials)
+        self.assertFalse(options.generate_materials)
 
     def test_ai_edit_context_endpoint(self) -> None:
         client = TestClient(app)

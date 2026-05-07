@@ -20,11 +20,12 @@
   <p><strong>Concerns:</strong> {{ package.concerns | join("; ") }}</p>
   {% endif %}
   <div class="row">
+    <span class="badge {{ package.material_status }}">{{ "materials generated" if package.material_status == "generated" else "materials missing" }}</span>
     <button class="light" type="button" onclick="copyText('review-bundle')">Copy external-agent review bundle</button>
     <form method="post" action="/api/jobs/{{ package.stable_id }}/generate">
       <input type="hidden" name="return_to" value="/jobs/{{ package.stable_id }}">
       <label class="check"><input type="checkbox" name="use_llm"> Use Claude</label>
-      <button type="submit">Generate / regenerate materials</button>
+      <button type="submit">{{ "Regenerate materials" if package.material_status == "generated" else "Generate materials" }}</button>
     </form>
   </div>
   <pre id="review-bundle" class="copy-source" style="display:none;">{{ review_bundle }}</pre>

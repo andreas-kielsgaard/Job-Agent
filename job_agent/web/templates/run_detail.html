@@ -92,7 +92,7 @@
 <div class="panel">
   <h2>Proposed Jobs</h2>
   <table>
-    <thead><tr><th>Role</th><th>Company</th><th>Location</th><th>Rate</th><th>Match</th><th>Status</th><th>Angle</th><th>Actions</th></tr></thead>
+    <thead><tr><th>Role</th><th>Company</th><th>Location</th><th>Rate</th><th>Match</th><th>Status</th><th>Materials</th><th>Angle</th><th>Actions</th></tr></thead>
     <tbody>
       {% for pkg in packages %}
       <tr>
@@ -102,6 +102,7 @@
         <td>{{ pkg.rate }}</td>
         <td><span class="badge {{ pkg.match_category }}">{{ pkg.match_score }}% {{ pkg.match_category }}</span></td>
         <td><span class="badge {{ pkg.application_status }}">{{ pkg.application_status }}</span></td>
+        <td><span class="badge {{ pkg.material_status }}">{{ "materials generated" if pkg.material_status == "generated" else "materials missing" }}</span></td>
         <td>
           {{ pkg.recommended_angle }}
           {% if pkg.ai_evaluation_status == "evaluated" %}
@@ -119,6 +120,10 @@
         </td>
         <td>
           <a href="/jobs/{{ pkg.stable_id }}?run_id={{ run.run_id }}">Open</a>
+          <form method="post" action="/api/jobs/{{ pkg.stable_id }}/generate">
+            <input type="hidden" name="return_to" value="/runs/{{ run.run_id }}">
+            <button class="light" type="submit">{{ "Regenerate" if pkg.material_status == "generated" else "Generate materials" }}</button>
+          </form>
           <form method="post" action="/api/jobs/{{ pkg.stable_id }}/status">
             <input type="hidden" name="return_to" value="/runs/{{ run.run_id }}">
             <input type="hidden" name="status" value="not_interesting">

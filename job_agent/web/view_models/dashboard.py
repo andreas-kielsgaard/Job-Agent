@@ -30,7 +30,7 @@ def build_dashboard_view(root: Path = ROOT) -> dict:
             "include_seen": False,
             "include_weak": False,
             "mark_seen": True,
-            "generate_materials": True,
+            "generate_materials": False,
         },
         "env": dotenv_values(root / ".env"),
     }

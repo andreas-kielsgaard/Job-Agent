@@ -30,6 +30,7 @@ class PackageIndexService:
             status = statuses.get(item.get("stable_id", ""))
             if status:
                 item["application_status"] = status.status
+            item["material_status"] = self.material_status(item)
             item["_index_path"] = str(path)
             packages.append(item)
         packages.sort(key=lambda item: (item.get("match_score", 0), item.get("title", "")), reverse=True)
@@ -75,7 +76,15 @@ class PackageIndexService:
         if not index_path:
             return
         package["materials_generated"] = generated
+        package["material_status"] = "generated" if generated else "missing"
         write_json(Path(index_path), {key: value for key, value in package.items() if key != "_index_path"})
+
+    @staticmethod
+    def material_status(package: dict[str, Any]) -> str:
+        status = package.get("material_status")
+        if status:
+            return str(status)
+        return "generated" if package.get("materials_generated") else "missing"
 
     def refresh_package_status(self, job_id: str, status: str) -> None:
         for path in (self.root / "output").glob("*/*/index.json"):

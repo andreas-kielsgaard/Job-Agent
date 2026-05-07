@@ -79,5 +79,6 @@ class MaterialService:
         )
         refreshed = read_json(Path(paths["index"]), {})
         refreshed["materials_generated"] = True
+        refreshed["material_status"] = "generated"
         write_json(Path(paths["index"]), refreshed)
         return refreshed

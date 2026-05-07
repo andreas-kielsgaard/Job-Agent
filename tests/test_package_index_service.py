@@ -5,7 +5,7 @@ import unittest
 from datetime import date
 from pathlib import Path
 
-from job_agent.io.json_store import read_json
+from job_agent.io.json_store import read_json, write_json
 from job_agent.services.package_index_service import PackageIndexService
 from tests.helpers import write_sample_package
 
@@ -27,7 +27,9 @@ class PackageIndexServiceTests(unittest.TestCase):
             service.refresh_package_status("stable-1", "interesting")
             self.assertEqual(read_json(Path(paths["index"]), {})["application_status"], "interesting")
             service.mark_package_materials_generated(package, False)
-            self.assertFalse(read_json(Path(paths["index"]), {})["materials_generated"])
+            updated_index = read_json(Path(paths["index"]), {})
+            self.assertFalse(updated_index["materials_generated"])
+            self.assertEqual(updated_index["material_status"], "missing")
             self.assertEqual(service.validate_package(package), [])
             self.assertEqual(service.infer_package_date(package).isoformat(), "2026-05-06")
 
@@ -43,6 +45,19 @@ class PackageIndexServiceTests(unittest.TestCase):
             unique = PackageIndexService(root).list_unique_jobs()
             self.assertEqual(len(unique), 1)
             self.assertEqual(unique[0]["run_id"], "run-9")
+
+    def test_missing_material_status_is_inferred_from_materials_generated(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            paths = write_sample_package(root, stable_id="stable-1")
+            index = read_json(Path(paths["index"]), {})
+            index.pop("material_status", None)
+            index["materials_generated"] = False
+            write_json(Path(paths["index"]), index)
+
+            package = PackageIndexService(root).find_package("stable-1")
+
+            self.assertEqual(package["material_status"], "missing")
 
     def test_service_has_no_presentation_or_review_bundle_responsibility(self) -> None:
         self.assertFalse(hasattr(PackageIndexService, "build_review_bundle"))

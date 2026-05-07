@@ -14,19 +14,18 @@ The daily run:
 4. Records whether a job is new, changed, or previously seen.
 5. Scores roles with component-based SAP contract matching.
 6. Optionally uses Claude for AI-enhanced search summaries on promising postings.
-7. Generates recruiter-facing materials for included roles when material generation is enabled.
+7. Creates placeholder packages for included roles; recruiter-facing materials are generated later unless you opt in.
 8. Writes a daily digest, excluded/weak-role summary, per-run log, run registry entry, event stream, token usage records, and package indexes.
 
-Generated package per included role:
+Default package per included role:
 
 ```text
-cv-at-a-glance.md
-application.md
-form-answers.md
-match-analysis.md
 job.json
 match.json
+index.json
 ```
+
+When material generation is enabled during the run, or triggered manually from a run/job page, the package also gets `cv-at-a-glance.md`, `application.md`, `form-answers.md`, and `match-analysis.md`.
 
 ## Quick Start
 
@@ -69,9 +68,11 @@ CLAUDE_USE_BY_DEFAULT=false
 There are two separate Claude modes:
 
 - AI-enhanced search: `--ai-enhanced-search` interprets promising postings against your profile and stores concise relevance summaries, confidence, risks, and priority flags for triage. It does not generate CVs or applications.
-- Material generation: `--use-llm` lets Claude help draft application text when material generation is enabled.
+- Material generation: `--generate-materials` opts into CV/application/form-answer generation during the run. `--use-llm` lets Claude help draft application text when material generation is enabled.
 
 If the key is missing or a call fails, deterministic search still completes and the run records a clear AI status or fallback note.
+
+Daily runs default to search/classify/score/highlight only. This keeps normal morning runs faster and cheaper. Generate materials manually from the run overview or job detail page when a role is worth pursuing.
 
 ## Local Web UI
 
