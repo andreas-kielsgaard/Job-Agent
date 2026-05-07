@@ -55,3 +55,20 @@ def test_generate_job_materials_deterministically_regenerates_package(template_p
     files = MaterialService(template_project).packages.read_package_files(package)
     assert "SAP ABAP Consultant" in files["cv"]
     assert "Standard Form Answer Package" in files["form_answers"]
+
+
+def test_generate_many_continues_after_failure(template_project: Path) -> None:
+    write_sample_package(template_project, stable_id="stable-1")
+    write_sample_package(template_project, stable_id="stable-2", title="SAP RAP Consultant")
+
+    result = MaterialService(template_project).generate_many(["stable-1", "missing", "stable-2"], use_llm=False)
+
+    assert result.total == 3
+    assert result.succeeded == 2
+    assert result.failed == 1
+    assert result.failures[0].job_id == "missing"
+    for stable_id in ["stable-1", "stable-2"]:
+        package = MaterialService(template_project).packages.find_package(stable_id)
+        index = read_json(Path(package["_index_path"]), {})
+        assert index["materials_generated"] is True
+        assert index["material_status"] == "generated"

@@ -94,13 +94,23 @@ def restore_run(run_id: str, return_to: str = Form("/runs")) -> RedirectResponse
 
 @router.get("/runs/{run_id}", response_class=HTMLResponse)
 def run_detail(
-    request: Request, run_id: str, category: str = "", app_status: str = "", source: str = ""
+    request: Request,
+    run_id: str,
+    category: str = "",
+    app_status: str = "",
+    source: str = "",
+    generated: int = 0,
+    failed: int = 0,
 ) -> HTMLResponse:
     try:
         view = build_run_detail_view(run_id, category, app_status, source, current_root())
     except KeyError:
         raise HTTPException(status_code=404, detail="Run not found") from None
-    return templates.TemplateResponse(request, "run_detail.html", {"request": request, **view})
+    return templates.TemplateResponse(
+        request,
+        "run_detail.html",
+        {"request": request, **view, "batch_result": {"generated": generated, "failed": failed}},
+    )
 
 
 @router.get("/runs/{run_id}/log", response_class=HTMLResponse)

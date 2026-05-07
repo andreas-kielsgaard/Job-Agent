@@ -113,3 +113,30 @@ def test_run_detail_renders_source_progress(client: TestClient, project_root: Pa
     assert "Local" in response.text
     assert "Checking source 1/1: Local" in response.text
     assert "Highlighted match" in response.text
+
+
+def test_batch_generate_route_redirects_with_counts(monkeypatch: pytest.MonkeyPatch, client: TestClient) -> None:
+    class FakeResult:
+        succeeded = 2
+        failed = 1
+
+    class FakeMaterialService:
+        def generate_many(self, job_ids, use_llm):
+            assert job_ids == ["stable-1", "stable-2", "missing"]
+            assert use_llm is True
+            return FakeResult()
+
+    monkeypatch.setattr("job_agent.web.routers.jobs.material_service", lambda: FakeMaterialService())
+
+    response = client.post(
+        "/api/jobs/batch-generate",
+        data={
+            "job_ids": ["stable-1", "stable-2", "missing"],
+            "use_llm": "on",
+            "return_to": "/runs/run-1",
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/runs/run-1?generated=2&failed=1"

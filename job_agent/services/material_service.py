@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +21,20 @@ class MaterialUpdate:
     application: str = ""
     form_answers: str = ""
     match_analysis: str = ""
+
+
+@dataclass
+class BatchMaterialGenerationFailure:
+    job_id: str
+    error: str
+
+
+@dataclass
+class BatchMaterialGenerationResult:
+    total: int = 0
+    succeeded: int = 0
+    failed: int = 0
+    failures: list[BatchMaterialGenerationFailure] = field(default_factory=list)
 
 
 class MaterialService:
@@ -82,3 +96,14 @@ class MaterialService:
         refreshed["material_status"] = "generated"
         write_json(Path(paths["index"]), refreshed)
         return refreshed
+
+    def generate_many(self, job_ids: list[str], use_llm: bool) -> BatchMaterialGenerationResult:
+        result = BatchMaterialGenerationResult(total=len(job_ids))
+        for job_id in job_ids:
+            try:
+                self.generate_job_materials(job_id, use_llm)
+                result.succeeded += 1
+            except Exception as exc:
+                result.failed += 1
+                result.failures.append(BatchMaterialGenerationFailure(job_id=job_id, error=str(exc)))
+        return result

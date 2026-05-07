@@ -91,11 +91,20 @@
 
 <div class="panel">
   <h2>Proposed Jobs</h2>
+  {% if batch_result.generated or batch_result.failed %}
+  <p><span class="badge generated">Generated materials for {{ batch_result.generated }} jobs.</span> {% if batch_result.failed %}<span class="badge failed">{{ batch_result.failed }} failed.</span>{% endif %}</p>
+  {% endif %}
+  <form id="batch-generate-form" method="post" action="/api/jobs/batch-generate" class="row">
+    <input type="hidden" name="return_to" value="/runs/{{ run.run_id }}">
+    <label class="check"><input type="checkbox" name="use_llm"> Use Claude</label>
+    <button type="submit">Generate materials for selected</button>
+  </form>
   <table>
-    <thead><tr><th>Role</th><th>Company</th><th>Location</th><th>Rate</th><th>Match</th><th>Status</th><th>Materials</th><th>Angle</th><th>Actions</th></tr></thead>
+    <thead><tr><th>Select</th><th>Role</th><th>Company</th><th>Location</th><th>Rate</th><th>Match</th><th>Status</th><th>Materials</th><th>Angle</th><th>Actions</th></tr></thead>
     <tbody>
       {% for pkg in packages %}
       <tr>
+        <td><input form="batch-generate-form" type="checkbox" name="job_ids" value="{{ pkg.stable_id }}"></td>
         <td><strong>{{ pkg.title }}</strong><br><span class="muted">{{ pkg.state }}</span></td>
         <td>{{ pkg.company }}{% if pkg.recruiter %}<br><span class="muted">{{ pkg.recruiter }}</span>{% endif %}</td>
         <td>{{ pkg.location }}<br><span class="muted">{{ pkg.remote }}</span></td>

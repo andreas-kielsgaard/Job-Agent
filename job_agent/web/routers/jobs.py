@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from urllib.parse import urlencode
+
 from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
@@ -100,3 +102,15 @@ def generate_job_materials(job_id: str, use_llm: bool = Form(False), return_to: 
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return RedirectResponse(url=return_to or f"/jobs/{job_id}", status_code=303)
+
+
+@router.post("/api/jobs/batch-generate")
+def batch_generate_job_materials(
+    job_ids: list[str] = Form(default=[]),
+    use_llm: bool = Form(False),
+    return_to: str = Form("/jobs"),
+) -> RedirectResponse:
+    result = material_service().generate_many(job_ids, use_llm)
+    separator = "&" if "?" in return_to else "?"
+    query = urlencode({"generated": result.succeeded, "failed": result.failed})
+    return RedirectResponse(url=f"{return_to}{separator}{query}", status_code=303)

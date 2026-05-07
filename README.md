@@ -25,7 +25,7 @@ match.json
 index.json
 ```
 
-When material generation is enabled during the run, or triggered manually from a run/job page, the package also gets `cv-at-a-glance.md`, `application.md`, `form-answers.md`, and `match-analysis.md`.
+When material generation is enabled during the run, or triggered manually from a run/job page, the package also gets `cv-at-a-glance.md`, `application.md`, `form-answers.md`, and `match-analysis.md`. From a run overview, select multiple jobs and use “Generate materials for selected” to prepare several packages at once.
 
 ## Quick Start
 
@@ -72,7 +72,7 @@ There are two separate Claude modes:
 
 If the key is missing or a call fails, deterministic search still completes and the run records a clear AI status or fallback note.
 
-Daily runs default to search/classify/score/highlight only. This keeps normal morning runs faster and cheaper. Generate materials manually from the run overview or job detail page when a role is worth pursuing.
+Daily runs default to search/classify/score/highlight only. This keeps normal morning runs faster and cheaper. Generate materials manually from the run overview for selected jobs, or from an individual job detail page when a role is worth pursuing. Check “Use Claude” during selected generation if you want Claude-assisted application text.
 
 ## Local Web UI
 
