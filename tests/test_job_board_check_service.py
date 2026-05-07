@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from job_agent.services import job_board_check_service
+from job_agent.services.extraction_quality import CandidateQuality
 from job_agent.services.job_board_check_service import (
     ExtractionQuality,
     check_job_board_compatibility,
@@ -48,7 +49,7 @@ def test_checker_prefers_recipe_when_rendered_page_is_better(monkeypatch: pytest
 
     rendered = ExtractionQuality(label="Playwright-rendered page")
     rendered.candidates = [
-        job_board_check_service.CandidateQuality(
+        CandidateQuality(
             title="SAP RAP Consultant contract",
             url="https://example.com/jobs/rendered",
             title_quality="useful",

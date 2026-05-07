@@ -1,79 +1,23 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from statistics import mean
 from typing import Any
 from urllib.parse import urlparse
 
 import requests
 
-from job_agent.models import Job
+from job_agent.services.extraction_quality import (
+    MIN_USEFUL_DESCRIPTION_CHARS,
+    ExtractionQuality,
+    candidate_quality,
+    quality_as_dict,
+)
 from job_agent.sources import extract_generic_jobs_from_html
 
 PUBLIC_URL_MESSAGE = (
     "Only public http(s) job-board or recruiter pages are supported. "
     "Do not use login, session, captcha, private-network, or protected URLs."
 )
-
-GENERIC_TITLE_LABELS = {
-    "apply",
-    "apply now",
-    "apply today",
-    "details",
-    "learn more",
-    "more",
-    "more info",
-    "read more",
-    "see details",
-    "view",
-    "view details",
-    "view job",
-    "view role",
-}
-
-MIN_USEFUL_DESCRIPTION_CHARS = 80
-
-
-@dataclass
-class CandidateQuality:
-    title: str
-    url: str
-    title_quality: str
-    description_length: int
-    missing_fields: list[str] = field(default_factory=list)
-
-
-@dataclass
-class ExtractionQuality:
-    label: str
-    status_code: int | None = None
-    final_url: str = ""
-    visible_text_chars: int = 0
-    candidates: list[CandidateQuality] = field(default_factory=list)
-    warnings: list[str] = field(default_factory=list)
-
-    @property
-    def candidate_count(self) -> int:
-        return len(self.candidates)
-
-    @property
-    def useful_title_count(self) -> int:
-        return sum(1 for candidate in self.candidates if candidate.title_quality == "useful")
-
-    @property
-    def generic_title_count(self) -> int:
-        return sum(1 for candidate in self.candidates if candidate.title_quality == "generic")
-
-    @property
-    def unique_url_count(self) -> int:
-        return len({candidate.url for candidate in self.candidates if candidate.url})
-
-    @property
-    def average_description_length(self) -> int:
-        if not self.candidates:
-            return 0
-        return round(mean(candidate.description_length for candidate in self.candidates))
-
 
 @dataclass
 class CompatibilityReport:
@@ -87,8 +31,8 @@ class CompatibilityReport:
     def as_dict(self) -> dict[str, Any]:
         return {
             "url": self.url,
-            "normal_html": _quality_as_dict(self.normal_html),
-            "rendered_page": _quality_as_dict(self.rendered_page) if self.rendered_page else None,
+            "normal_html": quality_as_dict(self.normal_html),
+            "rendered_page": quality_as_dict(self.rendered_page) if self.rendered_page else None,
             "recommendation": self.recommendation,
             "recommendation_reason": self.recommendation_reason,
             "boundaries": self.boundaries,
@@ -141,7 +85,7 @@ def _extract_from_http(url: str, timeout_seconds: int) -> ExtractionQuality:
         return quality
 
     jobs = extract_generic_jobs_from_html(response.text, base_url=response.url, source_name="Compatibility check")
-    quality.candidates = [_candidate_quality(job) for job in jobs]
+    quality.candidates = [candidate_quality(job) for job in jobs]
     if not jobs:
         quality.warnings.append("No plausible job links were found in the initial HTML.")
     return quality
@@ -181,43 +125,10 @@ def _extract_from_playwright(url: str, timeout_seconds: int) -> ExtractionQualit
         return quality
 
     jobs = extract_generic_jobs_from_html(html, base_url=quality.final_url or url, source_name="Compatibility check")
-    quality.candidates = [_candidate_quality(job) for job in jobs]
+    quality.candidates = [candidate_quality(job) for job in jobs]
     if not jobs:
         quality.warnings.append("No plausible job links were found after rendering the same page.")
     return quality
-
-
-def _candidate_quality(job: Job) -> CandidateQuality:
-    missing_fields = []
-    if not job.title.strip():
-        missing_fields.append("title")
-    if not job.url.strip():
-        missing_fields.append("url")
-    if job.company == "Unknown":
-        missing_fields.append("company")
-    if job.location == "Not listed":
-        missing_fields.append("location")
-    if job.posted_date == "Not listed":
-        missing_fields.append("posted_date")
-    description_length = len(job.description.strip())
-    if description_length < MIN_USEFUL_DESCRIPTION_CHARS:
-        missing_fields.append("description")
-    return CandidateQuality(
-        title=job.title,
-        url=job.url,
-        title_quality=_title_quality(job.title),
-        description_length=description_length,
-        missing_fields=missing_fields,
-    )
-
-
-def _title_quality(title: str) -> str:
-    normalized = " ".join(title.lower().split())
-    if normalized in GENERIC_TITLE_LABELS:
-        return "generic"
-    if len(normalized) < 8:
-        return "generic"
-    return "useful"
 
 
 def _recommend(
@@ -250,19 +161,3 @@ def _is_enough(quality: ExtractionQuality) -> bool:
     if quality.useful_title_count < 1 or quality.unique_url_count < 1:
         return False
     return any(candidate.description_length >= MIN_USEFUL_DESCRIPTION_CHARS for candidate in quality.candidates)
-
-
-def _quality_as_dict(quality: ExtractionQuality) -> dict[str, Any]:
-    return {
-        "label": quality.label,
-        "status_code": quality.status_code,
-        "final_url": quality.final_url,
-        "visible_text_chars": quality.visible_text_chars,
-        "candidate_count": quality.candidate_count,
-        "useful_title_count": quality.useful_title_count,
-        "generic_title_count": quality.generic_title_count,
-        "unique_url_count": quality.unique_url_count,
-        "average_description_length": quality.average_description_length,
-        "warnings": quality.warnings,
-        "candidates": [candidate.__dict__ for candidate in quality.candidates],
-    }

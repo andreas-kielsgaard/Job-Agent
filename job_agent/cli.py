@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import argparse
+from pathlib import Path
+
+import requests
 
 from .run_service import run_daily_agent
 from .run_store import RunOptions
-from .services.job_board_check_service import check_job_board_compatibility
+from .services.job_board_check_service import check_job_board_compatibility, validate_public_url
+from .services.job_board_recipe_service import check_recipe_against_html, load_job_board_recipe
 
 
 def main() -> None:
@@ -40,6 +44,13 @@ def main() -> None:
         action="store_true",
         help="Skip the optional Playwright-rendered comparison.",
     )
+    recipe = subparsers.add_parser(
+        "test-recipe",
+        help="Test a constrained job-board extraction recipe against one URL or local HTML file.",
+    )
+    recipe.add_argument("recipe_path")
+    recipe.add_argument("url_or_html_path")
+    recipe.add_argument("--base-url", default="", help="Base URL to resolve links when testing a local HTML file.")
 
     args = parser.parse_args()
     if args.command == "run-daily":
@@ -54,6 +65,8 @@ def main() -> None:
         )
     if args.command == "check-board":
         check_board(args.url, render=not args.no_render)
+    if args.command == "test-recipe":
+        test_recipe(args.recipe_path, args.url_or_html_path, base_url=args.base_url)
 
 
 def run_daily(
@@ -119,6 +132,54 @@ def check_board(url: str, render: bool = True) -> None:
             missing = ", ".join(candidate.missing_fields) or "none"
             print(f"- {candidate.title} [{candidate.title_quality}] {candidate.description_length} chars; missing: {missing}")
             print(f"  {candidate.url}")
+
+
+def test_recipe(recipe_path: str, url_or_html_path: str, base_url: str = "") -> None:
+    try:
+        recipe = load_job_board_recipe(Path(recipe_path))
+        html, resolved_base_url, warnings = _load_recipe_test_input(url_or_html_path, recipe.start_url, base_url)
+    except ValueError as exc:
+        print(exc)
+        return
+    quality = check_recipe_against_html(html, base_url=resolved_base_url, recipe=recipe)
+    quality.warnings.extend(warnings)
+    print(f"Recipe: {recipe.source_name}")
+    print(f"Base URL: {resolved_base_url}")
+    print(f"Jobs extracted: {quality.candidate_count}")
+    print(f"Useful titles: {quality.useful_title_count}")
+    print(f"Generic labels: {quality.generic_title_count}")
+    print(f"Unique URLs: {quality.unique_url_count}")
+    print(f"Average description length: {quality.average_description_length}")
+    for warning in quality.warnings:
+        print(f"Warning: {warning}")
+    for candidate in quality.candidates[:10]:
+        missing = ", ".join(candidate.missing_fields) or "none"
+        print(f"- {candidate.title} [{candidate.title_quality}] {candidate.description_length} chars; missing: {missing}")
+        print(f"  {candidate.url}")
+
+
+def _load_recipe_test_input(url_or_html_path: str, recipe_start_url: str, base_url: str) -> tuple[str, str, list[str]]:
+    value = url_or_html_path.strip()
+    if value.startswith(("http://", "https://")):
+        url = validate_public_url(value)
+        try:
+            response = requests.get(
+                url,
+                timeout=15,
+                headers={"User-Agent": "Job-Agent recipe tester (public page; low volume)"},
+            )
+            response.raise_for_status()
+        except requests.RequestException as exc:
+            raise ValueError(f"Fetch failed: {exc}") from exc
+        return response.text, response.url, []
+
+    resolved_base_url = base_url.strip() or recipe_start_url.strip()
+    if not resolved_base_url:
+        raise ValueError("Testing a local HTML file requires --base-url or recipe.start_url.")
+    path = Path(value)
+    if not path.exists():
+        raise ValueError(f"HTML fixture not found: {path}")
+    return path.read_text(encoding="utf-8"), resolved_base_url, []
 
 
 if __name__ == "__main__":
