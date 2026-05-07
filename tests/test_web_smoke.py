@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from job_agent.run_store import RunEvent, RunOptions, RunStore
 from job_agent.web.app import create_app
 from job_agent.web.dependencies import reset_root, set_root
 
@@ -71,3 +72,26 @@ def test_unsupported_cv_upload_suffix_returns_400(client: TestClient) -> None:
         follow_redirects=False,
     )
     assert response.status_code == 400
+
+
+def test_run_detail_renders_source_progress(client: TestClient, project_root: Path) -> None:
+    store = RunStore(project_root)
+    run = store.create_run(RunOptions())
+    store.update(run.run_id, status="running")
+    store.append_event(
+        RunEvent(
+            run_id=run.run_id,
+            event_type="source_started",
+            message="Checking source 1/1: Local",
+            phase="source_ingestion",
+            current_source="Local",
+            counts={"source_index": 1, "source_count": 1, "jobs_found": 0, "warnings_count": 0},
+        )
+    )
+
+    response = client.get(f"/runs/{run.run_id}")
+
+    assert response.status_code == 200
+    assert "Source Progress" in response.text
+    assert "Local" in response.text
+    assert "Checking source 1/1: Local" in response.text

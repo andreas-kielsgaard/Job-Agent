@@ -240,6 +240,31 @@ td {
   color: #1d4ed8;
 }
 
+.badge.running {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.badge.completed {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.badge.warning {
+  background: #ffedd5;
+  color: var(--warn);
+}
+
+.badge.failed {
+  background: #fee2e2;
+  color: var(--bad);
+}
+
+.badge.waiting {
+  background: #eef2f6;
+  color: var(--muted);
+}
+
 .markdown {
   background: #fff;
   border: 1px solid var(--line);

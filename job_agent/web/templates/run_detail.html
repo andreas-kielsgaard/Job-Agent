@@ -24,6 +24,37 @@
 {% endif %}
 
 <div class="panel">
+  <h2>Source Progress</h2>
+  {% if source_progress %}
+    {% if run.status in ["pending", "running"] %}
+    <div class="grid">
+      <div class="stat"><span>Progress</span><strong>{{ source_progress_summary.sources_completed }}/{{ source_progress_summary.total_sources }}</strong></div>
+      <div class="stat"><span>Current source</span><strong>{{ source_progress_summary.current_source or "None" }}</strong></div>
+      <div class="stat"><span>Jobs found so far</span><strong>{{ source_progress_summary.jobs_found_so_far }}</strong></div>
+      <div class="stat"><span>Warnings so far</span><strong>{{ source_progress_summary.warnings_so_far }}</strong></div>
+    </div>
+    {% endif %}
+    <table>
+      <thead><tr><th>Source</th><th>Status</th><th>Jobs found</th><th>Warnings</th><th>Time</th><th>Latest message</th></tr></thead>
+      <tbody>
+        {% for source in source_progress %}
+        <tr>
+          <td><strong>{{ source.source_name }}</strong><br><span class="muted">{{ source.source_index }}/{{ source.source_count }}</span></td>
+          <td><span class="badge {{ source.status }}">{{ source.status }}</span></td>
+          <td>{{ source.jobs_found }}</td>
+          <td>{{ source.warnings_count }}</td>
+          <td>{% if source.elapsed_time_seconds is not none %}{{ source.elapsed_time_seconds }}s{% else %}<span class="muted">Not finished</span>{% endif %}</td>
+          <td>{{ source.latest_message or "Waiting to start." }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p>No source progress events recorded for this run.</p>
+  {% endif %}
+</div>
+
+<div class="panel">
   <h2>Recent Events</h2>
   {% for event in events %}
   <p><span class="badge">{{ event.event_type }}</span> {{ event.timestamp }} {{ event.message }}</p>
