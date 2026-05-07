@@ -1,9 +1,16 @@
 from __future__ import annotations
 
-from job_agent.browser.playwright_probe import probe_url
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 
 def main() -> int:
+    from job_agent.browser.playwright_probe import probe_url
+
     try:
         result = probe_url("https://example.com")
     except RuntimeError as exc:
