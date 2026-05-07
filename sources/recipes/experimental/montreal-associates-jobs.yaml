@@ -1,0 +1,64 @@
+# Experimental only. Not enabled in daily runs and not production source support.
+source_name: Montreal Associates Job Search (experimental)
+start_url: https://www.montrealassociates.com/uk/candidates/job-search/
+mode: rendered_html
+
+listing:
+  card_selector: .job-card
+  title_selector:
+    - .job-title
+    - h2
+    - h3
+  link_selector:
+    - .job-link
+    - a[href*="/uk/candidates/job/"]
+  location_selector:
+    - .job-location
+    - .location
+  rate_selector:
+    - .job-salary
+    - .salary
+  posted_date_selector:
+    - time
+    - .posted-date
+  description_selector:
+    - .job-summary
+    - .summary
+
+accept:
+  url_contains:
+    - /uk/candidates/job/
+
+detail:
+  follow: false
+  max_detail_pages: 5
+
+reject:
+  title_exact:
+    - Apply
+    - Apply now
+    - More info
+    - Services
+    - Job Search
+    - Work with MA
+  title_contains:
+    - Contract Staffing
+    - Contract Insights
+    - Our Locations
+    - Upload SAP Job
+    - Improve my CV
+  url_contains:
+    - /staffing-solutions/
+    - /resources/
+    - /markets-page/
+    - /services
+    - /about
+    - /contact
+    - /category
+    - /blog
+    - '#'
+
+limits:
+  max_cards: 25
+  min_title_length: 8
+  min_description_length: 0

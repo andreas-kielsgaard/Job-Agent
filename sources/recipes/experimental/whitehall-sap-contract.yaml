@@ -1,0 +1,61 @@
+# Experimental only. Not enabled in daily runs and not production source support.
+source_name: Whitehall Resources SAP Contract Jobs (experimental)
+start_url: https://www.whitehallresources.com/sap-jobs/contract/
+mode: static_html
+
+listing:
+  card_selector: .job-result
+  title_selector:
+    - .job-title
+    - h2 a
+    - h3 a
+  link_selector:
+    - .job-title
+    - h2 a
+    - h3 a
+  location_selector:
+    - .job-location
+    - .location
+  posted_date_selector:
+    - time
+    - .posted-date
+  description_selector:
+    - .job-summary
+    - .summary
+
+accept:
+  url_contains:
+    - /job/
+
+detail:
+  follow: false
+  max_detail_pages: 5
+
+reject:
+  title_exact:
+    - Apply
+    - Apply now
+    - More info
+    - Services
+    - Job Search
+  title_contains:
+    - Upload SAP Job
+    - Improve my CV
+    - SAP job vacancies
+    - SuccessFactors
+    - Solution Architect
+  url_contains:
+    - /services
+    - /about
+    - /contact
+    - /candidates
+    - /clients
+    - /category
+    - /blog
+    - /sap-jobs/?
+    - '#job-application'
+
+limits:
+  max_cards: 25
+  min_title_length: 8
+  min_description_length: 0

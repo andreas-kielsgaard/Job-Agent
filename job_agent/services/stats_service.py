@@ -17,7 +17,7 @@ class StatsService:
         self.package_service = PackageIndexService(root)
 
     def build_dashboard_stats(self, runs: list[RunRecord]) -> dict[str, Any]:
-        today = datetime.now().date().isoformat()
+        today = datetime.now(UTC).date().isoformat()
         latest_run = runs[0] if runs else None
         latest_is_today = bool(latest_run and latest_run.started_at.startswith(today))
         active_run = next((run for run in runs if run.status in {"pending", "running"}), None)
