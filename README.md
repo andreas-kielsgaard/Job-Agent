@@ -78,6 +78,24 @@ If the key is missing or a call fails, deterministic search still completes and 
 
 Daily runs default to search/classify/score/highlight only. This keeps normal morning runs faster and cheaper. The run detail page is the main triage view after a run: it sorts promising jobs first, shows AI summaries and risk flags when available, adds badges for relevance/material status, and includes direct posting/application links. Generate materials manually from the run overview for selected jobs, or from an individual job detail page when a role is worth pursuing. Check “Use Claude” during selected generation if you want Claude-assisted application text. For postings you find outside configured sources, use Add posting to paste the role into the same scoring, AI-evaluation, and material-generation workflow.
 
+## Optional Playwright Diagnostics
+
+Playwright is not required for normal use. It is an optional probe layer for later rendered recruiter-site diagnostics.
+
+```powershell
+pip install -r requirements-playwright.txt
+python -m playwright install chromium
+python scripts/check_playwright.py
+```
+
+You can also probe a specific page manually:
+
+```powershell
+python -m job_agent.browser.playwright_probe https://example.com --screenshot
+```
+
+Artifacts are written under ignored `output/browser-probes/`. See [docs/playwright-setup.md](docs/playwright-setup.md) for the Windows setup notes. Playwright is not connected to daily runs or source adapters yet.
+
 ## Local Web UI
 
 Start the frontend on localhost:
