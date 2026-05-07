@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
+from time import perf_counter
 from urllib.parse import urljoin
 
 import requests
@@ -11,6 +14,23 @@ from bs4 import BeautifulSoup
 
 from .config import ROOT, load_yaml
 from .models import Job, SourceRunResult, SourceWarning
+
+
+@dataclass
+class SourceProgressEvent:
+    event_type: str
+    source_name: str
+    source_index: int
+    source_count: int
+    message: str
+    source_type: str = ""
+    source_url: str = ""
+    jobs_found: int = 0
+    warnings_count: int = 0
+    elapsed_time_seconds: float | None = None
+
+
+SourceProgressCallback = Callable[[SourceProgressEvent], None]
 
 
 class SourceAdapter(ABC):
@@ -118,14 +138,94 @@ def load_sources(root: Path = ROOT) -> list[dict]:
     return [source for source in config.get("sources", []) if source.get("enabled", True)]
 
 
-def load_jobs_from_sources(root: Path = ROOT) -> SourceRunResult:
+def load_jobs_from_sources(
+    root: Path = ROOT,
+    progress_callback: SourceProgressCallback | None = None,
+) -> SourceRunResult:
     result = SourceRunResult()
-    for source in load_sources(root):
+    sources = load_sources(root)
+    source_count = len(sources)
+    for source_index, source in enumerate(sources, start=1):
+        source_name = source.get("name", "Unknown")
+        source_type = source.get("type", "")
+        source_url = source.get("url") or source.get("path", "")
+        started_at = perf_counter()
+        _emit_source_progress(
+            progress_callback,
+            SourceProgressEvent(
+                event_type="source_started",
+                source_name=source_name,
+                source_index=source_index,
+                source_count=source_count,
+                source_type=source_type,
+                source_url=source_url,
+                message=f"Checking source {source_index}/{source_count}: {source_name}",
+            ),
+        )
         adapter = adapter_for_source(source, root)
-        source_result = adapter.fetch()
+        try:
+            source_result = adapter.fetch()
+        except Exception as exc:
+            elapsed = round(perf_counter() - started_at, 3)
+            warning = SourceWarning(source_name, f"Source failed unexpectedly: {exc}", source_url)
+            result.warnings.append(warning)
+            _emit_source_progress(
+                progress_callback,
+                SourceProgressEvent(
+                    event_type="source_failed",
+                    source_name=source_name,
+                    source_index=source_index,
+                    source_count=source_count,
+                    source_type=source_type,
+                    source_url=source_url,
+                    warnings_count=1,
+                    elapsed_time_seconds=elapsed,
+                    message=f"Source failed: {source_name} - {exc}",
+                ),
+            )
+            continue
         result.jobs.extend(source_result.jobs)
         result.warnings.extend(source_result.warnings)
+        elapsed = round(perf_counter() - started_at, 3)
+        for warning in source_result.warnings:
+            _emit_source_progress(
+                progress_callback,
+                SourceProgressEvent(
+                    event_type="source_warning",
+                    source_name=warning.source,
+                    source_index=source_index,
+                    source_count=source_count,
+                    source_type=source_type,
+                    source_url=warning.url or source_url,
+                    warnings_count=1,
+                    elapsed_time_seconds=elapsed,
+                    message=f"Source warning from {warning.source}: {warning.message}",
+                ),
+            )
+        _emit_source_progress(
+            progress_callback,
+            SourceProgressEvent(
+                event_type="source_completed",
+                source_name=source_name,
+                source_index=source_index,
+                source_count=source_count,
+                source_type=source_type,
+                source_url=source_url,
+                jobs_found=len(source_result.jobs),
+                warnings_count=len(source_result.warnings),
+                elapsed_time_seconds=elapsed,
+                message=(
+                    f"Completed source {source_index}/{source_count}: {source_name} - "
+                    f"{len(source_result.jobs)} jobs found, {len(source_result.warnings)} warnings"
+                ),
+            ),
+        )
     return result
+
+
+def _emit_source_progress(callback: SourceProgressCallback | None, event: SourceProgressEvent) -> None:
+    if callback:
+        callback(event)
 
 
 def adapter_for_source(source: dict, root: Path = ROOT) -> SourceAdapter:

@@ -43,6 +43,19 @@ class RunStoreBoundaryTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 store.list_runs()
 
+    def test_corrupt_registry_can_be_backed_up_and_reset(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = RunStore(root)
+            store.registry_path.write_text("{not-json", encoding="utf-8")
+
+            backup = store.recover_corrupt_registry()
+
+            self.assertIsNotNone(backup)
+            self.assertTrue(backup.exists())
+            self.assertEqual(backup.read_text(encoding="utf-8"), "{not-json")
+            self.assertEqual(store.list_runs(), [])
+
 
 if __name__ == "__main__":
     unittest.main()

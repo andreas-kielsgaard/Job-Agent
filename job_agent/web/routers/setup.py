@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse
 
-from job_agent.web.dependencies import cv_reference_service, setup_service, templates
+from job_agent.web.dependencies import current_root, cv_reference_service, setup_service, templates
 from job_agent.web.view_models.setup import build_setup_view
 
 router = APIRouter()
@@ -11,7 +11,7 @@ router = APIRouter()
 
 @router.get("/setup", response_class=HTMLResponse)
 def setup(request: Request) -> HTMLResponse:
-    return templates.TemplateResponse(request, "setup.html", {"request": request, **build_setup_view()})
+    return templates.TemplateResponse(request, "setup.html", {"request": request, **build_setup_view(current_root())})
 
 
 @router.post("/setup/env")
@@ -107,13 +107,15 @@ def toggle_source(index: int = Form(...), enabled: bool = Form(False)) -> Redire
 @router.post("/setup/source-add")
 def add_source(
     name: str = Form(...),
-    url: str = Form(""),
+    url_or_path: str = Form(""),
     source_type: str = Form("generic_html"),
     keywords: str = Form(""),
     enabled: bool = Form(True),
 ) -> RedirectResponse:
     try:
-        setup_service().add_source(name=name, url=url, source_type=source_type, keywords=keywords, enabled=enabled)
+        setup_service().add_source(
+            name=name, url_or_path=url_or_path, source_type=source_type, keywords=keywords, enabled=enabled
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return RedirectResponse(url="/setup#sources", status_code=303)

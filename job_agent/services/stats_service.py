@@ -22,7 +22,12 @@ class StatsService:
         latest_is_today = bool(latest_run and latest_run.started_at.startswith(today))
         active_run = next((run for run in runs if run.status in {"pending", "running"}), None)
         today_runs = [run for run in runs if run.started_at.startswith(today)]
-        statuses = ApplicationStatusStore(self.root).list_all()
+        status_store = ApplicationStatusStore(self.root)
+        try:
+            statuses = status_store.list_all()
+        except ValueError:
+            status_store.recover_corrupt_status_file()
+            statuses = []
         seven_days_ago = datetime.now(UTC).timestamp() - 7 * 24 * 60 * 60
         applied_last_7 = 0
         for record in statuses:
@@ -49,9 +54,19 @@ class StatsService:
         }
 
     def build_stats_page(self) -> dict[str, Any]:
-        runs = RunStore(self.root).list_runs(include_tests=False)
+        run_store = RunStore(self.root)
+        try:
+            runs = run_store.list_runs(include_tests=False)
+        except ValueError:
+            run_store.recover_corrupt_registry()
+            runs = []
         packages = self.package_service.list_unique_jobs()
-        statuses = ApplicationStatusStore(self.root).list_all()
+        status_store = ApplicationStatusStore(self.root)
+        try:
+            statuses = status_store.list_all()
+        except ValueError:
+            status_store.recover_corrupt_status_file()
+            statuses = []
         status_counts: dict[str, int] = {}
         for record in statuses:
             status_counts[record.status] = status_counts.get(record.status, 0) + 1

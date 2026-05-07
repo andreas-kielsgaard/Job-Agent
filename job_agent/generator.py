@@ -1,15 +1,13 @@
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
-from dotenv import load_dotenv
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from .config import ROOT
 from .models import GeneratedPackage, Job, MatchResult
 from .run_store import RunEvent
-from .token_usage import TokenUsageStore, token_record_from_anthropic_response
+from .services.llm_service import LlmService
 
 
 def generate_materials(
@@ -168,10 +166,9 @@ def maybe_generate_application_with_llm(
     root: Path = ROOT,
     progress_callback=None,
 ) -> str:
-    load_dotenv()
-    api_key = os.getenv("ANTHROPIC_API_KEY")
-    model = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-0")
-    if not api_key or api_key.startswith("replace_with"):
+    llm = LlmService(root)
+    model = llm.model_name()
+    if not llm.is_configured():
         generation_notes.append(
             "Claude requested but ANTHROPIC_API_KEY is missing or placeholder; deterministic fallback used."
         )
@@ -186,9 +183,6 @@ def maybe_generate_application_with_llm(
         return ""
 
     try:
-        from anthropic import Anthropic
-
-        client = Anthropic(api_key=api_key)
         _emit(
             progress_callback,
             run_id,
@@ -197,7 +191,7 @@ def maybe_generate_application_with_llm(
             "generation",
             job.title,
         )
-        prompt = _load_prompt("generate_application.md").format(
+        prompt = _load_prompt("generate_application.md", root).format(
             canonical_cv=profile.get("canonical_cv", ""),
             writing_style=profile.get("writing_style", ""),
             top_skills=", ".join(top_skills),
@@ -212,30 +206,23 @@ def maybe_generate_application_with_llm(
             availability=profile.get("availability", {}),
             location_policy=profile.get("location_policy", {}),
         )
-        response = client.messages.create(
-            model=model,
+        completion = llm.complete(
+            prompt,
             max_tokens=700,
-            messages=[{"role": "user", "content": prompt}],
+            purpose="application_generation",
+            run_id=run_id,
+            associated_job_id=stable_id,
         )
-        if run_id:
-            record = token_record_from_anthropic_response(
-                run_id=run_id,
-                purpose="application_generation",
-                model=model,
-                associated_job_id=stable_id,
-                response=response,
-            )
-            TokenUsageStore(root).append(record)
-        generation_notes.append(f"Claude application generation succeeded with model {model}.")
+        generation_notes.append(f"Claude application generation succeeded with model {completion.model}.")
         _emit(
             progress_callback,
             run_id,
             "claude_completed",
-            f"Claude application generation completed with model {model}.",
+            f"Claude application generation completed with model {completion.model}.",
             "generation",
             job.title,
         )
-        return "".join(block.text for block in response.content if block.type == "text").strip() + "\n"
+        return completion.text.strip() + "\n"
     except Exception as exc:
         generation_notes.append(
             f"Claude application generation failed with model {model}: {exc}. Deterministic fallback used."
@@ -251,8 +238,8 @@ def maybe_generate_application_with_llm(
         return ""
 
 
-def _load_prompt(name: str) -> str:
-    path = ROOT / "prompts" / name
+def _load_prompt(name: str, root: Path = ROOT) -> str:
+    path = root / "prompts" / name
     if path.exists():
         return path.read_text(encoding="utf-8")
     return "{canonical_cv}\n\nWrite application for {title}."

@@ -41,6 +41,7 @@ class ApplicationStatusStoreTests(unittest.TestCase):
             self.assertTrue(applied.applied_at)
             applied_again = store.update_status("stable-1", "applied")
             self.assertEqual(applied_again.applied_at, applied.applied_at)
+            self.assertEqual(store.update_status("stable-1", "archived").status, "archived")
 
             with self.assertRaises(ValueError):
                 store.update_status("stable-1", "maybe")
@@ -53,6 +54,18 @@ class ApplicationStatusStoreTests(unittest.TestCase):
             store.path.write_text("{not-json", encoding="utf-8")
             with self.assertRaises(ValueError):
                 store.list_all()
+
+    def test_corrupt_status_store_can_be_backed_up_and_reset(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            store = ApplicationStatusStore(Path(directory))
+            store.path.write_text("{not-json", encoding="utf-8")
+
+            backup = store.recover_corrupt_status_file()
+
+            self.assertIsNotNone(backup)
+            self.assertTrue(backup.exists())
+            self.assertEqual(backup.read_text(encoding="utf-8"), "{not-json")
+            self.assertEqual(store.list_all(), [])
 
 
 if __name__ == "__main__":

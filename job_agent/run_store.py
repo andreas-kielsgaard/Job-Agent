@@ -8,7 +8,7 @@ from typing import Any
 from uuid import uuid4
 
 from .config import ROOT
-from .io.json_store import read_json, write_json
+from .io.json_store import read_json, read_json_or_recover, write_json
 
 RUN_STATUSES = {"pending", "running", "completed", "failed", "cancelled", "crashed"}
 
@@ -135,6 +135,10 @@ class RunStore:
         if not include_tests:
             records = [record for record in records if not record.is_test]
         return records
+
+    def recover_corrupt_registry(self) -> Path | None:
+        _, backup = read_json_or_recover(self.registry_path, [])
+        return backup
 
     def archive(self, run_id: str) -> RunRecord:
         record = self.update(run_id, visibility="archived", archived_at=utc_now())

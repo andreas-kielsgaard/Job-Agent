@@ -16,13 +16,18 @@ class PackageIndexService:
     def list_packages(self, run_id: str = "") -> list[dict[str, Any]]:
         packages = []
         status_store = ApplicationStatusStore(self.root)
+        try:
+            statuses = {record.stable_id: record for record in status_store.list_all()}
+        except ValueError:
+            status_store.recover_corrupt_status_file()
+            statuses = {}
         for path in (self.root / "output").glob("*/*/index.json"):
             item = read_json(path, None)
             if not isinstance(item, dict):
                 continue
             if run_id and item.get("run_id") != run_id:
                 continue
-            status = status_store.get(item.get("stable_id", ""))
+            status = statuses.get(item.get("stable_id", ""))
             if status:
                 item["application_status"] = status.status
             item["_index_path"] = str(path)

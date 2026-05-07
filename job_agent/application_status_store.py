@@ -4,7 +4,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from .config import ROOT
-from .io.json_store import read_json, write_json
+from .io.json_store import read_json, read_json_or_recover, write_json
 from .run_store import utc_now
 
 APPLICATION_STATUSES = {"unreviewed", "interesting", "not_interesting", "applied", "archived"}
@@ -84,6 +84,10 @@ class ApplicationStatusStore:
     def list_all(self) -> list[ApplicationStatusRecord]:
         data = read_json(self.path, [], strict=True)
         return [ApplicationStatusRecord(**item) for item in data]
+
+    def recover_corrupt_status_file(self) -> Path | None:
+        _, backup = read_json_or_recover(self.path, [])
+        return backup
 
     def upsert(self, record: ApplicationStatusRecord) -> None:
         records = [item for item in self.list_all() if item.stable_id != record.stable_id]

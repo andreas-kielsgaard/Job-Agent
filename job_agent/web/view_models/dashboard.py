@@ -11,7 +11,11 @@ from job_agent.services.stats_service import StatsService
 
 def build_dashboard_view(root: Path = ROOT) -> dict:
     store = RunStore(root)
-    runs = store.list_runs(include_tests=False)
+    try:
+        runs = store.list_runs(include_tests=False)
+    except ValueError:
+        store.recover_corrupt_registry()
+        runs = []
     latest_run = runs[0] if runs else None
     return {
         "runs": runs[:8],

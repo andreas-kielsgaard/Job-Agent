@@ -73,19 +73,39 @@ class SetupServiceTests(unittest.TestCase):
                 service.toggle_source(5, True)
 
             service.add_source(
-                name="New", url="https://example.com", source_type="generic_html", keywords="ABAP\nRAP", enabled=True
+                name="New",
+                url_or_path="https://example.com",
+                source_type="generic_html",
+                keywords="ABAP\nRAP",
+                enabled=True,
             )
             sources = yaml.safe_load(source_path.read_text(encoding="utf-8"))["sources"]
+            self.assertEqual(sources[-1]["url"], "https://example.com")
             self.assertEqual(sources[-1]["keywords"], ["ABAP", "RAP"])
+
+            service.add_source(
+                name="Local",
+                url_or_path="jobs/raw/manual.yaml",
+                source_type="local_yaml",
+                keywords="",
+                enabled=True,
+            )
+            sources = yaml.safe_load(source_path.read_text(encoding="utf-8"))["sources"]
+            self.assertEqual(sources[-1]["path"], "jobs/raw/manual.yaml")
+            self.assertNotIn("url", sources[-1])
 
             with self.assertRaises(ValueError):
                 service.add_source(
-                    name="", url="https://example.com", source_type="generic_html", keywords="", enabled=True
+                    name="",
+                    url_or_path="https://example.com",
+                    source_type="generic_html",
+                    keywords="",
+                    enabled=True,
                 )
             with self.assertRaises(ValueError):
-                service.add_source(name="Bad", url="", source_type="generic_html", keywords="", enabled=True)
+                service.add_source(name="Bad", url_or_path="", source_type="generic_html", keywords="", enabled=True)
             with self.assertRaises(ValueError):
-                service.add_source(name="Bad", url="x", source_type="unknown", keywords="", enabled=True)
+                service.add_source(name="Bad", url_or_path="x", source_type="unknown", keywords="", enabled=True)
 
             service.save_setup_file("canonical_cv", "CV text")
             self.assertEqual((root / "profile" / "canonical-cv.md").read_text(encoding="utf-8"), "CV text")

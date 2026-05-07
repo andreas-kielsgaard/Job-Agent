@@ -5,7 +5,13 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 
 from job_agent.application_status_store import APPLICATION_STATUSES
 from job_agent.services.material_service import MaterialUpdate
-from job_agent.web.dependencies import application_status_store, material_service, package_service, templates
+from job_agent.web.dependencies import (
+    application_status_store,
+    current_root,
+    material_service,
+    package_service,
+    templates,
+)
 from job_agent.web.view_models.jobs import build_job_detail_view, build_jobs_view
 
 router = APIRouter()
@@ -18,7 +24,7 @@ def jobs_page(request: Request) -> HTMLResponse:
     return templates.TemplateResponse(
         request,
         "jobs.html",
-        {"request": request, **build_jobs_view(app_statuses, categories)},
+        {"request": request, **build_jobs_view(app_statuses, categories, current_root())},
     )
 
 
@@ -42,7 +48,7 @@ def bulk_job_status(
 @router.get("/jobs/{job_id}", response_class=HTMLResponse)
 def job_detail(request: Request, job_id: str, run_id: str = "") -> HTMLResponse:
     try:
-        view = build_job_detail_view(job_id, run_id)
+        view = build_job_detail_view(job_id, run_id, current_root())
     except KeyError:
         raise HTTPException(status_code=404, detail="Job package not found") from None
     return templates.TemplateResponse(request, "job_detail.html", {"request": request, **view})

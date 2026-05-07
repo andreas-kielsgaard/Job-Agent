@@ -154,13 +154,15 @@ class SetupService:
         sources[index]["enabled"] = enabled
         write_yaml(path, data)
 
-    def add_source(self, *, name: str, url: str, source_type: str, keywords: str, enabled: bool) -> None:
-        self._validate_source_entry(name=name, url=url, source_type=source_type)
+    def add_source(self, *, name: str, url_or_path: str, source_type: str, keywords: str, enabled: bool) -> None:
+        self._validate_source_entry(name=name, url_or_path=url_or_path, source_type=source_type)
         path = self.root / "sources" / "recruiting-sites.yaml"
         data = read_yaml(path, {"sources": []})
         entry: dict[str, Any] = {"name": name, "type": source_type, "enabled": enabled}
-        if url:
-            entry["url"] = url
+        if source_type == "local_yaml":
+            entry["path"] = url_or_path
+        elif url_or_path:
+            entry["url"] = url_or_path
         keyword_list = lines_to_list(keywords)
         if keyword_list:
             entry["keywords"] = keyword_list
@@ -202,12 +204,12 @@ class SetupService:
         return value
 
     @staticmethod
-    def _validate_source_entry(*, name: str, url: str, source_type: str) -> None:
+    def _validate_source_entry(*, name: str, url_or_path: str, source_type: str) -> None:
         if not name.strip():
             raise ValueError("Source name is required.")
         if source_type not in KNOWN_SOURCE_TYPES:
             raise ValueError(f"Unsupported source type: {source_type}")
-        if source_type in {"generic_html", "search_page"} and not url.strip():
+        if source_type in {"generic_html", "search_page"} and not url_or_path.strip():
             raise ValueError("URL is required for HTML/search sources.")
-        if source_type == "local_yaml" and not url.strip():
+        if source_type == "local_yaml" and not url_or_path.strip():
             raise ValueError("A local YAML path is required for local_yaml sources.")

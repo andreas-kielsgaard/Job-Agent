@@ -5,7 +5,13 @@ from pathlib import Path
 import pytest
 import requests
 
-from job_agent.sources import GenericHtmlAdapter, LocalYamlAdapter, UnsupportedSourceAdapter
+from job_agent.sources import (
+    GenericHtmlAdapter,
+    LocalYamlAdapter,
+    SourceAdapter,
+    UnsupportedSourceAdapter,
+    load_jobs_from_sources,
+)
 
 
 class FakeResponse:
@@ -73,3 +79,62 @@ def test_unsupported_source_adapter_returns_warning(project_root: Path) -> None:
 
     assert not result.jobs
     assert "Unsupported source type" in result.warnings[0].message
+
+
+def test_load_jobs_from_sources_emits_started_and_completed_events(project_root: Path) -> None:
+    (project_root / "sources" / "recruiting-sites.yaml").write_text(
+        "sources:\n  - name: Local Sample\n    type: local_yaml\n    path: jobs/raw/sample_jobs.yaml\n",
+        encoding="utf-8",
+    )
+    (project_root / "jobs" / "raw" / "sample_jobs.yaml").write_text(
+        "jobs:\n  - title: SAP ABAP Consultant\n    company: Recruiter\n    url: https://example.com/job\n",
+        encoding="utf-8",
+    )
+    events = []
+
+    result = load_jobs_from_sources(project_root, progress_callback=events.append)
+
+    assert len(result.jobs) == 1
+    assert [event.event_type for event in events] == ["source_started", "source_completed"]
+    assert events[0].source_index == 1
+    assert events[0].source_count == 1
+    assert events[1].jobs_found == 1
+    assert events[1].warnings_count == 0
+
+
+def test_load_jobs_from_sources_emits_warning_without_crashing(project_root: Path) -> None:
+    (project_root / "sources" / "recruiting-sites.yaml").write_text(
+        "sources:\n  - name: Mystery\n    type: unsupported\n",
+        encoding="utf-8",
+    )
+    events = []
+
+    result = load_jobs_from_sources(project_root, progress_callback=events.append)
+
+    assert not result.jobs
+    assert len(result.warnings) == 1
+    assert [event.event_type for event in events] == ["source_started", "source_warning", "source_completed"]
+    assert events[1].warnings_count == 1
+    assert "Unsupported source type" in events[1].message
+
+
+def test_load_jobs_from_sources_converts_unexpected_adapter_exception_to_failure(
+    monkeypatch: pytest.MonkeyPatch, project_root: Path
+) -> None:
+    class BrokenAdapter(SourceAdapter):
+        def fetch(self):
+            raise RuntimeError("boom")
+
+    (project_root / "sources" / "recruiting-sites.yaml").write_text(
+        "sources:\n  - name: Broken\n    type: local_yaml\n    path: jobs/raw/missing.yaml\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("job_agent.sources.adapter_for_source", lambda source, root: BrokenAdapter(source, root))
+    events = []
+
+    result = load_jobs_from_sources(project_root, progress_callback=events.append)
+
+    assert not result.jobs
+    assert len(result.warnings) == 1
+    assert [event.event_type for event in events] == ["source_started", "source_failed"]
+    assert "boom" in events[-1].message

@@ -238,7 +238,7 @@ python -m ruff check .
 python -m ruff format --check .
 ```
 
-The tests use temporary project roots and block accidental external network/API calls by default. Coverage is configured as a diagnostic with no required percentage yet; the goal is meaningful coverage of file persistence, setup writes, package indexes, run lifecycle, generated material handling, and route smoke/error behavior.
+The tests use temporary project roots and block accidental external network/API calls by default. Coverage is configured as a diagnostic with no required percentage yet; the goal is meaningful coverage of file persistence, setup writes, package indexes, run lifecycle, generated material handling, and route smoke/error behavior. Critical local JSON corruption is surfaced in strict store tests, while the local web layer can back up and reset known run/status files so the UI has a recovery path.
 
 Basic smoke checks:
 
@@ -252,6 +252,7 @@ python -m job_agent.web.app
 The app is split into small local-first layers:
 
 - `job_agent/run_service.py` orchestrates daily discovery, scoring, packaging, logging, and run summaries.
+- Source ingestion emits per-source run events as each enabled source starts, warns, fails, and completes. The web UI can use these events for live progress, but this does not make the current generic source adapters production-grade scrapers.
 - `job_agent/run_store.py`, `store.py`, `application_status_store.py`, and `token_usage.py` persist local state as ignored JSON/JSONL files.
 - `job_agent/services/` contains reusable operations for package indexes, generated materials, setup/profile editing, CV reference files, review bundles, stats, LLM calls, and AI-assisted editing.
 - `job_agent/io/` contains atomic JSON/YAML/text write helpers used by local stores and services.
@@ -262,7 +263,7 @@ The app is split into small local-first layers:
 - `job_agent/web/templates/` and `job_agent/web/static/` are the presentation layer.
 
 Runtime output and private profile data remain local and ignored by Git.
-Claude-backed AI edits are recorded in token usage when Anthropic returns usage data.
+`LlmService` is the shared Anthropic completion wrapper for generated applications and AI edits. It reads `.env` directly on each call so setup-page edits to the key/model are picked up without restarting the web app, and token usage is recorded when Anthropic returns usage data.
 The test suite includes service/store boundary tests for run state, application status, setup, CV references, package indexes, review bundles, and basic web smoke checks.
 
 ## Daily Automation On Windows

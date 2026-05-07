@@ -28,6 +28,23 @@ def test_run_daily_agent_completes_and_writes_outputs(local_yaml_source_project:
     assert read_json(local_yaml_source_project / "jobs" / "seen_jobs.json", []) == []
 
 
+def test_run_daily_agent_records_source_progress_events(local_yaml_source_project: Path) -> None:
+    result = run_daily_agent(
+        RunOptions(include_seen=True, mark_seen=False, generate_materials=False),
+        root=local_yaml_source_project,
+    )
+
+    events = RunStore(local_yaml_source_project).read_events(result.record.run_id)
+    source_started = next(event for event in events if event["event_type"] == "source_started")
+    source_completed = next(event for event in events if event["event_type"] == "source_completed")
+
+    assert source_started["phase"] == "source_ingestion"
+    assert source_started["current_source"] == "Local Sample"
+    assert source_started["counts"]["source_index"] == 1
+    assert source_started["counts"]["source_count"] == 1
+    assert source_completed["counts"]["jobs_found"] == 1
+
+
 def test_mark_seen_and_test_run_seen_rules(local_yaml_source_project: Path) -> None:
     run_daily_agent(
         RunOptions(include_seen=True, mark_seen=True, generate_materials=False), root=local_yaml_source_project

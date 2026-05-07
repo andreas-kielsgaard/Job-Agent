@@ -6,7 +6,7 @@ from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
 
 from job_agent.run_store import RunOptions
-from job_agent.web.dependencies import run_store, templates
+from job_agent.web.dependencies import current_root, run_store, templates
 from job_agent.web.runtime import runtime
 from job_agent.web.view_models.runs import build_run_detail_view, build_run_list_view
 
@@ -47,7 +47,9 @@ def run_status(run_id: str) -> JSONResponse:
 
 @router.get("/runs", response_class=HTMLResponse)
 def run_list(request: Request, view: str = "active") -> HTMLResponse:
-    return templates.TemplateResponse(request, "runs.html", {"request": request, **build_run_list_view(view)})
+    return templates.TemplateResponse(
+        request, "runs.html", {"request": request, **build_run_list_view(view, current_root())}
+    )
 
 
 @router.post("/api/runs/bulk")
@@ -93,7 +95,7 @@ def run_detail(
     request: Request, run_id: str, category: str = "", app_status: str = "", source: str = ""
 ) -> HTMLResponse:
     try:
-        view = build_run_detail_view(run_id, category, app_status, source)
+        view = build_run_detail_view(run_id, category, app_status, source, current_root())
     except KeyError:
         raise HTTPException(status_code=404, detail="Run not found") from None
     return templates.TemplateResponse(request, "run_detail.html", {"request": request, **view})

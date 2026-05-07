@@ -10,26 +10,19 @@ from job_agent.token_usage import TokenUsageStore
 
 def build_run_list_view(view: str, root: Path = ROOT) -> dict:
     store = RunStore(root)
+    try:
+        all_runs = store.list_runs(include_archived=True, include_deleted=True, include_tests=True)
+    except ValueError:
+        store.recover_corrupt_registry()
+        all_runs = []
     if view == "test":
-        runs = [
-            run
-            for run in store.list_runs(include_archived=True, include_deleted=False, include_tests=True)
-            if run.is_test and run.visibility == "active"
-        ]
+        runs = [run for run in all_runs if run.is_test and run.visibility == "active"]
     elif view == "archived":
-        runs = [
-            run
-            for run in store.list_runs(include_archived=True, include_deleted=False, include_tests=True)
-            if run.visibility == "archived"
-        ]
+        runs = [run for run in all_runs if run.visibility == "archived"]
     elif view == "deleted":
-        runs = [
-            run
-            for run in store.list_runs(include_archived=True, include_deleted=True, include_tests=True)
-            if run.visibility == "deleted"
-        ]
+        runs = [run for run in all_runs if run.visibility == "deleted"]
     else:
-        runs = store.list_runs(include_tests=False)
+        runs = [run for run in all_runs if run.visibility == "active" and not run.is_test]
     return {"runs": runs, "view": view}
 
 

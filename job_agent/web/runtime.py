@@ -26,7 +26,11 @@ class WebRuntime:
 
     def startup(self) -> None:
         self.app_version = compute_app_version(self.root)
-        RunStore(self.root).recover_stale_runs()
+        store = RunStore(self.root)
+        try:
+            store.recover_stale_runs()
+        except ValueError:
+            store.recover_corrupt_registry()
         if self.idle_monitor_started:
             return
         self.idle_monitor_started = True
@@ -53,7 +57,13 @@ class WebRuntime:
         return record
 
     def active_run(self) -> RunRecord | None:
-        return next((run for run in RunStore(self.root).list_runs() if run.status in {"pending", "running"}), None)
+        store = RunStore(self.root)
+        try:
+            runs = store.list_runs()
+        except ValueError:
+            store.recover_corrupt_registry()
+            runs = []
+        return next((run for run in runs if run.status in {"pending", "running"}), None)
 
     def has_active_run(self) -> bool:
         try:

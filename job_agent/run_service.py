@@ -11,7 +11,7 @@ from .digest import write_daily_digest, write_excluded_summary, write_job_packag
 from .generator import generate_materials
 from .run_store import RunEvent, RunOptions, RunRecord, RunStore, utc_now
 from .scoring import score_job
-from .sources import load_jobs_from_sources
+from .sources import SourceProgressEvent, load_jobs_from_sources
 from .store import JobStore
 from .token_usage import TokenUsageStore
 
@@ -67,9 +67,24 @@ def run_daily_agent(
         profile = load_profile(root)
         emit("profile_loaded", "Profile loaded.", "startup")
 
-        source_result = load_jobs_from_sources(root)
-        for warning in source_result.warnings:
-            emit("source_warning", warning.message, "source_ingestion", current_source=warning.source)
+        def emit_source_progress(event: SourceProgressEvent) -> None:
+            counts = {
+                "source_index": event.source_index,
+                "source_count": event.source_count,
+                "jobs_found": event.jobs_found,
+                "warnings_count": event.warnings_count,
+            }
+            if event.elapsed_time_seconds is not None:
+                counts["elapsed_time_seconds"] = event.elapsed_time_seconds
+            emit(
+                event.event_type,
+                event.message,
+                "source_ingestion",
+                current_source=event.source_name,
+                counts=counts,
+            )
+
+        source_result = load_jobs_from_sources(root, progress_callback=emit_source_progress)
         emit(
             "jobs_loaded",
             f"Loaded {len(source_result.jobs)} jobs.",

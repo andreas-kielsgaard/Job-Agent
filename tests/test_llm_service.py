@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sys
 import tempfile
 import types
@@ -12,6 +13,45 @@ from job_agent.token_usage import TokenUsageStore
 
 
 class LlmServiceTests(unittest.TestCase):
+    def test_config_reads_env_file_fresh_and_prefers_it_for_local_setup(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            env_path = root / ".env"
+            env_path.write_text("ANTHROPIC_API_KEY=first-key\nCLAUDE_MODEL=first-model\n", encoding="utf-8")
+            old_key = os.environ.get("ANTHROPIC_API_KEY")
+            old_model = os.environ.get("CLAUDE_MODEL")
+            os.environ["ANTHROPIC_API_KEY"] = "process-key"
+            os.environ["CLAUDE_MODEL"] = "process-model"
+            try:
+                service = LlmService(root)
+
+                self.assertEqual(service.api_key(), "first-key")
+                self.assertEqual(service.model_name(), "first-model")
+
+                env_path.write_text("ANTHROPIC_API_KEY=second-key\nCLAUDE_MODEL=second-model\n", encoding="utf-8")
+
+                self.assertEqual(service.api_key(), "second-key")
+                self.assertEqual(service.model_name(), "second-model")
+            finally:
+                if old_key is None:
+                    os.environ.pop("ANTHROPIC_API_KEY", None)
+                else:
+                    os.environ["ANTHROPIC_API_KEY"] = old_key
+                if old_model is None:
+                    os.environ.pop("CLAUDE_MODEL", None)
+                else:
+                    os.environ["CLAUDE_MODEL"] = old_model
+
+    def test_missing_api_key_raises_clear_error(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            old_key = os.environ.pop("ANTHROPIC_API_KEY", None)
+            try:
+                with self.assertRaisesRegex(RuntimeError, "ANTHROPIC_API_KEY"):
+                    LlmService(Path(directory)).complete("prompt", max_tokens=10, purpose="test")
+            finally:
+                if old_key is not None:
+                    os.environ["ANTHROPIC_API_KEY"] = old_key
+
     def test_complete_tracks_token_usage(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

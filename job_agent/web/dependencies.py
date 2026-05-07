@@ -14,27 +14,44 @@ from job_agent.services.setup_service import SetupService
 
 WEB_DIR = Path(__file__).resolve().parent
 templates = Jinja2Templates(directory=WEB_DIR / "templates")
+_current_root = ROOT
+
+
+def current_root() -> Path:
+    return _current_root
+
+
+def set_root(root: Path) -> None:
+    global _current_root
+    _current_root = root
+    from job_agent.web.runtime import runtime
+
+    runtime.root = root
+
+
+def reset_root() -> None:
+    set_root(ROOT)
 
 
 def run_store() -> RunStore:
-    return RunStore(ROOT)
+    return RunStore(_current_root)
 
 
 def package_service() -> PackageIndexService:
-    return PackageIndexService(ROOT)
+    return PackageIndexService(_current_root)
 
 
 def application_status_store() -> ApplicationStatusStore:
-    return ApplicationStatusStore(ROOT)
+    return ApplicationStatusStore(_current_root)
 
 
 def material_service() -> MaterialService:
-    return MaterialService(ROOT)
+    return MaterialService(_current_root)
 
 
 def setup_service() -> SetupService:
-    return SetupService(ROOT)
+    return SetupService(_current_root)
 
 
 def cv_reference_service() -> CvReferenceService:
-    return CvReferenceService(ROOT)
+    return CvReferenceService(_current_root)

@@ -141,8 +141,8 @@
   <h3>Add Simple Source</h3>
   <form method="post" action="/setup/source-add" class="grid">
     <div><label>Name</label><input name="name" placeholder="Recruiter or job board"></div>
-    <div><label>Type</label><select name="source_type"><option value="generic_html">Generic public HTML page</option><option value="search_page">Search page</option></select></div>
-    <div style="grid-column: 1 / -1;"><label>URL</label><input name="url" placeholder="https://example.com/jobs"></div>
+    <div><label>Type</label><select name="source_type"><option value="generic_html">Generic public HTML page</option><option value="search_page">Search page</option><option value="local_yaml">Local YAML file</option></select></div>
+    <div style="grid-column: 1 / -1;"><label>URL or local path</label><input name="url_or_path" placeholder="https://example.com/jobs or jobs/raw/sample_jobs.yaml"></div>
     <div><label>Keywords, one per line</label><textarea name="keywords">SAP ABAP
 SAP RAP
 SAP Gateway</textarea></div>
