@@ -26,6 +26,7 @@ def build_dashboard_view(root: Path = ROOT) -> dict:
         if latest_run
         else {
             "use_llm": True,
+            "ai_enhanced_search": False,
             "include_seen": False,
             "include_weak": False,
             "mark_seen": True,

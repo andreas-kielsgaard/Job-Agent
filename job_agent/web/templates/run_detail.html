@@ -102,7 +102,21 @@
         <td>{{ pkg.rate }}</td>
         <td><span class="badge {{ pkg.match_category }}">{{ pkg.match_score }}% {{ pkg.match_category }}</span></td>
         <td><span class="badge {{ pkg.application_status }}">{{ pkg.application_status }}</span></td>
-        <td>{{ pkg.recommended_angle }}</td>
+        <td>
+          {{ pkg.recommended_angle }}
+          {% if pkg.ai_evaluation_status == "evaluated" %}
+          <p>
+            {% if pkg.ai_should_prioritize %}<span class="badge strong">Prioritize</span>{% endif %}
+            <span class="badge {{ pkg.ai_fit_confidence }}">{{ pkg.ai_fit_confidence }} AI confidence</span><br>
+            {{ pkg.ai_summary }}
+          </p>
+          {% if pkg.ai_risk_flags %}<p class="muted">AI risks: {{ pkg.ai_risk_flags | join("; ") }}</p>{% endif %}
+          {% elif pkg.ai_evaluation_status == "failed" %}
+          <p><span class="badge failed">AI failed</span> {{ pkg.ai_error }}</p>
+          {% elif pkg.ai_evaluation_status == "skipped" %}
+          <p><span class="badge waiting">AI skipped</span> {{ pkg.ai_error }}</p>
+          {% endif %}
+        </td>
         <td>
           <a href="/jobs/{{ pkg.stable_id }}?run_id={{ run.run_id }}">Open</a>
           <form method="post" action="/api/jobs/{{ pkg.stable_id }}/status">

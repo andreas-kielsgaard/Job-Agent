@@ -13,8 +13,9 @@ The daily run:
 3. Imports jobs from stable local YAML sources and best-effort public HTML sources.
 4. Records whether a job is new, changed, or previously seen.
 5. Scores roles with component-based SAP contract matching.
-6. Generates recruiter-facing materials for included roles.
-7. Writes a daily digest, excluded/weak-role summary, per-run log, run registry entry, event stream, token usage records, and package indexes.
+6. Optionally uses Claude for AI-enhanced search summaries on promising postings.
+7. Generates recruiter-facing materials for included roles when material generation is enabled.
+8. Writes a daily digest, excluded/weak-role summary, per-run log, run registry entry, event stream, token usage records, and package indexes.
 
 Generated package per included role:
 
@@ -65,7 +66,12 @@ CLAUDE_MODEL=claude-sonnet-4-20250514
 CLAUDE_USE_BY_DEFAULT=false
 ```
 
-Claude use is explicit in generated `match-analysis.md` notes. If the key is missing or a call fails, the output says that deterministic fallback text was used.
+There are two separate Claude modes:
+
+- AI-enhanced search: `--ai-enhanced-search` interprets promising postings against your profile and stores concise relevance summaries, confidence, risks, and priority flags for triage. It does not generate CVs or applications.
+- Material generation: `--use-llm` lets Claude help draft application text when material generation is enabled.
+
+If the key is missing or a call fails, deterministic search still completes and the run records a clear AI status or fallback note.
 
 ## Local Web UI
 

@@ -8,6 +8,7 @@ from jinja2 import TemplateNotFound
 from job_agent.io.json_store import read_json
 from job_agent.run_service import run_daily_agent
 from job_agent.run_store import RunOptions, RunStore
+from job_agent.services.ai_search_service import AiSearchEvaluation
 
 
 def test_run_daily_agent_completes_and_writes_outputs(local_yaml_source_project: Path) -> None:
@@ -26,6 +27,111 @@ def test_run_daily_agent_completes_and_writes_outputs(local_yaml_source_project:
     assert list((local_yaml_source_project / "output").glob("*/*/index.json"))
     assert read_json(local_yaml_source_project / "jobs" / "application_status.json", [])
     assert read_json(local_yaml_source_project / "jobs" / "seen_jobs.json", []) == []
+
+
+def test_run_options_ai_enhanced_search_defaults_false() -> None:
+    assert RunOptions().ai_enhanced_search is False
+
+
+def test_run_without_ai_enhanced_search_does_not_call_ai_service(
+    monkeypatch: pytest.MonkeyPatch, local_yaml_source_project: Path
+) -> None:
+    class FailingAiSearchService:
+        def __init__(self, root: Path) -> None:
+            raise AssertionError("AI search should not be constructed")
+
+    monkeypatch.setattr("job_agent.run_service.AiSearchService", FailingAiSearchService)
+
+    run_daily_agent(
+        RunOptions(include_seen=True, generate_materials=False, ai_enhanced_search=False),
+        root=local_yaml_source_project,
+    )
+
+
+def test_run_with_ai_enhanced_search_stores_package_fields_and_events(
+    monkeypatch: pytest.MonkeyPatch, local_yaml_source_project: Path
+) -> None:
+    class FakeAiSearchService:
+        def __init__(self, root: Path) -> None:
+            self.root = root
+
+        def is_configured(self) -> bool:
+            return True
+
+        def evaluate(self, *args, **kwargs) -> AiSearchEvaluation:
+            return AiSearchEvaluation(
+                status="evaluated",
+                summary="Strong ABAP fit with Gateway evidence.",
+                recommended_angle="Lead with ABAP/Gateway delivery.",
+                fit_confidence="high",
+                risk_flags=["Confirm rate"],
+                key_profile_evidence=["ABAP", "OData"],
+                should_prioritize=True,
+                model="fake-model",
+            )
+
+    monkeypatch.setattr("job_agent.run_service.AiSearchService", FakeAiSearchService)
+
+    result = run_daily_agent(
+        RunOptions(include_seen=True, generate_materials=False, ai_enhanced_search=True),
+        root=local_yaml_source_project,
+    )
+
+    events = RunStore(local_yaml_source_project).read_events(result.record.run_id)
+    assert any(event["event_type"] == "ai_evaluation_started" for event in events)
+    assert any(event["event_type"] == "ai_evaluation_completed" for event in events)
+    source_processed = next(event for event in events if event["event_type"] == "source_processed")
+    assert source_processed["counts"]["ai_evaluations_completed"] == 1
+    assert source_processed["counts"]["ai_prioritized"] == 1
+
+    index = read_json(next((local_yaml_source_project / "output").glob("*/*/index.json")), {})
+    assert index["ai_evaluation_status"] == "evaluated"
+    assert index["ai_summary"] == "Strong ABAP fit with Gateway evidence."
+    assert index["ai_should_prioritize"] is True
+
+
+def test_ai_evaluation_failure_does_not_fail_run(
+    monkeypatch: pytest.MonkeyPatch, local_yaml_source_project: Path
+) -> None:
+    class FailingAiSearchService:
+        def __init__(self, root: Path) -> None:
+            self.root = root
+
+        def is_configured(self) -> bool:
+            return True
+
+        def failed(self, error: str) -> AiSearchEvaluation:
+            return AiSearchEvaluation(status="failed", error=error, model="fake-model")
+
+        def evaluate(self, *args, **kwargs) -> AiSearchEvaluation:
+            raise RuntimeError("Claude unavailable")
+
+    monkeypatch.setattr("job_agent.run_service.AiSearchService", FailingAiSearchService)
+
+    result = run_daily_agent(
+        RunOptions(include_seen=True, generate_materials=False, ai_enhanced_search=True),
+        root=local_yaml_source_project,
+    )
+
+    assert result.record.status == "completed"
+    events = RunStore(local_yaml_source_project).read_events(result.record.run_id)
+    assert any(event["event_type"] == "ai_evaluation_failed" for event in events)
+    index = read_json(next((local_yaml_source_project / "output").glob("*/*/index.json")), {})
+    assert index["ai_evaluation_status"] == "failed"
+    assert "Claude unavailable" in index["ai_error"]
+
+
+def test_ai_enhanced_search_missing_key_skips_without_failing(local_yaml_source_project: Path) -> None:
+    result = run_daily_agent(
+        RunOptions(include_seen=True, generate_materials=False, ai_enhanced_search=True),
+        root=local_yaml_source_project,
+    )
+
+    assert result.record.status == "completed"
+    events = RunStore(local_yaml_source_project).read_events(result.record.run_id)
+    assert any(event["event_type"] == "ai_evaluation_skipped" for event in events)
+    index = read_json(next((local_yaml_source_project / "output").glob("*/*/index.json")), {})
+    assert index["ai_evaluation_status"] == "skipped"
 
 
 def test_run_daily_agent_records_source_progress_events(local_yaml_source_project: Path) -> None:

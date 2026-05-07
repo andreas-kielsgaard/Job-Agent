@@ -24,6 +24,7 @@ def write_job_package(
     fuzzy_key: str = "",
     state: str = "",
     application_status: str = "unreviewed",
+    ai_evaluation: dict | None = None,
 ) -> dict[str, str]:
     slug = slugify(job.title)
     base = root / "output" / str(run_date) / slug
@@ -51,7 +52,9 @@ def write_job_package(
     )
     write_json(
         paths["index"],
-        _package_index(job, match, slug, paths, run_id, stable_id, fuzzy_key, state, application_status, True),
+        _package_index(
+            job, match, slug, paths, run_id, stable_id, fuzzy_key, state, application_status, True, ai_evaluation
+        ),
     )
 
     return {name: str(path) for name, path in paths.items()}
@@ -67,6 +70,7 @@ def write_placeholder_job_package(
     fuzzy_key: str = "",
     state: str = "",
     application_status: str = "unreviewed",
+    ai_evaluation: dict | None = None,
 ) -> dict[str, str]:
     slug = slugify(job.title)
     base = root / "output" / str(run_date) / slug
@@ -81,7 +85,9 @@ def write_placeholder_job_package(
     write_json(paths["match"], asdict(match))
     write_json(
         paths["index"],
-        _package_index(job, match, slug, paths, run_id, stable_id, fuzzy_key, state, application_status, False),
+        _package_index(
+            job, match, slug, paths, run_id, stable_id, fuzzy_key, state, application_status, False, ai_evaluation
+        ),
     )
     return {name: str(path) for name, path in paths.items()}
 
@@ -140,8 +146,9 @@ def _package_index(
     state: str,
     application_status: str,
     materials_generated: bool,
+    ai_evaluation: dict | None = None,
 ) -> dict:
-    return {
+    item = {
         "package_id": stable_id or slug,
         "stable_id": stable_id,
         "fuzzy_key": fuzzy_key,
@@ -165,3 +172,6 @@ def _package_index(
         "materials_generated": materials_generated,
         "paths": {name: str(path) for name, path in paths.items() if name != "index"},
     }
+    if ai_evaluation:
+        item.update(ai_evaluation)
+    return item

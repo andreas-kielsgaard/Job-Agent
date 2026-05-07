@@ -44,6 +44,7 @@ def build_run_detail_view(
     all_events = store.read_events(run_id)
     source_warnings = [event for event in all_events if event.get("event_type") == "source_warning"]
     match_highlights = [event for event in all_events if event.get("event_type") == "match_highlight"]
+    ai_evaluation_events = [event for event in all_events if event.get("event_type", "").startswith("ai_evaluation_")]
     source_progress = build_source_progress(all_events)
     return {
         "run": record,
@@ -51,6 +52,7 @@ def build_run_detail_view(
         "events": all_events[-12:],
         "source_warnings": source_warnings,
         "match_highlights": match_highlights,
+        "ai_evaluation_events": ai_evaluation_events,
         "source_progress": source_progress["items"],
         "source_progress_summary": source_progress["summary"],
         "token_records": TokenUsageStore(root).list_for_run(run_id),

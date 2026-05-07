@@ -20,6 +20,7 @@ def utc_now() -> str:
 @dataclass
 class RunOptions:
     use_llm: bool = False
+    ai_enhanced_search: bool = False
     include_seen: bool = False
     include_weak: bool = False
     mark_seen: bool = False

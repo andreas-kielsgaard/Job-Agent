@@ -16,6 +16,7 @@ router = APIRouter()
 @router.post("/api/run")
 def launch_run(
     use_llm: bool = Form(False),
+    ai_enhanced_search: bool = Form(False),
     include_seen: bool = Form(False),
     include_weak: bool = Form(False),
     mark_seen: bool = Form(False),
@@ -24,6 +25,7 @@ def launch_run(
 ) -> RedirectResponse:
     options = RunOptions(
         use_llm=use_llm,
+        ai_enhanced_search=ai_enhanced_search,
         include_seen=include_seen,
         include_weak=include_weak,
         mark_seen=mark_seen,

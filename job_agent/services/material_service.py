@@ -75,6 +75,7 @@ class MaterialService:
             fuzzy_key=package.get("fuzzy_key", ""),
             state=package.get("state", ""),
             application_status=package.get("application_status", "unreviewed"),
+            ai_evaluation={key: value for key, value in package.items() if key.startswith("ai_")},
         )
         refreshed = read_json(Path(paths["index"]), {})
         refreshed["materials_generated"] = True

@@ -30,6 +30,27 @@
   <pre id="review-bundle" class="copy-source" style="display:none;">{{ review_bundle }}</pre>
 </div>
 
+{% if package.ai_evaluation_status %}
+<div class="panel">
+  <h2>AI Search Evaluation</h2>
+  {% if package.ai_evaluation_status == "evaluated" %}
+    <p>
+      <span class="badge {{ package.ai_fit_confidence }}">{{ package.ai_fit_confidence }} confidence</span>
+      {% if package.ai_should_prioritize %}<span class="badge strong">Prioritize</span>{% endif %}
+    </p>
+    <p>{{ package.ai_summary }}</p>
+    {% if package.ai_recommended_angle %}<p><strong>AI recommended angle:</strong> {{ package.ai_recommended_angle }}</p>{% endif %}
+    {% if package.ai_risk_flags %}<p><strong>AI risk flags:</strong> {{ package.ai_risk_flags | join("; ") }}</p>{% endif %}
+    {% if package.ai_key_profile_evidence %}<p><strong>Profile evidence:</strong> {{ package.ai_key_profile_evidence | join("; ") }}</p>{% endif %}
+    {% if package.ai_model %}<p class="muted">Model: {{ package.ai_model }}</p>{% endif %}
+  {% elif package.ai_evaluation_status == "failed" %}
+    <p><span class="badge failed">AI evaluation failed</span> {{ package.ai_error }}</p>
+  {% elif package.ai_evaluation_status == "skipped" %}
+    <p><span class="badge waiting">AI evaluation skipped</span> {{ package.ai_error }}</p>
+  {% endif %}
+</div>
+{% endif %}
+
 <div class="panel">
   <h2>Status</h2>
   <form method="post" action="/api/jobs/{{ package.stable_id }}/status" class="grid">

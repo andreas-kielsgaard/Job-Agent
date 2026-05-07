@@ -260,6 +260,21 @@ td {
   color: var(--bad);
 }
 
+.badge.high {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.badge.medium {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.badge.low {
+  background: #fee2e2;
+  color: var(--bad);
+}
+
 .badge.waiting {
   background: #eef2f6;
   color: var(--muted);
