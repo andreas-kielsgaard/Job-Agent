@@ -26,7 +26,7 @@ def test_app_creation_health_and_basic_routes_use_temp_root(client: TestClient, 
     assert response.status_code == 200
     assert response.json()["status"] == "ok"
 
-    for path in ["/", "/runs", "/jobs", "/stats", "/setup", "/postings/new"]:
+    for path in ["/", "/runs", "/jobs", "/stats", "/setup", "/postings/new", "/compatibility"]:
         assert client.get(path).status_code == 200
 
     assert (project_root / "output" / "runs" / "runs.json").exists()
@@ -160,3 +160,46 @@ def test_manual_posting_route_creates_package_and_redirects(client: TestClient, 
     assert list((project_root / "output").glob("*/*/index.json"))
     manual_yaml = project_root / "jobs" / "manual" / "manual_jobs.yaml"
     assert manual_yaml.exists()
+
+
+def test_compatibility_route_renders_report(monkeypatch: pytest.MonkeyPatch, client: TestClient) -> None:
+    report = {
+        "url": "https://example.com/jobs",
+    }
+    monkeypatch.setattr(
+        "job_agent.web.routers.compatibility.check_job_board_compatibility",
+        lambda url, render: type(
+            "Report",
+            (),
+            {
+                "url": url,
+                "normal_html": type(
+                    "Quality",
+                    (),
+                    {
+                        "label": "Normal HTML",
+                        "candidate_count": 0,
+                        "useful_title_count": 0,
+                        "generic_title_count": 0,
+                        "unique_url_count": 0,
+                        "average_description_length": 0,
+                        "status_code": 200,
+                        "visible_text_chars": 0,
+                        "warnings": [],
+                        "candidates": [],
+                    },
+                )(),
+                "rendered_page": None,
+                "recommendation": "manual intake recommended",
+                "recommendation_reason": "No candidates.",
+                "boundaries": ["Fetched only the provided URL with a polite timeout."],
+                "as_dict": lambda self: report,
+            },
+        )(),
+    )
+
+    response = client.post("/compatibility", data={"url": "https://example.com/jobs"}, follow_redirects=False)
+
+    assert response.status_code == 200
+    assert "manual intake recommended" in response.text
+    assert "Normal HTML" in response.text

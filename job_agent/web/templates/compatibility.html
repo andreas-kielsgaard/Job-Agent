@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Job Board Compatibility</h1>
+<div class="panel">
+  <p class="muted">Check whether one public recruiter or job-board page can be read by the current generic extractor. This only fetches the provided URL; rendering uses the same page in Playwright.</p>
+  <form method="post" action="/compatibility" class="grid">
+    <div style="grid-column: 1 / -1;">
+      <label>Public job-board URL</label>
+      <input name="url" value="{{ url or '' }}" placeholder="https://example.com/jobs">
+    </div>
+    <label class="check"><input type="checkbox" name="render" {% if render %}checked{% endif %}> Compare with Playwright-rendered page</label>
+    <div><button type="submit">Run check</button></div>
+  </form>
+</div>
+
+{% if report %}
+<div class="panel">
+  <h2>Recommendation</h2>
+  <p><span class="badge">{{ report.recommendation }}</span></p>
+  <p>{{ report.recommendation_reason }}</p>
+  <ul>
+    {% for boundary in report.boundaries %}
+    <li>{{ boundary }}</li>
+    {% endfor %}
+  </ul>
+</div>
+
+{% for quality in [report.normal_html, report.rendered_page] if quality %}
+<div class="panel">
+  <h2>{{ quality.label }}</h2>
+  <div class="grid">
+    <div class="stat"><span>Candidate postings</span><strong>{{ quality.candidate_count }}</strong></div>
+    <div class="stat"><span>Useful titles</span><strong>{{ quality.useful_title_count }}</strong></div>
+    <div class="stat"><span>Generic labels</span><strong>{{ quality.generic_title_count }}</strong></div>
+    <div class="stat"><span>Unique URLs</span><strong>{{ quality.unique_url_count }}</strong></div>
+    <div class="stat"><span>Avg description length</span><strong>{{ quality.average_description_length }}</strong></div>
+    <div class="stat"><span>Status</span><strong>{{ quality.status_code or "n/a" }}</strong></div>
+  </div>
+  {% if quality.visible_text_chars %}
+  <p class="muted">Rendered visible text: {{ quality.visible_text_chars }} characters.</p>
+  {% endif %}
+  {% if quality.warnings %}
+  <ul>
+    {% for warning in quality.warnings %}
+    <li>{{ warning }}</li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+  {% if quality.candidates %}
+  <table>
+    <thead><tr><th>Title</th><th>Quality</th><th>Description</th><th>Missing fields</th><th>URL</th></tr></thead>
+    <tbody>
+      {% for candidate in quality.candidates %}
+      <tr>
+        <td>{{ candidate.title }}</td>
+        <td><span class="badge {{ 'high' if candidate.title_quality == 'useful' else 'low' }}">{{ candidate.title_quality }}</span></td>
+        <td>{{ candidate.description_length }} chars</td>
+        <td>{{ candidate.missing_fields|join(", ") or "none" }}</td>
+        <td><a href="{{ candidate.url }}" target="_blank" rel="noreferrer">{{ candidate.url }}</a></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</div>
+{% endfor %}
+{% endif %}
+{% endblock %}

@@ -4,6 +4,7 @@ import argparse
 
 from .run_service import run_daily_agent
 from .run_store import RunOptions
+from .services.job_board_check_service import check_job_board_compatibility
 
 
 def main() -> None:
@@ -29,6 +30,16 @@ def main() -> None:
     daily.add_argument(
         "--test-run", action="store_true", help="Mark this as a test run; it will not update seen-job state."
     )
+    compatibility = subparsers.add_parser(
+        "check-board",
+        help="Check whether one public job-board URL works with the generic extractor.",
+    )
+    compatibility.add_argument("url")
+    compatibility.add_argument(
+        "--no-render",
+        action="store_true",
+        help="Skip the optional Playwright-rendered comparison.",
+    )
 
     args = parser.parse_args()
     if args.command == "run-daily":
@@ -41,6 +52,8 @@ def main() -> None:
             generate_materials=args.generate_materials and not args.skip_materials,
             is_test=args.test_run,
         )
+    if args.command == "check-board":
+        check_board(args.url, render=not args.no_render)
 
 
 def run_daily(
@@ -78,6 +91,34 @@ def run_daily(
     print(f"Run log: {record.run_log_path}")
     if not mark_seen:
         print("Seen-job state was not updated. Re-run with --mark-seen after reviewing output.")
+
+
+def check_board(url: str, render: bool = True) -> None:
+    try:
+        report = check_job_board_compatibility(url, render=render)
+    except ValueError as exc:
+        print(exc)
+        return
+    print(f"URL: {report.url}")
+    print(f"Recommendation: {report.recommendation}")
+    print(f"Reason: {report.recommendation_reason}")
+    for quality in [report.normal_html, report.rendered_page]:
+        if not quality:
+            continue
+        print("")
+        print(quality.label)
+        print(f"Status: {quality.status_code if quality.status_code is not None else 'n/a'}")
+        print(f"Candidates: {quality.candidate_count}")
+        print(f"Useful titles: {quality.useful_title_count}")
+        print(f"Generic labels: {quality.generic_title_count}")
+        print(f"Unique URLs: {quality.unique_url_count}")
+        print(f"Average description length: {quality.average_description_length}")
+        for warning in quality.warnings:
+            print(f"Warning: {warning}")
+        for candidate in quality.candidates[:10]:
+            missing = ", ".join(candidate.missing_fields) or "none"
+            print(f"- {candidate.title} [{candidate.title_quality}] {candidate.description_length} chars; missing: {missing}")
+            print(f"  {candidate.url}")
 
 
 if __name__ == "__main__":

@@ -77,8 +77,6 @@ class GenericHtmlAdapter(SourceAdapter):
     whole page.
     """
 
-    JOB_HINTS = ("job", "career", "vacancy", "contract", "sap", "abap", "consultant")
-
     def fetch(self) -> SourceRunResult:
         url = self.source.get("url", "")
         source_name = self.source.get("name", "Generic HTML")
@@ -91,8 +89,12 @@ class GenericHtmlAdapter(SourceAdapter):
         except requests.RequestException as exc:
             return SourceRunResult(warnings=[SourceWarning(source_name, f"Fetch failed: {exc}", url)])
 
-        soup = BeautifulSoup(response.text, "html.parser")
-        jobs = self._extract_link_listings(soup, url, source_name)
+        jobs = extract_generic_jobs_from_html(
+            response.text,
+            base_url=url,
+            source_name=source_name,
+            max_results=self.source.get("max_results", 25),
+        )
         if not jobs:
             return SourceRunResult(
                 warnings=[
@@ -104,35 +106,6 @@ class GenericHtmlAdapter(SourceAdapter):
                 ]
             )
         return SourceRunResult(jobs=jobs)
-
-    def _extract_link_listings(self, soup: BeautifulSoup, base_url: str, source_name: str) -> list[Job]:
-        jobs: list[Job] = []
-        seen_urls: set[str] = set()
-        for link in soup.find_all("a", href=True):
-            title = link.get_text(" ", strip=True)
-            href = urljoin(base_url, link["href"])
-            haystack = f"{title} {href}".lower()
-            if len(title) < 8 or not any(hint in haystack for hint in self.JOB_HINTS):
-                continue
-            if href in seen_urls:
-                continue
-            seen_urls.add(href)
-            surrounding = link.find_parent(["article", "li", "div", "section"])
-            raw_text = surrounding.get_text("\n", strip=True) if surrounding else title
-            jobs.append(
-                Job(
-                    title=title,
-                    source=source_name,
-                    url=href,
-                    application_url=href,
-                    description=raw_text[:3000],
-                    raw_text=raw_text[:5000],
-                    source_confidence="medium",
-                    freshness_confidence="unknown",
-                    extraction_notes=["Generic HTML link extraction; verify details manually."],
-                )
-            )
-        return jobs[: self.source.get("max_results", 25)]
 
 
 class WhitehallResourcesAdapter(GenericHtmlAdapter):
@@ -284,3 +257,42 @@ class UnsupportedSourceAdapter(SourceAdapter):
                 )
             ]
         )
+
+
+JOB_HINTS = ("job", "career", "vacancy", "contract", "sap", "abap", "consultant")
+
+
+def extract_generic_jobs_from_html(
+    html: str,
+    base_url: str,
+    source_name: str,
+    max_results: int = 25,
+) -> list[Job]:
+    soup = BeautifulSoup(html, "html.parser")
+    jobs: list[Job] = []
+    seen_urls: set[str] = set()
+    for link in soup.find_all("a", href=True):
+        title = link.get_text(" ", strip=True)
+        href = urljoin(base_url, link["href"])
+        haystack = f"{title} {href}".lower()
+        if len(title) < 8 or not any(hint in haystack for hint in JOB_HINTS):
+            continue
+        if href in seen_urls:
+            continue
+        seen_urls.add(href)
+        surrounding = link.find_parent(["article", "li", "div", "section"])
+        raw_text = surrounding.get_text("\n", strip=True) if surrounding else title
+        jobs.append(
+            Job(
+                title=title,
+                source=source_name,
+                url=href,
+                application_url=href,
+                description=raw_text[:3000],
+                raw_text=raw_text[:5000],
+                source_confidence="medium",
+                freshness_confidence="unknown",
+                extraction_notes=["Generic HTML link extraction; verify details manually."],
+            )
+        )
+    return jobs[:max_results]
