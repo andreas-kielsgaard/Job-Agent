@@ -61,7 +61,9 @@ python -m job_agent.cli test-recipe sources/recipes/examples/synthetic-job-board
 python -m job_agent.cli test-recipe sources/recipes/examples/synthetic-job-board.yaml https://example.com/jobs --rendered
 ```
 
-Recipe testing fetches only the provided URL. The optional rendered mode uses Playwright on that same page and does not inspect hidden endpoints or network APIs. Do not use recipes against login, captcha, private, session-only, or protected pages.
+Recipe testing fetches only the provided URL. Recipes can use `mode: static_html` or `mode: rendered_html`; rendered mode uses Playwright on that same page and does not inspect hidden endpoints or network APIs. For local HTML fixtures, the fixture is used as-is even when the recipe mode is rendered.
+
+Recipes can optionally follow extracted candidate detail URLs with `detail.follow: true`. Detail following is bounded by `detail.max_detail_pages`, only fetches URLs already extracted from the listing page, does not recurse, and does not follow additional links. Do not use recipes against login, captcha, private, session-only, or protected pages. Pagination, hidden endpoint discovery, and broad crawling are intentionally not implemented.
 
 ## Optional Claude Setup
 

@@ -7,11 +7,14 @@ import pytest
 from job_agent.services.extraction_quality import ExtractionQuality, candidate_quality
 from job_agent.services.job_board_recipe_service import (
     AcceptRecipe,
+    DetailRecipe,
     JobBoardRecipe,
     ListingRecipe,
     RejectRecipe,
     check_recipe_against_html,
+    enrich_jobs_with_detail_pages,
     extract_jobs_with_recipe,
+    extract_jobs_with_recipe_from_url,
     load_job_board_recipe,
 )
 from job_agent.sources import extract_generic_jobs_from_html
@@ -44,6 +47,118 @@ def test_recipe_extracts_optional_location_rate_and_date_fields() -> None:
     assert jobs[0].location == "Copenhagen"
     assert jobs[0].rate == "DKK 900/hour"
     assert jobs[0].posted_date == "2026-05-07"
+
+
+def test_detail_follow_false_does_not_fetch_detail_pages(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = []
+    jobs = extract_jobs_with_recipe(HTML, "https://example.com", _recipe())
+    recipe = _recipe(detail=DetailRecipe(follow=False, description_selector=".detail-description"))
+    monkeypatch.setattr("job_agent.services.job_board_recipe_service.requests.get", lambda *args, **kwargs: calls.append(args))
+
+    warnings = enrich_jobs_with_detail_pages(jobs, recipe)
+
+    assert warnings == []
+    assert calls == []
+
+
+def test_detail_follow_true_fetches_and_enriches_candidate_pages(monkeypatch: pytest.MonkeyPatch) -> None:
+    detail_pages = {
+        "https://example.com/jobs/sap-abap": """
+        <main><h1>SAP ABAP Lead Consultant</h1><section class="detail-description">Full ABAP RAP contract description with delivery details and integration scope.</section><span class="detail-location">Aarhus</span><span class="detail-rate">DKK 1000/hour</span><time class="detail-posted">2026-05-08</time></main>
+        """,
+        "https://example.com/jobs/sap-basis": """
+        <main><h1>SAP Basis Consultant</h1><section class="detail-description">Full Basis contract description with landscape operations and upgrade work.</section></main>
+        """,
+    }
+
+    class FakeResponse:
+        def __init__(self, url: str) -> None:
+            self.text = detail_pages[url]
+            self.url = url
+
+        def raise_for_status(self) -> None:
+            return None
+
+    calls = []
+
+    def fake_get(url: str, *args, **kwargs):
+        calls.append(url)
+        return FakeResponse(url)
+
+    recipe = _recipe(
+        detail=DetailRecipe(
+            follow=True,
+            title_selector="h1",
+            description_selector=".detail-description",
+            location_selector=".detail-location",
+            rate_selector=".detail-rate",
+            posted_date_selector=".detail-posted",
+            max_detail_pages=5,
+        )
+    )
+    jobs = extract_jobs_with_recipe(HTML, "https://example.com", recipe)
+    monkeypatch.setattr("job_agent.services.job_board_recipe_service.requests.get", fake_get)
+
+    warnings = enrich_jobs_with_detail_pages(jobs, recipe)
+
+    assert warnings == []
+    assert calls == ["https://example.com/jobs/sap-abap", "https://example.com/jobs/sap-basis"]
+    assert jobs[0].title == "SAP ABAP Lead Consultant"
+    assert jobs[0].description.startswith("Full ABAP RAP contract")
+    assert jobs[0].location == "Copenhagen"
+    assert jobs[0].rate == "DKK 900/hour"
+    assert jobs[0].posted_date == "2026-05-07"
+    assert "Detail page fetched by recipe; verify details manually." in jobs[0].extraction_notes
+
+
+def test_detail_max_detail_pages_limits_fetches(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = []
+
+    class FakeResponse:
+        text = "<main><section class='detail-description'>Full detail page text.</section></main>"
+
+        def raise_for_status(self) -> None:
+            return None
+
+    recipe = _recipe(detail=DetailRecipe(follow=True, description_selector=".detail-description", max_detail_pages=1))
+    jobs = extract_jobs_with_recipe(HTML, "https://example.com", recipe)
+    monkeypatch.setattr(
+        "job_agent.services.job_board_recipe_service.requests.get",
+        lambda url, *args, **kwargs: calls.append(url) or FakeResponse(),
+    )
+
+    warnings = enrich_jobs_with_detail_pages(jobs, recipe)
+
+    assert warnings == []
+    assert calls == ["https://example.com/jobs/sap-abap"]
+
+
+def test_failed_detail_fetch_continues(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FakeError(Exception):
+        pass
+
+    def fail(*args, **kwargs):
+        import requests
+
+        raise requests.RequestException("timeout")
+
+    recipe = _recipe(detail=DetailRecipe(follow=True, description_selector=".detail-description"))
+    jobs = extract_jobs_with_recipe(HTML, "https://example.com", recipe)
+    monkeypatch.setattr("job_agent.services.job_board_recipe_service.requests.get", fail)
+
+    warnings = enrich_jobs_with_detail_pages(jobs, recipe)
+
+    assert len(warnings) == 2
+    assert all("Detail fetch failed" in warning for warning in warnings)
+
+
+def test_detail_follow_true_without_selectors_returns_warning() -> None:
+    recipe = _recipe(detail=DetailRecipe(follow=True))
+    jobs = extract_jobs_with_recipe(HTML, "https://example.com", recipe)
+
+    warnings = enrich_jobs_with_detail_pages(jobs, recipe)
+
+    assert warnings == ["detail.follow is true, but no detail selectors are configured."]
 
 
 def test_recipe_rejects_cta_services_and_category_links() -> None:
@@ -142,9 +257,58 @@ def test_cli_recipe_command_runs_against_local_fixture(capsys: pytest.CaptureFix
     assert "https://example.com/jobs/sap-abap" in output
 
 
-def _recipe(card_selector: str = ".job-card") -> JobBoardRecipe:
+def test_url_extraction_uses_recipe_rendered_mode_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = {}
+
+    def fake_rendered(url: str, timeout_seconds: int):
+        calls["rendered"] = url
+        return HTML, "https://example.com/jobs", []
+
+    monkeypatch.setattr("job_agent.services.job_board_recipe_service._fetch_rendered_html", fake_rendered)
+
+    result = extract_jobs_with_recipe_from_url("https://example.com/jobs", _recipe(mode="rendered_html"))
+
+    assert calls == {"rendered": "https://example.com/jobs"}
+    assert result.mode_used == "rendered_html"
+    assert len(result.jobs) == 2
+
+
+def test_cli_local_fixture_ignores_rendered_recipe_mode(capsys: pytest.CaptureFixture[str]) -> None:
+    from job_agent.cli import test_recipe
+
+    test_recipe(
+        "sources/recipes/examples/synthetic-job-board.yaml",
+        str(FIXTURE_PATH),
+        base_url="https://example.com/jobs",
+    )
+    normal_output = capsys.readouterr().out
+    assert "Input mode: local_fixture_html" in normal_output
+
+    rendered_recipe = FIXTURE_PATH.parent / "rendered-mode-recipe.yaml"
+    rendered_recipe.write_text(
+        Path("sources/recipes/examples/synthetic-job-board.yaml")
+        .read_text(encoding="utf-8")
+        .replace("mode: static_html", "mode: rendered_html"),
+        encoding="utf-8",
+    )
+    try:
+        test_recipe(str(rendered_recipe), str(FIXTURE_PATH), base_url="https://example.com/jobs")
+        output = capsys.readouterr().out
+    finally:
+        rendered_recipe.unlink()
+
+    assert "Input mode: local_fixture_html" in output
+    assert "Warning: Local fixture HTML ignores recipe mode: rendered_html." in output
+
+
+def _recipe(
+    card_selector: str = ".job-card",
+    detail: DetailRecipe | None = None,
+    mode: str = "static_html",
+) -> JobBoardRecipe:
     return JobBoardRecipe(
         source_name="Test Board",
+        mode=mode,
         listing=ListingRecipe(
             card_selector=card_selector,
             title_selector=[".job-heading", ".job-title", "h2"],
@@ -161,4 +325,5 @@ def _recipe(card_selector: str = ".job-card") -> JobBoardRecipe:
             title_contains=["Job Search"],
             url_contains=["/services", "/about", "/contact"],
         ),
+        detail=detail or DetailRecipe(),
     )

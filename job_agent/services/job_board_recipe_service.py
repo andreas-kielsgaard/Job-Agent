@@ -5,11 +5,13 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urljoin
 
+import requests
 import yaml
 from bs4 import BeautifulSoup, Tag
 
 from job_agent.models import Job
 from job_agent.services.extraction_quality import ExtractionQuality, candidate_quality, title_quality
+from job_agent.services.job_board_check_service import validate_public_url
 
 SelectorValue = str | list[str]
 VALID_MODES = {"static_html", "rendered_html"}
@@ -70,6 +72,14 @@ class JobBoardRecipe:
     detail: DetailRecipe = field(default_factory=DetailRecipe)
     reject: RejectRecipe = field(default_factory=RejectRecipe)
     limits: LimitRecipe = field(default_factory=LimitRecipe)
+
+
+@dataclass
+class RecipeExtractionResult:
+    jobs: list[Job]
+    base_url: str
+    mode_used: str
+    warnings: list[str] = field(default_factory=list)
 
 
 def load_job_board_recipe(path: Path) -> JobBoardRecipe:
@@ -166,13 +176,149 @@ def extract_jobs_with_recipe(
     return jobs
 
 
-def check_recipe_against_html(html: str, base_url: str, recipe: JobBoardRecipe) -> ExtractionQuality:
+def extract_jobs_with_recipe_from_url(
+    url: str,
+    recipe: JobBoardRecipe,
+    rendered: bool | None = None,
+    timeout_seconds: int = 15,
+) -> RecipeExtractionResult:
+    normalized_url = validate_public_url(url)
+    use_rendered = recipe.mode == "rendered_html" if rendered is None else rendered
+    html, final_url, warnings = (
+        _fetch_rendered_html(normalized_url, timeout_seconds)
+        if use_rendered
+        else _fetch_static_html(normalized_url, timeout_seconds)
+    )
+    jobs = extract_jobs_with_recipe(html, base_url=final_url, recipe=recipe)
+    warnings.extend(enrich_jobs_with_detail_pages(jobs, recipe, timeout_seconds=timeout_seconds))
+    return RecipeExtractionResult(
+        jobs=jobs,
+        base_url=final_url,
+        mode_used="rendered_html" if use_rendered else "static_html",
+        warnings=warnings,
+    )
+
+
+def enrich_jobs_with_detail_pages(
+    jobs: list[Job],
+    recipe: JobBoardRecipe,
+    timeout_seconds: int = 15,
+) -> list[str]:
+    if not recipe.detail.follow:
+        return []
+
+    warnings: list[str] = []
+    if not _has_detail_selectors(recipe):
+        return ["detail.follow is true, but no detail selectors are configured."]
+
+    for job in jobs[: recipe.detail.max_detail_pages]:
+        if _should_reject(job.title, job.url, job.description, recipe):
+            continue
+        try:
+            response = requests.get(
+                job.url,
+                timeout=timeout_seconds,
+                headers={"User-Agent": "Job-Agent recipe detail fetcher (public page; low volume)"},
+            )
+            response.raise_for_status()
+        except requests.RequestException as exc:
+            warnings.append(f"Detail fetch failed for {job.url}: {exc}")
+            continue
+
+        _apply_detail_html(job, response.text, recipe)
+    return warnings
+
+
+def check_recipe_against_html(
+    html: str,
+    base_url: str,
+    recipe: JobBoardRecipe,
+    follow_detail: bool = False,
+) -> ExtractionQuality:
     jobs = extract_jobs_with_recipe(html, base_url=base_url, recipe=recipe)
     quality = ExtractionQuality(label=f"Recipe: {recipe.source_name}")
+    if follow_detail:
+        quality.warnings.extend(enrich_jobs_with_detail_pages(jobs, recipe))
     quality.candidates = [candidate_quality(job) for job in jobs]
     if not jobs:
         quality.warnings.append("Recipe extraction found no matching job cards.")
     return quality
+
+
+def quality_from_recipe_result(result: RecipeExtractionResult, recipe: JobBoardRecipe) -> ExtractionQuality:
+    quality = ExtractionQuality(label=f"Recipe: {recipe.source_name}")
+    quality.final_url = result.base_url
+    quality.warnings = list(result.warnings)
+    quality.candidates = [candidate_quality(job) for job in result.jobs]
+    if not result.jobs:
+        quality.warnings.append("Recipe extraction found no matching job cards.")
+    return quality
+
+
+def _fetch_static_html(url: str, timeout_seconds: int) -> tuple[str, str, list[str]]:
+    try:
+        response = requests.get(
+            url,
+            timeout=timeout_seconds,
+            headers={"User-Agent": "Job-Agent recipe tester (public page; low volume)"},
+        )
+        response.raise_for_status()
+    except requests.RequestException as exc:
+        raise ValueError(f"Fetch failed: {exc}") from exc
+    return response.text, response.url, []
+
+
+def _fetch_rendered_html(url: str, timeout_seconds: int) -> tuple[str, str, list[str]]:
+    warnings: list[str] = []
+    try:
+        from playwright.sync_api import Error as PlaywrightError
+        from playwright.sync_api import sync_playwright
+    except ModuleNotFoundError as exc:
+        raise ValueError(
+            "Rendered mode requested but Playwright is unavailable. "
+            "Install requirements-playwright.txt and Chromium to use rendered_html recipes."
+        ) from exc
+
+    timeout_ms = timeout_seconds * 1000
+    try:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            try:
+                page = browser.new_page()
+                page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
+                try:
+                    page.wait_for_load_state("networkidle", timeout=min(timeout_ms, 10_000))
+                except PlaywrightError:
+                    warnings.append("Rendered page did not become network-idle before the polite timeout.")
+                return page.content(), page.url, warnings
+            finally:
+                browser.close()
+    except PlaywrightError as exc:
+        raise ValueError(f"Playwright render failed: {exc}") from exc
+
+
+def _apply_detail_html(job: Job, html: str, recipe: JobBoardRecipe) -> None:
+    soup = BeautifulSoup(html, "html.parser")
+    title = _select_text(soup, recipe.detail.title_selector)
+    description = _select_text(soup, recipe.detail.description_selector)
+    location = _select_text(soup, recipe.detail.location_selector)
+    rate = _select_text(soup, recipe.detail.rate_selector)
+    posted_date = _select_text(soup, recipe.detail.posted_date_selector)
+
+    if title:
+        job.title = title
+    if description:
+        job.description = description[:3000]
+        job.raw_text = description[:5000]
+    if location and job.location == "Not listed":
+        job.location = location
+    if rate and job.rate == "Not listed":
+        job.rate = rate
+    if posted_date and job.posted_date == "Not listed":
+        job.posted_date = posted_date
+        job.freshness_confidence = "recipe"
+    if "Detail page fetched by recipe; verify details manually." not in job.extraction_notes:
+        job.extraction_notes.append("Detail page fetched by recipe; verify details manually.")
 
 
 def _selector_fields(data: dict[str, Any], cls: type) -> dict[str, Any]:
@@ -262,6 +408,19 @@ def _should_reject(title: str, url: str, description: str, recipe: JobBoardRecip
     if any(fragment.lower() in normalized_title for fragment in recipe.reject.title_contains):
         return True
     return any(fragment.lower() in lowered_url for fragment in recipe.reject.url_contains)
+
+
+def _has_detail_selectors(recipe: JobBoardRecipe) -> bool:
+    return any(
+        _selectors(selector)
+        for selector in [
+            recipe.detail.description_selector,
+            recipe.detail.title_selector,
+            recipe.detail.location_selector,
+            recipe.detail.rate_selector,
+            recipe.detail.posted_date_selector,
+        ]
+    )
 
 
 def _selector_value(value: Any) -> SelectorValue:

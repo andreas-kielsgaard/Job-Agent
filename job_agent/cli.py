@@ -3,12 +3,16 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-import requests
-
 from .run_service import run_daily_agent
 from .run_store import RunOptions
-from .services.job_board_check_service import check_job_board_compatibility, validate_public_url
-from .services.job_board_recipe_service import check_recipe_against_html, load_job_board_recipe
+from .services.job_board_check_service import check_job_board_compatibility
+from .services.job_board_recipe_service import (
+    RecipeExtractionResult,
+    extract_jobs_with_recipe,
+    extract_jobs_with_recipe_from_url,
+    load_job_board_recipe,
+    quality_from_recipe_result,
+)
 
 
 def main() -> None:
@@ -56,6 +60,11 @@ def main() -> None:
         action="store_true",
         help="Render the provided public URL with Playwright before running the recipe.",
     )
+    recipe.add_argument(
+        "--static",
+        action="store_true",
+        help="Force static HTML mode even if the recipe uses mode: rendered_html.",
+    )
 
     args = parser.parse_args()
     if args.command == "run-daily":
@@ -71,7 +80,13 @@ def main() -> None:
     if args.command == "check-board":
         check_board(args.url, render=not args.no_render)
     if args.command == "test-recipe":
-        test_recipe(args.recipe_path, args.url_or_html_path, base_url=args.base_url, rendered=args.rendered)
+        test_recipe(
+            args.recipe_path,
+            args.url_or_html_path,
+            base_url=args.base_url,
+            rendered=args.rendered,
+            static=args.static,
+        )
 
 
 def run_daily(
@@ -139,19 +154,25 @@ def check_board(url: str, render: bool = True) -> None:
             print(f"  {candidate.url}")
 
 
-def test_recipe(recipe_path: str, url_or_html_path: str, base_url: str = "", rendered: bool = False) -> None:
+def test_recipe(
+    recipe_path: str,
+    url_or_html_path: str,
+    base_url: str = "",
+    rendered: bool = False,
+    static: bool = False,
+) -> None:
     try:
         recipe = load_job_board_recipe(Path(recipe_path))
-        html, resolved_base_url, warnings = _load_recipe_test_input(
-            url_or_html_path, recipe.start_url, base_url, rendered=rendered
-        )
+        if rendered and static:
+            raise ValueError("Use either --rendered or --static, not both.")
+        result = _run_recipe_test(recipe, url_or_html_path, base_url=base_url, rendered=rendered, static=static)
     except ValueError as exc:
         print(exc)
         return
-    quality = check_recipe_against_html(html, base_url=resolved_base_url, recipe=recipe)
-    quality.warnings.extend(warnings)
+    quality = quality_from_recipe_result(result, recipe)
     print(f"Recipe: {recipe.source_name}")
-    print(f"Base URL: {resolved_base_url}")
+    print(f"Input mode: {result.mode_used}")
+    print(f"Base URL: {result.base_url}")
     print(f"Jobs extracted: {quality.candidate_count}")
     print(f"Useful titles: {quality.useful_title_count}")
     print(f"Generic labels: {quality.generic_title_count}")
@@ -165,64 +186,41 @@ def test_recipe(recipe_path: str, url_or_html_path: str, base_url: str = "", ren
         print(f"  {candidate.url}")
 
 
-def _load_recipe_test_input(
+def _run_recipe_test(
+    recipe,
     url_or_html_path: str,
-    recipe_start_url: str,
     base_url: str,
     rendered: bool = False,
-) -> tuple[str, str, list[str]]:
+    static: bool = False,
+) -> RecipeExtractionResult:
     value = url_or_html_path.strip()
     if value.startswith(("http://", "https://")):
-        url = validate_public_url(value)
+        forced_rendered = None
         if rendered:
-            return _render_recipe_test_url(url)
-        try:
-            response = requests.get(
-                url,
-                timeout=15,
-                headers={"User-Agent": "Job-Agent recipe tester (public page; low volume)"},
-            )
-            response.raise_for_status()
-        except requests.RequestException as exc:
-            raise ValueError(f"Fetch failed: {exc}") from exc
-        return response.text, response.url, []
+            forced_rendered = True
+        elif static:
+            forced_rendered = False
+        return extract_jobs_with_recipe_from_url(value, recipe, rendered=forced_rendered)
 
     if rendered:
         raise ValueError("--rendered can only be used with a public http(s) URL.")
-    resolved_base_url = base_url.strip() or recipe_start_url.strip()
+    resolved_base_url = base_url.strip() or recipe.start_url.strip()
     if not resolved_base_url:
         raise ValueError("Testing a local HTML file requires --base-url or recipe.start_url.")
     path = Path(value)
     if not path.exists():
         raise ValueError(f"HTML fixture not found: {path}")
-    return path.read_text(encoding="utf-8"), resolved_base_url, []
-
-
-def _render_recipe_test_url(url: str) -> tuple[str, str, list[str]]:
     warnings = []
-    try:
-        from playwright.sync_api import Error as PlaywrightError
-        from playwright.sync_api import sync_playwright
-    except ModuleNotFoundError as exc:
-        raise ValueError(
-            "Playwright is not installed. Install requirements-playwright.txt and Chromium to use --rendered."
-        ) from exc
-
-    try:
-        with sync_playwright() as playwright:
-            browser = playwright.chromium.launch(headless=True)
-            try:
-                page = browser.new_page()
-                page.goto(url, wait_until="domcontentloaded", timeout=15_000)
-                try:
-                    page.wait_for_load_state("networkidle", timeout=10_000)
-                except PlaywrightError:
-                    warnings.append("Rendered page did not become network-idle before the polite timeout.")
-                return page.content(), page.url, warnings
-            finally:
-                browser.close()
-    except PlaywrightError as exc:
-        raise ValueError(f"Playwright render failed: {exc}") from exc
+    if recipe.mode == "rendered_html":
+        warnings.append("Local fixture HTML ignores recipe mode: rendered_html.")
+    html = path.read_text(encoding="utf-8")
+    jobs = extract_jobs_with_recipe(html, base_url=resolved_base_url, recipe=recipe)
+    return RecipeExtractionResult(
+        jobs=jobs,
+        base_url=resolved_base_url,
+        mode_used="local_fixture_html",
+        warnings=warnings,
+    )
 
 
 if __name__ == "__main__":
