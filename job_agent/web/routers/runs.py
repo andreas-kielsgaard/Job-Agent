@@ -99,11 +99,25 @@ def run_detail(
     category: str = "",
     app_status: str = "",
     source: str = "",
+    only_unreviewed: bool = False,
+    ai_prioritized: bool = False,
+    materials_missing: bool = False,
+    match_group: str = "",
     generated: int = 0,
     failed: int = 0,
 ) -> HTMLResponse:
     try:
-        view = build_run_detail_view(run_id, category, app_status, source, current_root())
+        view = build_run_detail_view(
+            run_id,
+            category,
+            app_status,
+            source,
+            current_root(),
+            only_unreviewed=only_unreviewed,
+            ai_prioritized=ai_prioritized,
+            materials_missing=materials_missing,
+            match_group=match_group,
+        )
     except KeyError:
         raise HTTPException(status_code=404, detail="Run not found") from None
     return templates.TemplateResponse(

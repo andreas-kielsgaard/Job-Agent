@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from job_agent.web.view_models.runs import build_source_progress
+from job_agent.web.view_models.runs import build_package_triage, build_source_progress, build_triage_packages
 
 
 def test_source_progress_started_completed_and_summary() -> None:
@@ -75,6 +75,66 @@ def test_source_progress_current_source_uses_running_item() -> None:
     assert progress["summary"]["sources_running"] == 1
 
 
+def test_triage_sort_prioritizes_ai_and_strong_matches() -> None:
+    packages = build_triage_packages(
+        [
+            _package("weak old", score=92, category="weak", ai_should_prioritize=False),
+            _package("strong new", score=70, category="strong", ai_should_prioritize=False),
+            _package("ai priority", score=65, category="exploratory", ai_should_prioritize=True),
+        ]
+    )
+
+    assert [package["title"] for package in packages] == ["ai priority", "strong new", "weak old"]
+
+
+def test_triage_badges_cover_priority_match_remote_and_material_status() -> None:
+    triage = build_package_triage(
+        _package(
+            "SAP ABAP",
+            category="strong",
+            ai_should_prioritize=True,
+            ai_fit_confidence="high",
+            remote="Fully remote",
+            material_status="missing",
+        )
+    )
+
+    labels = {badge["label"] for badge in triage["triage_badges"]}
+    assert {"Prioritize", "Strong match", "AI high confidence", "Fully remote", "Materials missing"} <= labels
+
+
+def test_triage_badges_include_generated_materials() -> None:
+    triage = build_package_triage(_package("SAP ABAP", materials_generated=True, material_status="generated"))
+
+    labels = {badge["label"] for badge in triage["triage_badges"]}
+    assert "Materials generated" in labels
+
+
+def test_triage_summary_prefers_ai_summary_and_risk_prefers_ai_flags() -> None:
+    triage = build_package_triage(
+        _package(
+            "SAP ABAP",
+            recommended_angle="Deterministic angle",
+            concerns=["Deterministic concern"],
+            ai_summary="AI summary",
+            ai_risk_flags=["AI risk"],
+        )
+    )
+
+    assert triage["primary_summary"] == "AI summary"
+    assert triage["primary_risk"] == "AI risk"
+
+
+def test_triage_summary_and_risk_fall_back_to_deterministic_fields() -> None:
+    triage = build_package_triage(
+        _package("SAP ABAP", recommended_angle="Use ABAP/RAP angle", concerns=["Language requirement unclear"])
+    )
+
+    assert triage["primary_summary"] == "Use ABAP/RAP angle"
+    assert triage["primary_risk"] == "Language requirement unclear"
+    assert "Language risk" in {badge["label"] for badge in triage["triage_badges"]}
+
+
 def _event(
     event_type: str,
     *,
@@ -100,4 +160,38 @@ def _event(
         "message": f"{event_type} for {source}",
         "counts": counts,
         "timestamp": f"2026-05-07T10:0{source_index}:00+00:00",
+    }
+
+
+def _package(
+    title: str,
+    *,
+    score: int = 80,
+    category: str = "strong",
+    ai_should_prioritize: bool = False,
+    ai_fit_confidence: str = "",
+    remote: str = "",
+    material_status: str = "missing",
+    materials_generated: bool = False,
+    recommended_angle: str = "",
+    concerns: list[str] | None = None,
+    ai_summary: str = "",
+    ai_risk_flags: list[str] | None = None,
+) -> dict:
+    return {
+        "title": title,
+        "match_score": score,
+        "match_category": category,
+        "ai_should_prioritize": ai_should_prioritize,
+        "ai_fit_confidence": ai_fit_confidence,
+        "remote": remote,
+        "material_status": material_status,
+        "materials_generated": materials_generated,
+        "recommended_angle": recommended_angle,
+        "concerns": concerns or [],
+        "ai_summary": ai_summary,
+        "ai_risk_flags": ai_risk_flags or [],
+        "state": "new",
+        "application_status": "unreviewed",
+        "rate": "EUR 800/day",
     }

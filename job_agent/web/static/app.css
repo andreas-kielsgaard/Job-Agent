@@ -114,6 +114,10 @@ a:hover {
   align-items: center;
 }
 
+.row h3 {
+  margin: 0;
+}
+
 .stat {
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -217,6 +221,70 @@ td {
   background: #eef2f6;
   font-size: 12px;
   font-weight: 700;
+}
+
+.badge-row {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin: 8px 0;
+}
+
+.triage-list {
+  display: grid;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.triage-card {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) minmax(160px, 210px);
+  gap: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 14px;
+  background: #fbfcfd;
+}
+
+.triage-select {
+  padding-top: 4px;
+}
+
+.triage-select input {
+  width: auto;
+}
+
+.triage-main p {
+  margin: 7px 0;
+}
+
+.triage-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  color: var(--muted);
+}
+
+.triage-actions {
+  display: grid;
+  gap: 8px;
+  align-content: start;
+}
+
+.triage-actions .button,
+.triage-actions button {
+  width: 100%;
+  text-align: center;
+}
+
+@media (max-width: 760px) {
+  .triage-card {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .triage-actions {
+    grid-column: 1 / -1;
+  }
 }
 
 .badge.strong {

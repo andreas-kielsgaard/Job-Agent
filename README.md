@@ -76,7 +76,7 @@ There are two separate Claude modes:
 
 If the key is missing or a call fails, deterministic search still completes and the run records a clear AI status or fallback note.
 
-Daily runs default to search/classify/score/highlight only. This keeps normal morning runs faster and cheaper. Generate materials manually from the run overview for selected jobs, or from an individual job detail page when a role is worth pursuing. Check “Use Claude” during selected generation if you want Claude-assisted application text. For postings you find outside configured sources, use Add posting to paste the role into the same scoring, AI-evaluation, and material-generation workflow.
+Daily runs default to search/classify/score/highlight only. This keeps normal morning runs faster and cheaper. The run detail page is the main triage view after a run: it sorts promising jobs first, shows AI summaries and risk flags when available, adds badges for relevance/material status, and includes direct posting/application links. Generate materials manually from the run overview for selected jobs, or from an individual job detail page when a role is worth pursuing. Check “Use Claude” during selected generation if you want Claude-assisted application text. For postings you find outside configured sources, use Add posting to paste the role into the same scoring, AI-evaluation, and material-generation workflow.
 
 ## Local Web UI
 
@@ -107,6 +107,7 @@ The web UI supports:
 - launching a daily run with options
 - overview dashboard with latest-run status, daily-run action, jobs found today, unreviewed jobs, and applications in the last 7 days
 - test runs that are hidden from normal run views and never mark jobs as seen
+- triaging a run through sorted job cards with concise reasons, risks, badges, material status, and direct external links
 - skipping automatic CV/application/form generation to save tokens, then generating materials manually from a job page
 - monitoring the active run through run events and logs
 - reviewing previous runs

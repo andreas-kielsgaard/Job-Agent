@@ -82,9 +82,13 @@
 <div class="panel">
   <h2>Filters</h2>
   <form method="get" class="grid">
-    <div><label>Category</label><select name="category"><option value="">All</option><option value="strong">strong</option><option value="exploratory">exploratory</option><option value="weak">weak</option></select></div>
-    <div><label>Application status</label><select name="app_status"><option value="">All</option><option value="unreviewed">unreviewed</option><option value="interesting">interesting</option><option value="not_interesting">not interesting</option><option value="applied">applied</option><option value="archived">archived</option></select></div>
+    <div><label>Category</label><select name="category"><option value="">All</option><option value="strong" {% if filters.category == "strong" %}selected{% endif %}>strong</option><option value="exploratory" {% if filters.category == "exploratory" %}selected{% endif %}>exploratory</option><option value="weak" {% if filters.category == "weak" %}selected{% endif %}>weak</option></select></div>
+    <div><label>Match group</label><select name="match_group"><option value="">All</option><option value="strong_exploratory" {% if filters.match_group == "strong_exploratory" %}selected{% endif %}>strong + exploratory</option></select></div>
+    <div><label>Application status</label><select name="app_status"><option value="">All</option><option value="unreviewed" {% if filters.app_status == "unreviewed" %}selected{% endif %}>unreviewed</option><option value="interesting" {% if filters.app_status == "interesting" %}selected{% endif %}>interesting</option><option value="not_interesting" {% if filters.app_status == "not_interesting" %}selected{% endif %}>not interesting</option><option value="applied" {% if filters.app_status == "applied" %}selected{% endif %}>applied</option><option value="archived" {% if filters.app_status == "archived" %}selected{% endif %}>archived</option></select></div>
     <div><label>Source contains</label><input name="source" value="{{ filters.source }}"></div>
+    <label class="check"><input type="checkbox" name="only_unreviewed" {% if filters.only_unreviewed %}checked{% endif %}> Only unreviewed</label>
+    <label class="check"><input type="checkbox" name="ai_prioritized" {% if filters.ai_prioritized %}checked{% endif %}> AI-prioritized</label>
+    <label class="check"><input type="checkbox" name="materials_missing" {% if filters.materials_missing %}checked{% endif %}> Materials missing</label>
     <div><button type="submit">Apply filters</button></div>
   </form>
 </div>
@@ -99,54 +103,65 @@
     <label class="check"><input type="checkbox" name="use_llm"> Use Claude</label>
     <button type="submit">Generate materials for selected</button>
   </form>
-  <table>
-    <thead><tr><th>Select</th><th>Role</th><th>Company</th><th>Location</th><th>Rate</th><th>Match</th><th>Status</th><th>Materials</th><th>Angle</th><th>Actions</th></tr></thead>
-    <tbody>
-      {% for pkg in packages %}
-      <tr>
-        <td><input form="batch-generate-form" type="checkbox" name="job_ids" value="{{ pkg.stable_id }}"></td>
-        <td><strong>{{ pkg.title }}</strong><br><span class="muted">{{ pkg.state }}</span></td>
-        <td>{{ pkg.company }}{% if pkg.recruiter %}<br><span class="muted">{{ pkg.recruiter }}</span>{% endif %}</td>
-        <td>{{ pkg.location }}<br><span class="muted">{{ pkg.remote }}</span></td>
-        <td>{{ pkg.rate }}</td>
-        <td><span class="badge {{ pkg.match_category }}">{{ pkg.match_score }}% {{ pkg.match_category }}</span></td>
-        <td><span class="badge {{ pkg.application_status }}">{{ pkg.application_status }}</span></td>
-        <td><span class="badge {{ pkg.material_status }}">{{ "materials generated" if pkg.material_status == "generated" else "materials missing" }}</span></td>
-        <td>
-          {{ pkg.recommended_angle }}
-          {% if pkg.ai_evaluation_status == "evaluated" %}
-          <p>
-            {% if pkg.ai_should_prioritize %}<span class="badge strong">Prioritize</span>{% endif %}
-            <span class="badge {{ pkg.ai_fit_confidence }}">{{ pkg.ai_fit_confidence }} AI confidence</span><br>
-            {{ pkg.ai_summary }}
-          </p>
-          {% if pkg.ai_risk_flags %}<p class="muted">AI risks: {{ pkg.ai_risk_flags | join("; ") }}</p>{% endif %}
-          {% elif pkg.ai_evaluation_status == "failed" %}
-          <p><span class="badge failed">AI failed</span> {{ pkg.ai_error }}</p>
-          {% elif pkg.ai_evaluation_status == "skipped" %}
-          <p><span class="badge waiting">AI skipped</span> {{ pkg.ai_error }}</p>
-          {% endif %}
-        </td>
-        <td>
-          <a href="/jobs/{{ pkg.stable_id }}?run_id={{ run.run_id }}">Open</a>
-          <form method="post" action="/api/jobs/{{ pkg.stable_id }}/generate">
-            <input type="hidden" name="return_to" value="/runs/{{ run.run_id }}">
-            <button class="light" type="submit">{{ "Regenerate" if pkg.material_status == "generated" else "Generate materials" }}</button>
-          </form>
-          <form method="post" action="/api/jobs/{{ pkg.stable_id }}/status">
-            <input type="hidden" name="return_to" value="/runs/{{ run.run_id }}">
-            <input type="hidden" name="status" value="not_interesting">
-            <button class="light" type="submit">Not interesting</button>
-          </form>
-          <form method="post" action="/api/jobs/{{ pkg.stable_id }}/status">
-            <input type="hidden" name="return_to" value="/runs/{{ run.run_id }}">
-            <input type="hidden" name="status" value="applied">
-            <button class="secondary" type="submit">Applied</button>
-          </form>
-        </td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
+  <div class="triage-list">
+    {% for pkg in packages %}
+    <article class="triage-card">
+      <div class="triage-select">
+        <input form="batch-generate-form" type="checkbox" name="job_ids" value="{{ pkg.stable_id }}">
+      </div>
+      <div class="triage-main">
+        <div class="row">
+          <h3>{{ pkg.title }}</h3>
+          <span class="badge {{ pkg.match_category }}">{{ pkg.match_score }}% {{ pkg.match_category }}</span>
+          <span class="badge {{ pkg.application_status }}">{{ pkg.application_status }}</span>
+        </div>
+        <p class="muted">
+          {{ pkg.company or "Company not listed" }}
+          {% if pkg.recruiter %} · {{ pkg.recruiter }}{% endif %}
+          {% if pkg.source %} · {{ pkg.source }}{% endif %}
+        </p>
+        <div class="badge-row">
+          {% for badge in pkg.triage_badges %}
+          <span class="badge {{ badge.class }}">{{ badge.label }}</span>
+          {% endfor %}
+        </div>
+        <div class="triage-facts">
+          <span><strong>Location:</strong> {{ pkg.location or "not listed" }}</span>
+          <span><strong>Remote:</strong> {{ pkg.remote or "not listed" }}</span>
+          <span><strong>Rate:</strong> {{ pkg.rate or "not listed" }}</span>
+          {% if pkg.workload %}<span><strong>Workload:</strong> {{ pkg.workload }}</span>{% endif %}
+        </div>
+        <p><strong>Why:</strong> {{ pkg.primary_summary }}</p>
+        <p class="muted"><strong>Risk:</strong> {{ pkg.primary_risk }}</p>
+        {% if pkg.ai_evaluation_status == "failed" %}
+        <p><span class="badge failed">AI failed</span> {{ pkg.ai_error }}</p>
+        {% elif pkg.ai_evaluation_status == "skipped" %}
+        <p><span class="badge waiting">AI skipped</span> {{ pkg.ai_error }}</p>
+        {% endif %}
+      </div>
+      <div class="triage-actions">
+        <a class="button light" href="/jobs/{{ pkg.stable_id }}?run_id={{ run.run_id }}">Open detail</a>
+        {% if pkg.source_url %}<a class="button light" href="{{ pkg.source_url }}" target="_blank" rel="noreferrer">Open posting</a>{% endif %}
+        {% if pkg.application_url and pkg.application_url != pkg.source_url %}<a class="button light" href="{{ pkg.application_url }}" target="_blank" rel="noreferrer">Apply</a>{% endif %}
+        <form method="post" action="/api/jobs/{{ pkg.stable_id }}/generate">
+          <input type="hidden" name="return_to" value="/runs/{{ run.run_id }}">
+          <button class="light" type="submit">{{ pkg.primary_action_label }}</button>
+        </form>
+        <form method="post" action="/api/jobs/{{ pkg.stable_id }}/status">
+          <input type="hidden" name="return_to" value="/runs/{{ run.run_id }}">
+          <input type="hidden" name="status" value="not_interesting">
+          <button class="light" type="submit">Not interesting</button>
+        </form>
+        <form method="post" action="/api/jobs/{{ pkg.stable_id }}/status">
+          <input type="hidden" name="return_to" value="/runs/{{ run.run_id }}">
+          <input type="hidden" name="status" value="applied">
+          <button class="secondary" type="submit">Applied</button>
+        </form>
+      </div>
+    </article>
+    {% else %}
+    <p>No packages match the current filters.</p>
+    {% endfor %}
+  </div>
 </div>
 {% endblock %}
