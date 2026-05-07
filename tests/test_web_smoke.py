@@ -26,7 +26,7 @@ def test_app_creation_health_and_basic_routes_use_temp_root(client: TestClient, 
     assert response.status_code == 200
     assert response.json()["status"] == "ok"
 
-    for path in ["/", "/runs", "/jobs", "/stats", "/setup"]:
+    for path in ["/", "/runs", "/jobs", "/stats", "/setup", "/postings/new"]:
         assert client.get(path).status_code == 200
 
     assert (project_root / "output" / "runs" / "runs.json").exists()
@@ -140,3 +140,23 @@ def test_batch_generate_route_redirects_with_counts(monkeypatch: pytest.MonkeyPa
 
     assert response.status_code == 303
     assert response.headers["location"] == "/runs/run-1?generated=2&failed=1"
+
+
+def test_manual_posting_route_creates_package_and_redirects(client: TestClient, project_root: Path) -> None:
+    response = client.post(
+        "/postings/new",
+        data={
+            "title": "SAP ABAP Consultant",
+            "source": "Recruiter Mail",
+            "company": "Client",
+            "url": "https://example.com/posting",
+            "description": "ABAP RAP CDS OData Gateway role",
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"].startswith("/jobs/")
+    assert list((project_root / "output").glob("*/*/index.json"))
+    manual_yaml = project_root / "jobs" / "manual" / "manual_jobs.yaml"
+    assert manual_yaml.exists()

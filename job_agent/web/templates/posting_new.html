@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="panel">
+  <h1>Add Posting</h1>
+  <p class="muted">Paste a role you found from email, LinkedIn, a recruiter portal, or a company site. URL fetching is not used here; the pasted text is the source of truth.</p>
+  <form method="post" action="/postings/new" class="grid">
+    <div><label>Title</label><input name="title" placeholder="SAP ABAP/RAP Consultant"></div>
+    <div><label>Source / recruiter</label><input name="source" placeholder="Manual Intake, recruiter name, LinkedIn"></div>
+    <div><label>Company / client</label><input name="company"></div>
+    <div><label>Posting URL</label><input name="url" placeholder="https://..."></div>
+    <div><label>Application URL</label><input name="application_url" placeholder="https://..."></div>
+    <div><label>Location</label><input name="location"></div>
+    <div><label>Remote / onsite</label><input name="remote" placeholder="Remote, hybrid, onsite"></div>
+    <div><label>Rate</label><input name="rate" placeholder="EUR 800/day"></div>
+    <div><label>Workload</label><input name="workload" placeholder="Full-time, 80%, part-time"></div>
+    <div><label>Posted date</label><input name="posted_date" placeholder="2026-05-07"></div>
+    <div style="grid-column: 1 / -1;"><label>Raw job description / pasted posting text</label><textarea name="description" placeholder="Paste the full posting text here."></textarea></div>
+    <label class="check"><input type="checkbox" name="ai_enhanced_search"> Run AI-enhanced evaluation after import</label>
+    <label class="check"><input type="checkbox" name="generate_materials"> Generate materials after import</label>
+    <label class="check"><input type="checkbox" name="use_llm"> Use Claude for material generation</label>
+    <div><button type="submit">Import posting</button></div>
+  </form>
+</div>
+{% endblock %}

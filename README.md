@@ -45,6 +45,10 @@ The first run uses `jobs/raw/sample_jobs.yaml`, which includes:
 - language-mismatch role
 - old/expired role
 
+## Source Strategy
+
+Site-specific source adapters are optional accelerators, not the core product. Manual posting intake is the fallback for one-off recruiter, LinkedIn, company, and portal postings. Build source adapters only for recurring high-value sources; they only need to produce candidate postings and raw text, not perfect field extraction. Avoid login-gated, captcha, or bypass workflows.
+
 ## Optional Claude Setup
 
 The agent works without Claude. Deterministic fallbacks are always available.
@@ -72,7 +76,7 @@ There are two separate Claude modes:
 
 If the key is missing or a call fails, deterministic search still completes and the run records a clear AI status or fallback note.
 
-Daily runs default to search/classify/score/highlight only. This keeps normal morning runs faster and cheaper. Generate materials manually from the run overview for selected jobs, or from an individual job detail page when a role is worth pursuing. Check “Use Claude” during selected generation if you want Claude-assisted application text.
+Daily runs default to search/classify/score/highlight only. This keeps normal morning runs faster and cheaper. Generate materials manually from the run overview for selected jobs, or from an individual job detail page when a role is worth pursuing. Check “Use Claude” during selected generation if you want Claude-assisted application text. For postings you find outside configured sources, use Add posting to paste the role into the same scoring, AI-evaluation, and material-generation workflow.
 
 ## Local Web UI
 
