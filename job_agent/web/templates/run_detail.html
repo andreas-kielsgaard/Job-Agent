@@ -24,6 +24,22 @@
 {% endif %}
 
 <div class="panel">
+  <h2>Interesting Finds</h2>
+  {% if match_highlights %}
+    {% for highlight in match_highlights %}
+    <p>
+      <span class="badge strong">{{ highlight.counts.score }}%</span>
+      <strong>{{ highlight.current_job }}</strong>
+      <span class="muted">{{ highlight.timestamp }}{% if highlight.current_source %} - {{ highlight.current_source }}{% endif %}</span><br>
+      {{ highlight.message }}
+    </p>
+    {% endfor %}
+  {% else %}
+    <p>No highlighted matches yet.</p>
+  {% endif %}
+</div>
+
+<div class="panel">
   <h2>Source Progress</h2>
   {% if source_progress %}
     {% if run.status in ["pending", "running"] %}

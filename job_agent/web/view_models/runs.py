@@ -43,12 +43,14 @@ def build_run_detail_view(
         packages = [pkg for pkg in packages if source.lower() in str(pkg.get("source_url", "")).lower()]
     all_events = store.read_events(run_id)
     source_warnings = [event for event in all_events if event.get("event_type") == "source_warning"]
+    match_highlights = [event for event in all_events if event.get("event_type") == "match_highlight"]
     source_progress = build_source_progress(all_events)
     return {
         "run": record,
         "packages": packages,
         "events": all_events[-12:],
         "source_warnings": source_warnings,
+        "match_highlights": match_highlights,
         "source_progress": source_progress["items"],
         "source_progress_summary": source_progress["summary"],
         "token_records": TokenUsageStore(root).list_for_run(run_id),

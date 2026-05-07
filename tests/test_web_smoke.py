@@ -88,10 +88,23 @@ def test_run_detail_renders_source_progress(client: TestClient, project_root: Pa
             counts={"source_index": 1, "source_count": 1, "jobs_found": 0, "warnings_count": 0},
         )
     )
+    store.append_event(
+        RunEvent(
+            run_id=run.run_id,
+            event_type="match_highlight",
+            message="Highlighted match: SAP ABAP Consultant - 90% - strong match category",
+            phase="scoring",
+            current_source="Local",
+            current_job="SAP ABAP Consultant",
+            counts={"score": 90, "source_index": 1, "source_count": 1, "highlight_count": 1},
+        )
+    )
 
     response = client.get(f"/runs/{run.run_id}")
 
     assert response.status_code == 200
     assert "Source Progress" in response.text
+    assert "Interesting Finds" in response.text
     assert "Local" in response.text
     assert "Checking source 1/1: Local" in response.text
+    assert "Highlighted match" in response.text

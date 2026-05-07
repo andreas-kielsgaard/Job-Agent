@@ -9,6 +9,7 @@ from .application_status_store import ApplicationStatusStore
 from .config import ROOT, load_profile
 from .digest import write_daily_digest, write_excluded_summary, write_job_package, write_placeholder_job_package
 from .generator import generate_materials
+from .highlights import build_match_highlights
 from .run_store import RunEvent, RunOptions, RunRecord, RunStore, utc_now
 from .scoring import score_job
 from .sources import SourceFetchResult, SourceProgressEvent, iter_source_results
@@ -165,6 +166,25 @@ def run_daily_agent(
                     and match.category != "excluded"
                 ) or options.include_weak
 
+                highlight_reasons = []
+                if match.category in {"strong", "exploratory"} or (should_include and match.category != "excluded"):
+                    highlight_reasons = build_match_highlights(job, match, profile)
+                if highlight_reasons:
+                    source_counts["highlighted_matches"] += 1
+                    emit(
+                        "match_highlight",
+                        _match_highlight_message(job.title, match.total_score, highlight_reasons),
+                        "scoring",
+                        current_source=source_fetch.source_name,
+                        current_job=job.title,
+                        counts={
+                            "score": match.total_score,
+                            "source_index": source_fetch.source_index,
+                            "source_count": source_fetch.source_count,
+                            "highlight_count": len(highlight_reasons),
+                        },
+                    )
+
                 source_counts["candidates_processed"] += 1
                 if state.status == "new":
                     source_counts["new_roles"] += 1
@@ -318,6 +338,7 @@ def _new_source_counts(source_fetch: SourceFetchResult) -> dict:
         "excluded_roles": 0,
         "included_roles": 0,
         "duplicates_skipped": 0,
+        "highlighted_matches": 0,
     }
 
 
@@ -326,5 +347,10 @@ def _source_processed_message(source_fetch: SourceFetchResult, counts: dict) -> 
     return (
         f"Processed source {source_fetch.source_index}/{source_fetch.source_count}: {source_fetch.source_name} - "
         f"{counts['jobs_found']} jobs, {changed_text} new/changed, "
-        f"{counts['strong_matches']} strong, {counts['exploratory_matches']} exploratory"
+        f"{counts['strong_matches']} strong, {counts['exploratory_matches']} exploratory, "
+        f"{counts['highlighted_matches']} highlights"
     )
+
+
+def _match_highlight_message(job_title: str, score: int, reasons: list[str]) -> str:
+    return f"Highlighted match: {job_title} - {score}% - {'; '.join(reasons[:4])}"
