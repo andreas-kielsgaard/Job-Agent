@@ -6,6 +6,7 @@ import pytest
 
 from job_agent.services.extraction_quality import ExtractionQuality, candidate_quality
 from job_agent.services.job_board_recipe_service import (
+    AcceptRecipe,
     JobBoardRecipe,
     ListingRecipe,
     RejectRecipe,
@@ -15,42 +16,8 @@ from job_agent.services.job_board_recipe_service import (
 )
 from job_agent.sources import extract_generic_jobs_from_html
 
-HTML = """
-<html><body>
-  <nav>
-    <a href="/services">Services</a>
-    <a href="/jobs">Job Search</a>
-  </nav>
-  <article class="job-card">
-    <a class="job-title" href="/jobs/sap-abap">SAP ABAP Consultant</a>
-    <span class="company">Client A</span>
-    <span class="location">Copenhagen</span>
-    <span class="rate">DKK 900/hour</span>
-    <time class="posted">2026-05-07</time>
-    <p class="summary">ABAP RAP CDS OData Gateway integration contract with hands-on delivery scope.</p>
-  </article>
-  <article class="job-card">
-    <a class="job-title" href="/jobs/sap-basis">SAP Basis Consultant</a>
-    <span class="company">Client B</span>
-    <span class="location">Remote</span>
-    <span class="rate">EUR 750/day</span>
-    <time class="posted">2026-05-06</time>
-    <p class="summary">Basis operations, upgrades, transport handling, and SAP landscape support.</p>
-  </article>
-  <article class="job-card">
-    <a class="job-title" href="/jobs/sap-abap">SAP ABAP Consultant</a>
-    <p class="summary">Duplicate card with the same URL.</p>
-  </article>
-  <article class="job-card">
-    <a class="job-title" href="/jobs/sap-abap#apply">Apply Now</a>
-    <p class="summary">CTA, not a job.</p>
-  </article>
-  <article class="job-card">
-    <a class="job-title" href="/services">Services</a>
-    <p class="summary">Category link, not a job.</p>
-  </article>
-</body></html>
-"""
+FIXTURE_PATH = Path("tests/fixtures/synthetic-job-board.html")
+HTML = FIXTURE_PATH.read_text(encoding="utf-8")
 
 
 def test_recipe_extracts_real_job_cards_and_dedupes_urls() -> None:
@@ -61,6 +28,13 @@ def test_recipe_extracts_real_job_cards_and_dedupes_urls() -> None:
     assert jobs[0].source_confidence == "recipe"
     assert jobs[0].freshness_confidence == "recipe"
     assert jobs[0].extraction_notes == ["Recipe-based extraction; verify details manually."]
+
+
+def test_recipe_separates_title_selector_from_generic_link_selector() -> None:
+    jobs = extract_jobs_with_recipe(HTML, "https://example.com", _recipe())
+
+    assert jobs[0].title == "SAP ABAP Consultant"
+    assert jobs[0].url == "https://example.com/jobs/sap-abap"
 
 
 def test_recipe_extracts_optional_location_rate_and_date_fields() -> None:
@@ -92,6 +66,36 @@ def test_loader_validates_missing_required_selectors(tmp_path: Path) -> None:
         load_job_board_recipe(recipe_path)
 
 
+def test_loader_validates_mode_and_positive_limits(tmp_path: Path) -> None:
+    recipe_path = tmp_path / "bad-mode.yaml"
+    recipe_path.write_text(
+        "source_name: Bad\n"
+        "mode: network_api\n"
+        "listing:\n"
+        "  card_selector: article\n"
+        "  title_selector: h2\n"
+        "  link_selector: a\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="mode"):
+        load_job_board_recipe(recipe_path)
+
+    recipe_path.write_text(
+        "source_name: Bad\n"
+        "listing:\n"
+        "  card_selector: article\n"
+        "  title_selector: h2\n"
+        "  link_selector: a\n"
+        "limits:\n"
+        "  max_cards: 0\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="max_cards"):
+        load_job_board_recipe(recipe_path)
+
+
 def test_empty_card_selector_returns_empty_quality_warning() -> None:
     quality = check_recipe_against_html(HTML, "https://example.com", _recipe(card_selector=".missing"))
 
@@ -119,6 +123,23 @@ def test_example_recipe_loads() -> None:
 
     assert recipe.source_name == "Synthetic Example Job Board"
     assert recipe.listing.card_selector == ".job-card"
+    assert recipe.mode == "static_html"
+    assert recipe.listing.title_selector == [".job-heading", ".job-title", "h2"]
+
+
+def test_cli_recipe_command_runs_against_local_fixture(capsys: pytest.CaptureFixture[str]) -> None:
+    from job_agent.cli import test_recipe
+
+    test_recipe(
+        "sources/recipes/examples/synthetic-job-board.yaml",
+        str(FIXTURE_PATH),
+        base_url="https://example.com/jobs",
+    )
+
+    output = capsys.readouterr().out
+    assert "Jobs extracted: 2" in output
+    assert "SAP ABAP Consultant" in output
+    assert "https://example.com/jobs/sap-abap" in output
 
 
 def _recipe(card_selector: str = ".job-card") -> JobBoardRecipe:
@@ -126,16 +147,17 @@ def _recipe(card_selector: str = ".job-card") -> JobBoardRecipe:
         source_name="Test Board",
         listing=ListingRecipe(
             card_selector=card_selector,
-            title_selector=".job-title",
-            link_selector=".job-title",
+            title_selector=[".job-heading", ".job-title", "h2"],
+            link_selector=[".job-link", ".job-title"],
             company_selector=".company",
             location_selector=".location",
             rate_selector=".rate",
             posted_date_selector=".posted",
             description_selector=".summary",
         ),
+        accept=AcceptRecipe(url_contains=["/jobs/"]),
         reject=RejectRecipe(
-            title_exact=["Apply Now", "Services"],
+            title_exact=["Apply Now", "Services", "Job Search"],
             title_contains=["Job Search"],
             url_contains=["/services", "/about", "/contact"],
         ),

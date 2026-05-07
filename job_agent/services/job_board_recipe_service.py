@@ -9,32 +9,41 @@ import yaml
 from bs4 import BeautifulSoup, Tag
 
 from job_agent.models import Job
-from job_agent.services.extraction_quality import ExtractionQuality, candidate_quality
+from job_agent.services.extraction_quality import ExtractionQuality, candidate_quality, title_quality
+
+SelectorValue = str | list[str]
+VALID_MODES = {"static_html", "rendered_html"}
 
 
 @dataclass
 class ListingRecipe:
     card_selector: str
-    title_selector: str
-    link_selector: str
-    company_selector: str = ""
-    location_selector: str = ""
-    remote_selector: str = ""
-    rate_selector: str = ""
-    workload_selector: str = ""
-    posted_date_selector: str = ""
-    description_selector: str = ""
+    title_selector: SelectorValue
+    link_selector: SelectorValue
+    company_selector: SelectorValue = ""
+    location_selector: SelectorValue = ""
+    remote_selector: SelectorValue = ""
+    rate_selector: SelectorValue = ""
+    workload_selector: SelectorValue = ""
+    posted_date_selector: SelectorValue = ""
+    description_selector: SelectorValue = ""
 
 
 @dataclass
 class DetailRecipe:
     follow: bool = False
-    description_selector: str = ""
-    title_selector: str = ""
-    location_selector: str = ""
-    rate_selector: str = ""
-    posted_date_selector: str = ""
+    description_selector: SelectorValue = ""
+    title_selector: SelectorValue = ""
+    location_selector: SelectorValue = ""
+    rate_selector: SelectorValue = ""
+    posted_date_selector: SelectorValue = ""
     max_detail_pages: int = 5
+
+
+@dataclass
+class AcceptRecipe:
+    title_contains: list[str] = field(default_factory=list)
+    url_contains: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -56,6 +65,8 @@ class JobBoardRecipe:
     source_name: str
     listing: ListingRecipe
     start_url: str = ""
+    mode: str = "static_html"
+    accept: AcceptRecipe = field(default_factory=AcceptRecipe)
     detail: DetailRecipe = field(default_factory=DetailRecipe)
     reject: RejectRecipe = field(default_factory=RejectRecipe)
     limits: LimitRecipe = field(default_factory=LimitRecipe)
@@ -76,19 +87,31 @@ def job_board_recipe_from_mapping(data: dict[str, Any], label: str = "recipe") -
     missing = [
         key
         for key in ["card_selector", "title_selector", "link_selector"]
-        if not str(listing_data.get(key, "")).strip()
+        if not _has_selector_value(listing_data.get(key, ""))
     ]
     if missing:
         raise ValueError(f"{label}: missing required listing selector(s): {', '.join(missing)}.")
 
-    return JobBoardRecipe(
+    mode = str(data.get("mode") or "static_html").strip()
+    if mode not in VALID_MODES:
+        raise ValueError(f"{label}: mode must be one of: {', '.join(sorted(VALID_MODES))}.")
+
+    recipe = JobBoardRecipe(
         source_name=str(data.get("source_name") or "Recipe source").strip(),
         start_url=str(data.get("start_url") or "").strip(),
+        mode=mode,
         listing=ListingRecipe(**_selector_fields(listing_data, ListingRecipe)),
+        accept=AcceptRecipe(**_list_fields(_mapping_section(data, "accept"), AcceptRecipe, "accept")),
         detail=DetailRecipe(**_selector_fields(_mapping_section(data, "detail"), DetailRecipe)),
-        reject=RejectRecipe(**_list_fields(_mapping_section(data, "reject"), RejectRecipe)),
+        reject=RejectRecipe(**_list_fields(_mapping_section(data, "reject"), RejectRecipe, "reject")),
         limits=LimitRecipe(**_int_fields(_mapping_section(data, "limits"), LimitRecipe)),
     )
+    _validate_positive_int(recipe.limits.max_cards, "limits.max_cards", label)
+    _validate_positive_int(recipe.detail.max_detail_pages, "detail.max_detail_pages", label)
+    _validate_positive_int(recipe.limits.min_title_length, "limits.min_title_length", label)
+    if recipe.limits.min_description_length < 0:
+        raise ValueError(f"{label}: limits.min_description_length must be zero or greater.")
+    return recipe
 
 
 def extract_jobs_with_recipe(
@@ -100,7 +123,7 @@ def extract_jobs_with_recipe(
     soup = BeautifulSoup(html, "html.parser")
     jobs: list[Job] = []
     seen_urls: set[str] = set()
-    cards = soup.select(recipe.listing.card_selector)[: recipe.limits.max_cards]
+    cards = soup.select(recipe.listing.card_selector)
 
     for card in cards:
         title = _select_text(card, recipe.listing.title_selector)
@@ -138,6 +161,8 @@ def extract_jobs_with_recipe(
             extraction_notes=["Recipe-based extraction; verify details manually."],
         )
         jobs.append(job)
+        if len(jobs) >= recipe.limits.max_cards:
+            break
     return jobs
 
 
@@ -160,7 +185,7 @@ def _selector_fields(data: dict[str, Any], cls: type) -> dict[str, Any]:
             elif field_info.default is not MISSING and isinstance(field_info.default, int):
                 values[key] = int(data[key])
             else:
-                values[key] = str(data[key] or "").strip()
+                values[key] = _selector_value(data[key])
     return values
 
 
@@ -171,13 +196,13 @@ def _mapping_section(data: dict[str, Any], section: str) -> dict[str, Any]:
     return value
 
 
-def _list_fields(data: dict[str, Any], cls: type) -> dict[str, Any]:
+def _list_fields(data: dict[str, Any], cls: type, label: str) -> dict[str, Any]:
     values = {}
     for key in cls.__dataclass_fields__:
         if key in data:
             value = data.get(key) or []
             if not isinstance(value, list):
-                raise ValueError(f"reject.{key} must be a list.")
+                raise ValueError(f"{label}.{key} must be a list.")
             values[key] = [str(item).strip() for item in value if str(item).strip()]
     return values
 
@@ -193,36 +218,73 @@ def _int_fields(data: dict[str, Any], cls: type) -> dict[str, Any]:
     return values
 
 
-def _select_text(root: Tag, selector: str) -> str:
-    if not selector:
-        return ""
-    match = root.select_one(selector)
-    return match.get_text(" ", strip=True) if match else ""
+def _select_text(root: Tag, selector: SelectorValue) -> str:
+    for css_selector in _selectors(selector):
+        match = root.select_one(css_selector)
+        text = match.get_text(" ", strip=True) if match else ""
+        if text:
+            return text
+    return ""
 
 
-def _select_href(root: Tag, selector: str) -> str:
-    if not selector:
-        return ""
-    match = root.select_one(selector)
-    if not match:
-        return ""
-    href = match.get("href")
-    if href:
-        return str(href).strip()
-    nested = match.select_one("[href]")
-    return str(nested.get("href", "")).strip() if nested else ""
+def _select_href(root: Tag, selector: SelectorValue) -> str:
+    for css_selector in _selectors(selector):
+        match = root.select_one(css_selector)
+        if not match:
+            continue
+        href = match.get("href")
+        if href:
+            return str(href).strip()
+        nested = match.select_one("[href]")
+        if nested and nested.get("href"):
+            return str(nested.get("href", "")).strip()
+    return ""
 
 
 def _should_reject(title: str, url: str, description: str, recipe: JobBoardRecipe) -> bool:
     normalized_title = " ".join(title.lower().split())
     if len(normalized_title) < recipe.limits.min_title_length:
         return True
+    if title_quality(title) == "generic":
+        return True
     if len(description.strip()) < recipe.limits.min_description_length:
+        return True
+    lowered_url = url.lower()
+    if recipe.accept.url_contains and not any(fragment.lower() in lowered_url for fragment in recipe.accept.url_contains):
+        return True
+    if recipe.accept.title_contains and not any(
+        fragment.lower() in normalized_title for fragment in recipe.accept.title_contains
+    ):
         return True
     title_exact = {" ".join(item.lower().split()) for item in recipe.reject.title_exact}
     if normalized_title in title_exact:
         return True
     if any(fragment.lower() in normalized_title for fragment in recipe.reject.title_contains):
         return True
-    lowered_url = url.lower()
     return any(fragment.lower() in lowered_url for fragment in recipe.reject.url_contains)
+
+
+def _selector_value(value: Any) -> SelectorValue:
+    if isinstance(value, list):
+        selectors = [str(item).strip() for item in value if str(item).strip()]
+        if not selectors:
+            return ""
+        return selectors
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
+def _selectors(value: SelectorValue) -> list[str]:
+    if isinstance(value, list):
+        return [selector for selector in value if selector]
+    return [value] if value else []
+
+
+def _has_selector_value(value: Any) -> bool:
+    return bool(_selectors(_selector_value(value)))
+
+
+def _validate_positive_int(value: int, field_name: str, label: str) -> None:
+    if value <= 0:
+        raise ValueError(f"{label}: {field_name} must be a positive integer.")

@@ -51,6 +51,11 @@ def main() -> None:
     recipe.add_argument("recipe_path")
     recipe.add_argument("url_or_html_path")
     recipe.add_argument("--base-url", default="", help="Base URL to resolve links when testing a local HTML file.")
+    recipe.add_argument(
+        "--rendered",
+        action="store_true",
+        help="Render the provided public URL with Playwright before running the recipe.",
+    )
 
     args = parser.parse_args()
     if args.command == "run-daily":
@@ -66,7 +71,7 @@ def main() -> None:
     if args.command == "check-board":
         check_board(args.url, render=not args.no_render)
     if args.command == "test-recipe":
-        test_recipe(args.recipe_path, args.url_or_html_path, base_url=args.base_url)
+        test_recipe(args.recipe_path, args.url_or_html_path, base_url=args.base_url, rendered=args.rendered)
 
 
 def run_daily(
@@ -134,10 +139,12 @@ def check_board(url: str, render: bool = True) -> None:
             print(f"  {candidate.url}")
 
 
-def test_recipe(recipe_path: str, url_or_html_path: str, base_url: str = "") -> None:
+def test_recipe(recipe_path: str, url_or_html_path: str, base_url: str = "", rendered: bool = False) -> None:
     try:
         recipe = load_job_board_recipe(Path(recipe_path))
-        html, resolved_base_url, warnings = _load_recipe_test_input(url_or_html_path, recipe.start_url, base_url)
+        html, resolved_base_url, warnings = _load_recipe_test_input(
+            url_or_html_path, recipe.start_url, base_url, rendered=rendered
+        )
     except ValueError as exc:
         print(exc)
         return
@@ -158,10 +165,17 @@ def test_recipe(recipe_path: str, url_or_html_path: str, base_url: str = "") -> 
         print(f"  {candidate.url}")
 
 
-def _load_recipe_test_input(url_or_html_path: str, recipe_start_url: str, base_url: str) -> tuple[str, str, list[str]]:
+def _load_recipe_test_input(
+    url_or_html_path: str,
+    recipe_start_url: str,
+    base_url: str,
+    rendered: bool = False,
+) -> tuple[str, str, list[str]]:
     value = url_or_html_path.strip()
     if value.startswith(("http://", "https://")):
         url = validate_public_url(value)
+        if rendered:
+            return _render_recipe_test_url(url)
         try:
             response = requests.get(
                 url,
@@ -173,6 +187,8 @@ def _load_recipe_test_input(url_or_html_path: str, recipe_start_url: str, base_u
             raise ValueError(f"Fetch failed: {exc}") from exc
         return response.text, response.url, []
 
+    if rendered:
+        raise ValueError("--rendered can only be used with a public http(s) URL.")
     resolved_base_url = base_url.strip() or recipe_start_url.strip()
     if not resolved_base_url:
         raise ValueError("Testing a local HTML file requires --base-url or recipe.start_url.")
@@ -180,6 +196,33 @@ def _load_recipe_test_input(url_or_html_path: str, recipe_start_url: str, base_u
     if not path.exists():
         raise ValueError(f"HTML fixture not found: {path}")
     return path.read_text(encoding="utf-8"), resolved_base_url, []
+
+
+def _render_recipe_test_url(url: str) -> tuple[str, str, list[str]]:
+    warnings = []
+    try:
+        from playwright.sync_api import Error as PlaywrightError
+        from playwright.sync_api import sync_playwright
+    except ModuleNotFoundError as exc:
+        raise ValueError(
+            "Playwright is not installed. Install requirements-playwright.txt and Chromium to use --rendered."
+        ) from exc
+
+    try:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            try:
+                page = browser.new_page()
+                page.goto(url, wait_until="domcontentloaded", timeout=15_000)
+                try:
+                    page.wait_for_load_state("networkidle", timeout=10_000)
+                except PlaywrightError:
+                    warnings.append("Rendered page did not become network-idle before the polite timeout.")
+                return page.content(), page.url, warnings
+            finally:
+                browser.close()
+    except PlaywrightError as exc:
+        raise ValueError(f"Playwright render failed: {exc}") from exc
 
 
 if __name__ == "__main__":
