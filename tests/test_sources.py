@@ -10,6 +10,7 @@ from job_agent.sources import (
     LocalYamlAdapter,
     SourceAdapter,
     UnsupportedSourceAdapter,
+    iter_source_results,
     load_jobs_from_sources,
 )
 
@@ -100,6 +101,38 @@ def test_load_jobs_from_sources_emits_started_and_completed_events(project_root:
     assert events[0].source_count == 1
     assert events[1].jobs_found == 1
     assert events[1].warnings_count == 0
+
+
+def test_iter_source_results_yields_one_result_per_enabled_source_in_order(project_root: Path) -> None:
+    (project_root / "sources" / "recruiting-sites.yaml").write_text(
+        "sources:\n"
+        "  - name: First\n"
+        "    type: local_yaml\n"
+        "    path: jobs/raw/first.yaml\n"
+        "  - name: Disabled\n"
+        "    type: local_yaml\n"
+        "    path: jobs/raw/disabled.yaml\n"
+        "    enabled: false\n"
+        "  - name: Second\n"
+        "    type: local_yaml\n"
+        "    path: jobs/raw/second.yaml\n",
+        encoding="utf-8",
+    )
+    (project_root / "jobs" / "raw" / "first.yaml").write_text(
+        "jobs:\n  - title: SAP ABAP Consultant\n    url: https://example.com/first\n",
+        encoding="utf-8",
+    )
+    (project_root / "jobs" / "raw" / "second.yaml").write_text(
+        "jobs:\n  - title: SAP RAP Consultant\n    url: https://example.com/second\n",
+        encoding="utf-8",
+    )
+
+    results = list(iter_source_results(project_root))
+
+    assert [result.source_name for result in results] == ["First", "Second"]
+    assert [result.source_index for result in results] == [1, 2]
+    assert all(result.source_count == 2 for result in results)
+    assert [len(result.result.jobs) for result in results] == [1, 1]
 
 
 def test_load_jobs_from_sources_emits_warning_without_crashing(project_root: Path) -> None:

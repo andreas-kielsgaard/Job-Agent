@@ -45,6 +45,45 @@ def test_run_daily_agent_records_source_progress_events(local_yaml_source_projec
     assert source_completed["counts"]["jobs_found"] == 1
 
 
+def test_run_daily_agent_scores_each_source_before_next_source_starts(template_project: Path) -> None:
+    _write_two_source_project(template_project)
+
+    result = run_daily_agent(RunOptions(include_seen=True, generate_materials=False), root=template_project)
+
+    events = RunStore(template_project).read_events(result.record.run_id)
+    event_types = [event["event_type"] for event in events]
+    first_score_index = event_types.index("job_scored")
+    second_source_started_index = next(
+        index
+        for index, event in enumerate(events)
+        if event["event_type"] == "source_started" and event["current_source"] == "Second Source"
+    )
+    source_processed = [event for event in events if event["event_type"] == "source_processed"]
+
+    assert first_score_index < second_source_started_index
+    assert len(source_processed) == 2
+    assert source_processed[0]["counts"]["jobs_found"] == 1
+    assert source_processed[0]["counts"]["candidates_processed"] == 1
+    assert result.record.total_loaded == 2
+
+
+def test_run_daily_agent_skips_duplicate_jobs_across_sources(template_project: Path) -> None:
+    _write_two_source_project(template_project, duplicate=True)
+
+    result = run_daily_agent(RunOptions(include_seen=True, generate_materials=False), root=template_project)
+
+    events = RunStore(template_project).read_events(result.record.run_id)
+    duplicate_events = [event for event in events if event["event_type"] == "job_duplicate_skipped"]
+    source_processed = [event for event in events if event["event_type"] == "source_processed"]
+
+    assert result.record.total_loaded == 2
+    assert result.record.new_roles == 1
+    assert len(result.digest_items) == 1
+    assert len(list((template_project / "output").glob("*/*/index.json"))) == 1
+    assert duplicate_events
+    assert source_processed[-1]["counts"]["duplicates_skipped"] == 1
+
+
 def test_mark_seen_and_test_run_seen_rules(local_yaml_source_project: Path) -> None:
     run_daily_agent(
         RunOptions(include_seen=True, mark_seen=True, generate_materials=False), root=local_yaml_source_project
@@ -104,3 +143,44 @@ def test_run_failure_persists_status_message_and_event(local_yaml_source_project
     events = RunStore(local_yaml_source_project).read_events(failed.run_id)
     assert events[-1]["event_type"] == "run_failed"
     assert "failed" in Path(failed.run_log_path).read_text(encoding="utf-8").lower()
+
+
+def _write_two_source_project(root: Path, duplicate: bool = False) -> None:
+    first_url = "https://example.com/shared" if duplicate else "https://example.com/first"
+    second_url = "https://example.com/shared" if duplicate else "https://example.com/second"
+    first_source = "Shared Source" if duplicate else "First Source"
+    second_source = "Shared Source" if duplicate else "Second Source"
+    (root / "sources" / "recruiting-sites.yaml").write_text(
+        "sources:\n"
+        "  - name: First Source\n"
+        "    type: local_yaml\n"
+        "    path: jobs/raw/first.yaml\n"
+        "  - name: Second Source\n"
+        "    type: local_yaml\n"
+        "    path: jobs/raw/second.yaml\n",
+        encoding="utf-8",
+    )
+    (root / "jobs" / "raw" / "first.yaml").write_text(
+        "jobs:\n"
+        "  - title: SAP ABAP RAP Consultant\n"
+        "    company: Recruiter\n"
+        f"    source: {first_source}\n"
+        f"    url: {first_url}\n"
+        "    location: Copenhagen\n"
+        "    remote: Hybrid\n"
+        "    posted_date: 2026-05-06\n"
+        "    description: Strong ABAP RAP CDS OData Gateway S/4HANA contract role.\n",
+        encoding="utf-8",
+    )
+    (root / "jobs" / "raw" / "second.yaml").write_text(
+        "jobs:\n"
+        "  - title: SAP ABAP RAP Consultant\n"
+        "    company: Recruiter\n"
+        f"    source: {second_source}\n"
+        f"    url: {second_url}\n"
+        "    location: Copenhagen\n"
+        "    remote: Hybrid\n"
+        "    posted_date: 2026-05-06\n"
+        "    description: Strong ABAP RAP CDS OData Gateway S/4HANA contract role.\n",
+        encoding="utf-8",
+    )

@@ -33,6 +33,16 @@ class SourceProgressEvent:
 SourceProgressCallback = Callable[[SourceProgressEvent], None]
 
 
+@dataclass
+class SourceFetchResult:
+    source: dict
+    source_name: str
+    source_index: int
+    source_count: int
+    result: SourceRunResult
+    elapsed_time_seconds: float | None = None
+
+
 class SourceAdapter(ABC):
     def __init__(self, source: dict, root: Path = ROOT) -> None:
         self.source = source
@@ -143,6 +153,16 @@ def load_jobs_from_sources(
     progress_callback: SourceProgressCallback | None = None,
 ) -> SourceRunResult:
     result = SourceRunResult()
+    for source_result in iter_source_results(root, progress_callback=progress_callback):
+        result.jobs.extend(source_result.result.jobs)
+        result.warnings.extend(source_result.result.warnings)
+    return result
+
+
+def iter_source_results(
+    root: Path = ROOT,
+    progress_callback: SourceProgressCallback | None = None,
+):
     sources = load_sources(root)
     source_count = len(sources)
     for source_index, source in enumerate(sources, start=1):
@@ -168,7 +188,7 @@ def load_jobs_from_sources(
         except Exception as exc:
             elapsed = round(perf_counter() - started_at, 3)
             warning = SourceWarning(source_name, f"Source failed unexpectedly: {exc}", source_url)
-            result.warnings.append(warning)
+            source_result = SourceRunResult(warnings=[warning])
             _emit_source_progress(
                 progress_callback,
                 SourceProgressEvent(
@@ -183,9 +203,15 @@ def load_jobs_from_sources(
                     message=f"Source failed: {source_name} - {exc}",
                 ),
             )
+            yield SourceFetchResult(
+                source=source,
+                source_name=source_name,
+                source_index=source_index,
+                source_count=source_count,
+                result=source_result,
+                elapsed_time_seconds=elapsed,
+            )
             continue
-        result.jobs.extend(source_result.jobs)
-        result.warnings.extend(source_result.warnings)
         elapsed = round(perf_counter() - started_at, 3)
         for warning in source_result.warnings:
             _emit_source_progress(
@@ -220,7 +246,14 @@ def load_jobs_from_sources(
                 ),
             ),
         )
-    return result
+        yield SourceFetchResult(
+            source=source,
+            source_name=source_name,
+            source_index=source_index,
+            source_count=source_count,
+            result=source_result,
+            elapsed_time_seconds=elapsed,
+        )
 
 
 def _emit_source_progress(callback: SourceProgressCallback | None, event: SourceProgressEvent) -> None:
