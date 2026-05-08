@@ -13,6 +13,7 @@ from .services.job_board_recipe_service import (
     load_job_board_recipe,
     quality_from_recipe_result,
 )
+from .services.recipe_calibration_service import capture_recipe_calibration
 
 
 def main() -> None:
@@ -65,6 +66,15 @@ def main() -> None:
         action="store_true",
         help="Force static HTML mode even if the recipe uses mode: rendered_html.",
     )
+    calibrate = subparsers.add_parser(
+        "calibrate-recipe",
+        help="Capture one public page and report candidate regions for manual recipe calibration.",
+    )
+    calibrate.add_argument("url")
+    calibrate.add_argument("--recipe", default="", help="Optional recipe path to audit against the captured page.")
+    calibrate.add_argument("--rendered", action="store_true", help="Force Playwright-rendered capture mode.")
+    calibrate.add_argument("--static", action="store_true", help="Force static HTML capture mode.")
+    calibrate.add_argument("--max-candidates", type=int, default=30, help="Maximum candidate regions to report.")
 
     args = parser.parse_args()
     if args.command == "run-daily":
@@ -86,6 +96,14 @@ def main() -> None:
             base_url=args.base_url,
             rendered=args.rendered,
             static=args.static,
+        )
+    if args.command == "calibrate-recipe":
+        calibrate_recipe(
+            args.url,
+            recipe_path=args.recipe or None,
+            rendered=args.rendered,
+            static=args.static,
+            max_candidates=args.max_candidates,
         )
 
 
@@ -184,6 +202,37 @@ def test_recipe(
         missing = ", ".join(candidate.missing_fields) or "none"
         print(f"- {candidate.title} [{candidate.title_quality}] {candidate.description_length} chars; missing: {missing}")
         print(f"  {candidate.url}")
+
+
+def calibrate_recipe(
+    url: str,
+    recipe_path: str | None = None,
+    rendered: bool = False,
+    static: bool = False,
+    max_candidates: int = 30,
+) -> None:
+    try:
+        if rendered and static:
+            raise ValueError("Use either --rendered or --static, not both.")
+        rendered_mode = True if rendered else False if static else None
+        result = capture_recipe_calibration(
+            url,
+            recipe_path=recipe_path,
+            rendered=rendered_mode,
+            max_candidates=max_candidates,
+        )
+    except ValueError as exc:
+        print(exc)
+        return
+    print(f"Artifacts: {result.artifact_dir}")
+    print(f"Capture mode: {result.capture_mode}")
+    print(f"Candidate regions: {result.candidate_count}")
+    if recipe_path:
+        print(f"Recipe extracted jobs: {result.recipe_extracted_count}")
+        print(f"Card selector matches: {result.card_selector_match_count}")
+    for warning in result.warnings[:10]:
+        print(f"Warning: {warning}")
+    print(f"Summary: {result.summary_path}")
 
 
 def _run_recipe_test(

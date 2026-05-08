@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import MISSING, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -63,6 +64,20 @@ class LimitRecipe:
 
 
 @dataclass
+class PatternsRecipe:
+    title_regex: str = ""
+    job_id_regex: str = ""
+    location_regex: str = ""
+    remote_regex: str = ""
+    rate_regex: str = ""
+    workload_regex: str = ""
+    posted_date_regex: str = ""
+    start_date_regex: str = ""
+    language_regex: str = ""
+    work_type_regex: str = ""
+
+
+@dataclass
 class JobBoardRecipe:
     source_name: str
     listing: ListingRecipe
@@ -72,6 +87,7 @@ class JobBoardRecipe:
     detail: DetailRecipe = field(default_factory=DetailRecipe)
     reject: RejectRecipe = field(default_factory=RejectRecipe)
     limits: LimitRecipe = field(default_factory=LimitRecipe)
+    patterns: PatternsRecipe = field(default_factory=PatternsRecipe)
 
 
 @dataclass
@@ -115,6 +131,7 @@ def job_board_recipe_from_mapping(data: dict[str, Any], label: str = "recipe") -
         detail=DetailRecipe(**_selector_fields(_mapping_section(data, "detail"), DetailRecipe)),
         reject=RejectRecipe(**_list_fields(_mapping_section(data, "reject"), RejectRecipe, "reject")),
         limits=LimitRecipe(**_int_fields(_mapping_section(data, "limits"), LimitRecipe)),
+        patterns=PatternsRecipe(**_regex_fields(_mapping_section(data, "patterns"), PatternsRecipe, label)),
     )
     _validate_positive_int(recipe.limits.max_cards, "limits.max_cards", label)
     _validate_positive_int(recipe.detail.max_detail_pages, "detail.max_detail_pages", label)
@@ -146,6 +163,9 @@ def extract_jobs_with_recipe(
         if not description:
             description = raw_text
 
+        pattern_values = _extract_pattern_values(raw_text, recipe.patterns)
+        title = pattern_values.get("title") or title
+
         if not url or _should_reject(title, url, description, recipe):
             continue
         if url in seen_urls:
@@ -159,16 +179,23 @@ def extract_jobs_with_recipe(
             source=source_name or recipe.source_name,
             url=url,
             application_url=url,
-            location=_select_text(card, recipe.listing.location_selector) or "Not listed",
-            remote=_select_text(card, recipe.listing.remote_selector) or "Not listed",
-            rate=_select_text(card, recipe.listing.rate_selector) or "Not listed",
-            workload=_select_text(card, recipe.listing.workload_selector) or "Not listed",
-            posted_date=posted_date or "Not listed",
+            location=_select_text(card, recipe.listing.location_selector) or pattern_values.get("location") or "Not listed",
+            remote=_select_text(card, recipe.listing.remote_selector) or pattern_values.get("remote") or "Not listed",
+            rate=_select_text(card, recipe.listing.rate_selector) or pattern_values.get("rate") or "Not listed",
+            start_date=pattern_values.get("start_date") or "Not listed",
+            workload=(
+                _select_text(card, recipe.listing.workload_selector)
+                or pattern_values.get("workload")
+                or pattern_values.get("work_type")
+                or "Not listed"
+            ),
+            posted_date=posted_date or pattern_values.get("posted_date") or "Not listed",
+            languages=[pattern_values["language"]] if pattern_values.get("language") else [],
             description=description[:3000],
             raw_text=raw_text[:5000],
             source_confidence="recipe",
-            freshness_confidence="recipe" if posted_date else "unknown",
-            extraction_notes=["Recipe-based extraction; verify details manually."],
+            freshness_confidence="recipe" if posted_date or pattern_values.get("posted_date") else "unknown",
+            extraction_notes=_extraction_notes(pattern_values),
         )
         jobs.append(job)
         if len(jobs) >= recipe.limits.max_cards:
@@ -364,9 +391,24 @@ def _int_fields(data: dict[str, Any], cls: type) -> dict[str, Any]:
     return values
 
 
+def _regex_fields(data: dict[str, Any], cls: type, label: str) -> dict[str, Any]:
+    values = {}
+    for key in cls.__dataclass_fields__:
+        if key not in data:
+            continue
+        pattern = str(data.get(key) or "").strip()
+        if pattern:
+            try:
+                re.compile(pattern)
+            except re.error as exc:
+                raise ValueError(f"{label}: patterns.{key} is not a valid regex: {exc}") from exc
+        values[key] = pattern
+    return values
+
+
 def _select_text(root: Tag, selector: SelectorValue) -> str:
     for css_selector in _selectors(selector):
-        match = root.select_one(css_selector)
+        match = root if _matches_selector(root, css_selector) else root.select_one(css_selector)
         text = match.get_text(" ", strip=True) if match else ""
         if text:
             return text
@@ -375,7 +417,7 @@ def _select_text(root: Tag, selector: SelectorValue) -> str:
 
 def _select_href(root: Tag, selector: SelectorValue) -> str:
     for css_selector in _selectors(selector):
-        match = root.select_one(css_selector)
+        match = root if _matches_selector(root, css_selector) else root.select_one(css_selector)
         if not match:
             continue
         href = match.get("href")
@@ -385,6 +427,20 @@ def _select_href(root: Tag, selector: SelectorValue) -> str:
         if nested and nested.get("href"):
             return str(nested.get("href", "")).strip()
     return ""
+
+
+def _matches_selector(tag: Tag, selector: str) -> bool:
+    selector = selector.strip()
+    if selector == tag.name:
+        return True
+    if selector.startswith("."):
+        return selector[1:] in tag.get("class", [])
+    if selector.startswith("#"):
+        return str(tag.get("id", "")) == selector[1:]
+    if "." in selector and " " not in selector and ">" not in selector:
+        tag_name, class_name = selector.split(".", 1)
+        return tag.name == tag_name and class_name in tag.get("class", [])
+    return False
 
 
 def _should_reject(title: str, url: str, description: str, recipe: JobBoardRecipe) -> bool:
@@ -408,6 +464,54 @@ def _should_reject(title: str, url: str, description: str, recipe: JobBoardRecip
     if any(fragment.lower() in normalized_title for fragment in recipe.reject.title_contains):
         return True
     return any(fragment.lower() in lowered_url for fragment in recipe.reject.url_contains)
+
+
+def _extract_pattern_values(text: str, patterns: PatternsRecipe) -> dict[str, str]:
+    values: dict[str, str] = {}
+    pattern_map = {
+        "title": patterns.title_regex,
+        "job_id": patterns.job_id_regex,
+        "location": patterns.location_regex,
+        "remote": patterns.remote_regex,
+        "rate": patterns.rate_regex,
+        "workload": patterns.workload_regex,
+        "posted_date": patterns.posted_date_regex,
+        "start_date": patterns.start_date_regex,
+        "language": patterns.language_regex,
+        "work_type": patterns.work_type_regex,
+    }
+    for field_name, pattern in pattern_map.items():
+        if not pattern:
+            continue
+        match = re.search(pattern, text, flags=re.IGNORECASE | re.MULTILINE | re.DOTALL)
+        if not match:
+            continue
+        value = _regex_value(match, field_name)
+        if value:
+            values[field_name] = value
+    return values
+
+
+def _regex_value(match: re.Match[str], field_name: str) -> str:
+    groups = match.groupdict()
+    if groups.get(field_name):
+        return _clean_pattern_value(groups[field_name])
+    if match.groups():
+        return _clean_pattern_value(match.group(1))
+    return _clean_pattern_value(match.group(0))
+
+
+def _clean_pattern_value(value: str) -> str:
+    return re.sub(r"\s+", " ", value).strip(" :-\n\t")
+
+
+def _extraction_notes(pattern_values: dict[str, str]) -> list[str]:
+    notes = ["Recipe-based extraction; verify details manually."]
+    if pattern_values.get("job_id"):
+        notes.append(f"Recipe extracted job ID: {pattern_values['job_id']}")
+    if pattern_values.get("work_type"):
+        notes.append(f"Recipe extracted work type: {pattern_values['work_type']}")
+    return notes
 
 
 def _has_detail_selectors(recipe: JobBoardRecipe) -> bool:
