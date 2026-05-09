@@ -26,7 +26,7 @@ def test_app_creation_health_and_basic_routes_use_temp_root(client: TestClient, 
     assert response.status_code == 200
     assert response.json()["status"] == "ok"
 
-    for path in ["/", "/runs", "/jobs", "/stats", "/setup", "/postings/new", "/compatibility"]:
+    for path in ["/", "/runs", "/jobs", "/stats", "/setup", "/postings/new", "/compatibility", "/recipe-preview"]:
         assert client.get(path).status_code == 200
 
     assert (project_root / "output" / "runs" / "runs.json").exists()
@@ -203,3 +203,63 @@ def test_compatibility_route_renders_report(monkeypatch: pytest.MonkeyPatch, cli
     assert response.status_code == 200
     assert "manual intake recommended" in response.text
     assert "Normal HTML" in response.text
+
+
+def test_recipe_preview_route_renders_preview(monkeypatch: pytest.MonkeyPatch, client: TestClient) -> None:
+    from job_agent.services.recipe_preview_service import PreviewJob, RecipePreviewResult
+
+    def fake_preview(recipe_path, input_value, base_url, rendered, static, root):
+        assert recipe_path == "sources/recipes/experimental/eursap-jobs.yaml"
+        assert input_value == "output/recipe-calibration/page.html"
+        assert base_url == "https://eursap.eu/jobs"
+        assert rendered is False
+        assert static is True
+        return RecipePreviewResult(
+            recipe_source_name="Eursap Jobs (experimental)",
+            recipe_path=recipe_path,
+            recipe_status="experimental",
+            input_type="local artifact",
+            input_value=input_value,
+            base_url=base_url,
+            mode_used="local_fixture_html",
+            extracted_job_count=1,
+            useful_titles=1,
+            generic_labels=0,
+            unique_urls=1,
+            average_description_length=120,
+            jobs=[
+                PreviewJob(
+                    title="SAP Basis Consultant",
+                    url="https://eursap.eu/jobs/sap-basis-consultant-34235-remote",
+                    location="Remote Work",
+                    remote="Not listed",
+                    rate="Market Rate",
+                    workload="Contract",
+                    posted_date="Not listed",
+                    start_date="Sep 01, 2026",
+                    languages=["English"],
+                    description_preview="SAP Basis role preview.",
+                    extraction_notes=["Recipe extracted job ID: 34235"],
+                )
+            ],
+            warnings=[],
+        )
+
+    monkeypatch.setattr("job_agent.web.routers.recipe_preview.preview_recipe", fake_preview)
+
+    response = client.post(
+        "/recipe-preview",
+        data={
+            "recipe_path": "sources/recipes/experimental/eursap-jobs.yaml",
+            "input_path_or_url": "output/recipe-calibration/page.html",
+            "base_url": "https://eursap.eu/jobs",
+            "mode": "static",
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 200
+    assert "Eursap Jobs (experimental)" in response.text
+    assert "SAP Basis Consultant" in response.text
+    assert "Remote Work" in response.text
+    assert "Recipe extracted job ID: 34235" in response.text

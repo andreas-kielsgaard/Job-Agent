@@ -1,19 +1,13 @@
 from __future__ import annotations
 
 import argparse
-from pathlib import Path
+import sys
 
 from .run_service import run_daily_agent
 from .run_store import RunOptions
 from .services.job_board_check_service import check_job_board_compatibility
-from .services.job_board_recipe_service import (
-    RecipeExtractionResult,
-    extract_jobs_with_recipe,
-    extract_jobs_with_recipe_from_url,
-    load_job_board_recipe,
-    quality_from_recipe_result,
-)
 from .services.recipe_calibration_service import capture_recipe_calibration
+from .services.recipe_preview_service import RecipePreviewResult, preview_recipe
 
 
 def main() -> None:
@@ -180,28 +174,48 @@ def test_recipe(
     static: bool = False,
 ) -> None:
     try:
-        recipe = load_job_board_recipe(Path(recipe_path))
-        if rendered and static:
-            raise ValueError("Use either --rendered or --static, not both.")
-        result = _run_recipe_test(recipe, url_or_html_path, base_url=base_url, rendered=rendered, static=static)
+        preview = preview_recipe(recipe_path, url_or_html_path, base_url=base_url, rendered=rendered, static=static)
     except ValueError as exc:
         print(exc)
         return
-    quality = quality_from_recipe_result(result, recipe)
-    print(f"Recipe: {recipe.source_name}")
-    print(f"Input mode: {result.mode_used}")
-    print(f"Base URL: {result.base_url}")
-    print(f"Jobs extracted: {quality.candidate_count}")
-    print(f"Useful titles: {quality.useful_title_count}")
-    print(f"Generic labels: {quality.generic_title_count}")
-    print(f"Unique URLs: {quality.unique_url_count}")
-    print(f"Average description length: {quality.average_description_length}")
-    for warning in quality.warnings:
-        print(f"Warning: {warning}")
-    for candidate in quality.candidates[:10]:
-        missing = ", ".join(candidate.missing_fields) or "none"
-        print(f"- {candidate.title} [{candidate.title_quality}] {candidate.description_length} chars; missing: {missing}")
-        print(f"  {candidate.url}")
+    _print_recipe_preview(preview)
+
+
+def _print_recipe_preview(preview: RecipePreviewResult) -> None:
+    _safe_print(f"Recipe: {preview.recipe_source_name}")
+    _safe_print(f"Recipe path: {preview.recipe_path}")
+    _safe_print(f"Recipe status: {preview.recipe_status}")
+    _safe_print(f"Input type: {preview.input_type}")
+    _safe_print(f"Input mode: {preview.mode_used}")
+    _safe_print(f"Base URL: {preview.base_url}")
+    _safe_print(f"Jobs extracted: {preview.extracted_job_count}")
+    _safe_print(f"Useful titles: {preview.useful_titles}")
+    _safe_print(f"Generic labels: {preview.generic_labels}")
+    _safe_print(f"Unique URLs: {preview.unique_urls}")
+    _safe_print(f"Average description length: {preview.average_description_length}")
+    for warning in preview.warnings:
+        _safe_print(f"Warning: {warning}")
+    for index, job in enumerate(preview.jobs[:10], start=1):
+        languages = ", ".join(job.languages) or "Not listed"
+        notes = "; ".join(job.extraction_notes) or "none"
+        _safe_print("")
+        _safe_print(f"{index}. {job.title}")
+        _safe_print(f"   URL: {job.url}")
+        _safe_print(f"   Location: {job.location}")
+        _safe_print(f"   Remote/work arrangement: {job.remote}")
+        _safe_print(f"   Rate/pay: {job.rate}")
+        _safe_print(f"   Workload/work type: {job.workload}")
+        _safe_print(f"   Posted date: {job.posted_date}")
+        _safe_print(f"   Start date: {job.start_date}")
+        _safe_print(f"   Language: {languages}")
+        _safe_print(f"   Notes: {notes}")
+        if job.description_preview:
+            _safe_print(f"   Description: {job.description_preview}")
+
+
+def _safe_print(text: str = "") -> None:
+    encoding = sys.stdout.encoding or "utf-8"
+    print(str(text).encode(encoding, errors="replace").decode(encoding))
 
 
 def calibrate_recipe(
@@ -233,43 +247,6 @@ def calibrate_recipe(
     for warning in result.warnings[:10]:
         print(f"Warning: {warning}")
     print(f"Summary: {result.summary_path}")
-
-
-def _run_recipe_test(
-    recipe,
-    url_or_html_path: str,
-    base_url: str,
-    rendered: bool = False,
-    static: bool = False,
-) -> RecipeExtractionResult:
-    value = url_or_html_path.strip()
-    if value.startswith(("http://", "https://")):
-        forced_rendered = None
-        if rendered:
-            forced_rendered = True
-        elif static:
-            forced_rendered = False
-        return extract_jobs_with_recipe_from_url(value, recipe, rendered=forced_rendered)
-
-    if rendered:
-        raise ValueError("--rendered can only be used with a public http(s) URL.")
-    resolved_base_url = base_url.strip() or recipe.start_url.strip()
-    if not resolved_base_url:
-        raise ValueError("Testing a local HTML file requires --base-url or recipe.start_url.")
-    path = Path(value)
-    if not path.exists():
-        raise ValueError(f"HTML fixture not found: {path}")
-    warnings = []
-    if recipe.mode == "rendered_html":
-        warnings.append("Local fixture HTML ignores recipe mode: rendered_html.")
-    html = path.read_text(encoding="utf-8")
-    jobs = extract_jobs_with_recipe(html, base_url=resolved_base_url, recipe=recipe)
-    return RecipeExtractionResult(
-        jobs=jobs,
-        base_url=resolved_base_url,
-        mode_used="local_fixture_html",
-        warnings=warnings,
-    )
 
 
 if __name__ == "__main__":

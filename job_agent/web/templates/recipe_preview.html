@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Recipe Preview</h1>
+<div class="panel">
+  <p class="muted">Manually inspect what one experimental recipe extracts. This does not enable daily-run use or add the recipe to configured sources.</p>
+  <form method="post" action="/recipe-preview" class="grid">
+    <div>
+      <label>Recipe path</label>
+      <input name="recipe_path" value="{{ recipe_path or '' }}" placeholder="sources/recipes/experimental/eursap-jobs.yaml">
+    </div>
+    <div>
+      <label>Input path or public URL</label>
+      <input name="input_path_or_url" value="{{ input_path_or_url or '' }}" placeholder="output/recipe-calibration/.../page.html">
+    </div>
+    <div>
+      <label>Base URL for local HTML</label>
+      <input name="base_url" value="{{ base_url or '' }}" placeholder="https://example.com/jobs">
+    </div>
+    <div>
+      <label>Mode</label>
+      <select name="mode">
+        <option value="default" {% if mode == "default" %}selected{% endif %}>Use recipe default</option>
+        <option value="static" {% if mode == "static" %}selected{% endif %}>Force static</option>
+        <option value="rendered" {% if mode == "rendered" %}selected{% endif %}>Force rendered</option>
+      </select>
+    </div>
+    <div><button type="submit">Preview recipe</button></div>
+  </form>
+</div>
+
+{% if preview %}
+<div class="panel">
+  <div class="row">
+    <h2 style="margin-right:auto;">{{ preview.recipe_source_name }}</h2>
+    <span class="badge">{{ preview.recipe_status }}</span>
+  </div>
+  <p class="muted">{{ preview.recipe_path }}</p>
+  <div class="grid">
+    <div class="stat"><span>Input type</span><strong>{{ preview.input_type }}</strong></div>
+    <div class="stat"><span>Mode used</span><strong>{{ preview.mode_used }}</strong></div>
+    <div class="stat"><span>Jobs extracted</span><strong>{{ preview.extracted_job_count }}</strong></div>
+    <div class="stat"><span>Useful titles</span><strong>{{ preview.useful_titles }}</strong></div>
+    <div class="stat"><span>Generic labels</span><strong>{{ preview.generic_labels }}</strong></div>
+    <div class="stat"><span>Unique URLs</span><strong>{{ preview.unique_urls }}</strong></div>
+    <div class="stat"><span>Avg description length</span><strong>{{ preview.average_description_length }}</strong></div>
+  </div>
+  <p class="muted">Base URL: {{ preview.base_url }}</p>
+  {% if preview.warnings %}
+  <ul>
+    {% for warning in preview.warnings %}
+    <li>{{ warning }}</li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+</div>
+
+<div class="panel">
+  <h2>Extracted Jobs</h2>
+  {% if preview.jobs %}
+  <table>
+    <thead>
+      <tr>
+        <th>Title</th>
+        <th>Facts</th>
+        <th>Description</th>
+        <th>Notes</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for job in preview.jobs %}
+      <tr>
+        <td>
+          <strong>{{ job.title }}</strong><br>
+          {% if job.url %}<a href="{{ job.url }}" target="_blank" rel="noreferrer">{{ job.url }}</a>{% endif %}
+        </td>
+        <td>
+          <div>Location: {{ job.location }}</div>
+          <div>Remote: {{ job.remote }}</div>
+          <div>Rate: {{ job.rate }}</div>
+          <div>Workload: {{ job.workload }}</div>
+          <div>Posted: {{ job.posted_date }}</div>
+          <div>Start: {{ job.start_date }}</div>
+          <div>Language: {{ job.languages|join(", ") or "Not listed" }}</div>
+        </td>
+        <td>{{ job.description_preview }}</td>
+        <td>{{ job.extraction_notes|join("; ") }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">No jobs extracted.</p>
+  {% endif %}
+</div>
+{% endif %}
+{% endblock %}

@@ -9,7 +9,19 @@ from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
 
 from job_agent.web.dependencies import WEB_DIR
-from job_agent.web.routers import ai_edit, compatibility, dashboard, files, health, jobs, postings, runs, setup, stats
+from job_agent.web.routers import (
+    ai_edit,
+    compatibility,
+    dashboard,
+    files,
+    health,
+    jobs,
+    postings,
+    recipe_preview,
+    runs,
+    setup,
+    stats,
+)
 from job_agent.web.runtime import runtime
 
 
@@ -35,6 +47,7 @@ def create_app() -> FastAPI:
     app.include_router(jobs.router)
     app.include_router(postings.router)
     app.include_router(compatibility.router)
+    app.include_router(recipe_preview.router)
     app.include_router(setup.router)
     app.include_router(files.router)
     app.include_router(ai_edit.router)

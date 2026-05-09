@@ -255,6 +255,12 @@ def test_cli_recipe_command_runs_against_local_fixture(capsys: pytest.CaptureFix
     assert "Jobs extracted: 2" in output
     assert "SAP ABAP Consultant" in output
     assert "https://example.com/jobs/sap-abap" in output
+    assert "Location: Copenhagen" in output
+    assert "Remote/work arrangement: Not listed" in output
+    assert "Rate/pay: DKK 900/hour" in output
+    assert "Workload/work type: Not listed" in output
+    assert "Posted date: 2026-05-07" in output
+    assert "Description: ABAP RAP CDS OData Gateway integration contract with hands-on delivery scope." in output
 
 
 def test_url_extraction_uses_recipe_rendered_mode_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
