@@ -255,6 +255,32 @@ def test_source_url_matching_uses_matching_domain_and_path(project_root: Path) -
     assert source.stats.best_recent_match_url == "https://eursap.eu/jobs/sap-basis-consultant"
 
 
+def test_source_value_matching_prefers_stable_source_id(project_root: Path) -> None:
+    _write_package(
+        project_root,
+        "run-20260509",
+        "match",
+        {
+            "stable_id": "eursap-1",
+            "source_id": "eursap-jobs",
+            "run_id": "run-20260509",
+            "title": "SAP Basis Consultant",
+            "source": "Unexpected Source Name",
+            "source_url": "https://unrelated.example/jobs/sap-basis-consultant",
+            "match_score": 77,
+            "match_category": "exploratory",
+            "application_status": "unreviewed",
+        },
+    )
+
+    source = SourceRegistryService(project_root).get_source("eursap-jobs")
+
+    assert source is not None
+    assert source.stats.jobs_found_total == 1
+    assert source.stats.best_recent_match_title == "SAP Basis Consultant"
+    assert source.stats.value_status == "promising"
+
+
 def _write_package(project_root: Path, run_id: str, package_id: str, data: dict) -> None:
     package_dir = project_root / "output" / "2026-05-09" / f"{run_id}-{package_id}"
     package_dir.mkdir(parents=True, exist_ok=True)

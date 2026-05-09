@@ -33,6 +33,7 @@ class Job:
     recruiter: str = ""
     end_client: str = ""
     source: str = "Unknown"
+    source_id: str = ""
     url: str = ""
     application_url: str = ""
     location: str = "Not listed"

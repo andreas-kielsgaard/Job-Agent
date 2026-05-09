@@ -62,6 +62,7 @@ class LocalYamlAdapter(SourceAdapter):
         today = str(date.today())
         for item in data.get("jobs", []):
             item.setdefault("source", self.source.get("name", "Local YAML"))
+            item.setdefault("source_id", self.source.get("source_id", ""))
             item.setdefault("first_seen_date", today)
             item.setdefault("source_confidence", "high")
             item.setdefault("freshness_confidence", "explicit" if item.get("posted_date") else "unknown")
@@ -93,6 +94,7 @@ class GenericHtmlAdapter(SourceAdapter):
             response.text,
             base_url=url,
             source_name=source_name,
+            source_id=self.source.get("source_id", ""),
             max_results=self.source.get("max_results", 25),
         )
         if not jobs:
@@ -114,6 +116,38 @@ class WhitehallResourcesAdapter(GenericHtmlAdapter):
     The implementation currently uses generic link extraction, but keeping the
     adapter separate gives this source a natural place for selectors once tested.
     """
+
+
+class RecipeHtmlAdapter(SourceAdapter):
+    """Opt-in recipe-backed source adapter for configured daily-run sources."""
+
+    def fetch(self) -> SourceRunResult:
+        source_name = self.source.get("name", "Recipe HTML")
+        url = self.source.get("url", "")
+        recipe_path = self.source.get("recipe_path", "")
+        if not url:
+            return SourceRunResult(warnings=[SourceWarning(source_name, "Recipe source has no URL.")])
+        if not recipe_path:
+            return SourceRunResult(warnings=[SourceWarning(source_name, "Recipe source has no recipe_path.", url)])
+
+        try:
+            from .services.job_board_recipe_service import extract_jobs_with_recipe_from_url, load_job_board_recipe
+
+            recipe = load_job_board_recipe(self.root / recipe_path)
+            result = extract_jobs_with_recipe_from_url(url, recipe)
+        except (OSError, ValueError) as exc:
+            return SourceRunResult(warnings=[SourceWarning(source_name, f"Recipe extraction failed: {exc}", url)])
+
+        jobs = result.jobs[: _positive_int(self.source.get("max_results"), len(result.jobs))]
+        for job in jobs:
+            job.source = source_name
+            job.source_id = str(self.source.get("source_id") or "").strip()
+            if not job.url:
+                job.url = result.base_url
+            if not job.application_url:
+                job.application_url = job.url
+        warnings = [SourceWarning(source_name, warning, result.base_url) for warning in result.warnings]
+        return SourceRunResult(jobs=jobs, warnings=warnings)
 
 
 def load_sources(root: Path = ROOT) -> list[dict]:
@@ -239,6 +273,8 @@ def adapter_for_source(source: dict, root: Path = ROOT) -> SourceAdapter:
     name = source.get("name", "").lower()
     if source_type == "local_yaml":
         return LocalYamlAdapter(source, root)
+    if source_type == "recipe_html":
+        return RecipeHtmlAdapter(source, root)
     if "whitehall" in name:
         return WhitehallResourcesAdapter(source, root)
     if source_type in {"search_page", "generic_html"}:
@@ -266,6 +302,7 @@ def extract_generic_jobs_from_html(
     html: str,
     base_url: str,
     source_name: str,
+    source_id: str = "",
     max_results: int = 25,
 ) -> list[Job]:
     soup = BeautifulSoup(html, "html.parser")
@@ -286,6 +323,7 @@ def extract_generic_jobs_from_html(
             Job(
                 title=title,
                 source=source_name,
+                source_id=source_id,
                 url=href,
                 application_url=href,
                 description=raw_text[:3000],
@@ -296,3 +334,11 @@ def extract_generic_jobs_from_html(
             )
         )
     return jobs[:max_results]
+
+
+def _positive_int(value, default: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed > 0 else default

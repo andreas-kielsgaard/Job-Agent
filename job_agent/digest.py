@@ -162,6 +162,7 @@ def _package_index(
         "company": job.company,
         "recruiter": job.recruiter,
         "source": job.source,
+        "source_id": job.source_id,
         "location": job.location,
         "remote": job.remote,
         "rate": job.rate,

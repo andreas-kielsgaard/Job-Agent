@@ -242,6 +242,9 @@ def _stats_from_packages(packages: list[dict[str, Any]]) -> SourceStats:
 
 
 def _package_matches_source(package: dict[str, Any], entry: SourceRegistryEntry) -> bool:
+    package_source_id = str(package.get("source_id") or "").strip().lower()
+    if package_source_id and package_source_id == entry.id.lower():
+        return True
     package_source = str(package.get("source") or "").strip().lower()
     entry_name = entry.name.strip().lower()
     if package_source and package_source == entry_name:

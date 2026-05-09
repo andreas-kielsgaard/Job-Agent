@@ -44,6 +44,26 @@ Eursap and Whitehall are marked as live-calibrated experimental recipe sources b
 
 Recipe preview is the manual trust gate before any later source integration. A recipe-backed source can link to `/recipe-preview`, but this does not enable the source in daily runs.
 
+## Recipe-Backed Execution
+
+Daily runs now have an opt-in `recipe_html` source type in the existing `sources/recruiting-sites.yaml` execution config. This is a technical bridge only; no experimental recipe sources are enabled by default, and the source registry is still not the daily-run source of truth.
+
+Example shape:
+
+```yaml
+sources:
+  - name: Eursap Jobs
+    source_id: eursap-jobs
+    type: recipe_html
+    url: https://eursap.eu/jobs
+    recipe_path: sources/recipes/experimental/eursap-jobs.yaml
+    enabled: false
+```
+
+Use recipe preview and saved source health before manually enabling a recipe-backed source. When a `recipe_html` source is eventually enabled in `sources/recruiting-sites.yaml`, it loads the configured constrained YAML recipe, extracts jobs from the configured single URL, and returns normal jobs to the existing daily-run pipeline. It does not add pagination or broader site traversal.
+
+Recipe-backed jobs can carry `source_id` into package indexes. Future registry-to-execution work should use this stable id instead of relying on source names or URLs.
+
 ## Source Health
 
 Source health is stored separately at:
@@ -106,15 +126,14 @@ Value statuses are advisory:
 
 For experimental recipe sources that are not connected to daily runs, `no_data` is expected. They can have good extraction health from preview while still having no source value history.
 
-Matching is intentionally conservative. It uses exact source names where available, manual-intake labels for manual postings, and matching source URL domains/paths. Future recipe-backed daily-run integration should write a stable `source_id` into package indexes so value metrics no longer have to infer source identity.
+Matching is intentionally conservative. It uses stable `source_id` when package indexes provide it, then exact source names where available, manual-intake labels for manual postings, and matching source URL domains/paths. Older package indexes may still rely on inferred source identity.
 
 Source value does not enable a source and does not change daily-run behavior.
 
 ## Not Implemented Yet
 
-- Recipe-backed daily-run execution
+- Registry-to-daily-run enablement
 - Automatic recipe enabling
-- Stable `source_id` writing in package indexes for future recipe-backed daily runs
 - Recruiter/contact tracking
 - Pagination or broader site traversal
 - Application submission or form filling

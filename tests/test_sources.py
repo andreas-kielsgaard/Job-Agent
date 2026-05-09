@@ -1,13 +1,18 @@
 from __future__ import annotations
 
+from datetime import date
 from pathlib import Path
 
 import pytest
 import requests
 
+from job_agent.digest import write_placeholder_job_package
+from job_agent.io.json_store import read_json
+from job_agent.models import Job, MatchResult
 from job_agent.sources import (
     GenericHtmlAdapter,
     LocalYamlAdapter,
+    RecipeHtmlAdapter,
     SourceAdapter,
     UnsupportedSourceAdapter,
     iter_source_results,
@@ -16,9 +21,10 @@ from job_agent.sources import (
 
 
 class FakeResponse:
-    def __init__(self, text: str, error: Exception | None = None) -> None:
+    def __init__(self, text: str, error: Exception | None = None, url: str = "https://example.com/jobs") -> None:
         self.text = text
         self.error = error
+        self.url = url
 
     def raise_for_status(self) -> None:
         if self.error:
@@ -37,6 +43,20 @@ def test_local_yaml_adapter_loads_jobs(project_root: Path) -> None:
     assert len(result.jobs) == 1
     assert result.jobs[0].source == "Local"
     assert result.jobs[0].source_confidence == "high"
+
+
+def test_local_yaml_adapter_attaches_configured_source_id(project_root: Path) -> None:
+    path = project_root / "jobs" / "raw" / "sample_jobs.yaml"
+    path.write_text(
+        "jobs:\n  - title: SAP ABAP Consultant\n    company: Recruiter\n    url: https://example.com/job\n",
+        encoding="utf-8",
+    )
+
+    result = LocalYamlAdapter(
+        {"name": "Local", "source_id": "sample-jobs", "path": "jobs/raw/sample_jobs.yaml"}, project_root
+    ).fetch()
+
+    assert result.jobs[0].source_id == "sample-jobs"
 
 
 def test_generic_html_adapter_warns_when_no_links(monkeypatch: pytest.MonkeyPatch, project_root: Path) -> None:
@@ -61,6 +81,91 @@ def test_generic_html_adapter_extracts_plausible_job_links(monkeypatch: pytest.M
 
     assert len(result.jobs) == 2
     assert result.jobs[0].application_url.startswith("https://example.com/")
+
+
+def test_recipe_html_adapter_extracts_jobs_from_recipe(monkeypatch: pytest.MonkeyPatch, project_root: Path) -> None:
+    recipe_path = _write_recipe(project_root)
+    html = """
+    <article class="job-card">
+      <a class="job-link" href="/jobs/sap-abap">SAP ABAP Consultant</a>
+      <span class="location">Remote</span>
+      <p class="description">ABAP RAP CDS contract role.</p>
+    </article>
+    """
+    monkeypatch.setattr("requests.get", lambda *args, **kwargs: FakeResponse(html))
+
+    result = RecipeHtmlAdapter(
+        {
+            "name": "Recipe Source",
+            "source_id": "recipe-source",
+            "type": "recipe_html",
+            "url": "https://example.com/jobs",
+            "recipe_path": str(recipe_path.relative_to(project_root)),
+        },
+        project_root,
+    ).fetch()
+
+    assert not result.warnings
+    assert len(result.jobs) == 1
+    assert result.jobs[0].title == "SAP ABAP Consultant"
+    assert result.jobs[0].source == "Recipe Source"
+    assert result.jobs[0].source_id == "recipe-source"
+    assert result.jobs[0].url == "https://example.com/jobs/sap-abap"
+    assert result.jobs[0].location == "Remote"
+    assert result.jobs[0].source_confidence == "recipe"
+
+
+def test_recipe_html_adapter_returns_warning_for_invalid_recipe_path(project_root: Path) -> None:
+    result = RecipeHtmlAdapter(
+        {
+            "name": "Recipe Source",
+            "type": "recipe_html",
+            "url": "https://example.com/jobs",
+            "recipe_path": "sources/recipes/missing.yaml",
+        },
+        project_root,
+    ).fetch()
+
+    assert not result.jobs
+    assert len(result.warnings) == 1
+    assert "Recipe extraction failed" in result.warnings[0].message
+
+
+def test_disabled_recipe_html_source_is_not_loaded(project_root: Path) -> None:
+    recipe_path = _write_recipe(project_root)
+    (project_root / "sources" / "recruiting-sites.yaml").write_text(
+        "sources:\n"
+        "  - name: Disabled Recipe\n"
+        "    source_id: disabled-recipe\n"
+        "    type: recipe_html\n"
+        "    url: https://example.com/jobs\n"
+        f"    recipe_path: {recipe_path.relative_to(project_root).as_posix()}\n"
+        "    enabled: false\n",
+        encoding="utf-8",
+    )
+
+    result = load_jobs_from_sources(project_root)
+
+    assert not result.jobs
+    assert not result.warnings
+
+
+def test_recipe_html_package_index_includes_source_id(project_root: Path) -> None:
+    job = Job(
+        title="SAP ABAP Consultant",
+        source="Recipe Source",
+        source_id="recipe-source",
+        url="https://example.com/jobs/sap-abap",
+        description="ABAP RAP CDS contract role.",
+    )
+    match = MatchResult(total_score=82, category="strong")
+
+    paths = write_placeholder_job_package(job, match, date(2026, 5, 9), root=project_root)
+    index = read_json(Path(paths["index"]), {})
+
+    assert index["source"] == "Recipe Source"
+    assert index["source_id"] == "recipe-source"
+    assert index["source_url"] == "https://example.com/jobs/sap-abap"
 
 
 def test_generic_html_fetch_failure_becomes_warning(monkeypatch: pytest.MonkeyPatch, project_root: Path) -> None:
@@ -171,3 +276,23 @@ def test_load_jobs_from_sources_converts_unexpected_adapter_exception_to_failure
     assert len(result.warnings) == 1
     assert [event.event_type for event in events] == ["source_started", "source_failed"]
     assert "boom" in events[-1].message
+
+
+def _write_recipe(project_root: Path) -> Path:
+    recipe_path = project_root / "sources" / "recipes" / "test-recipe.yaml"
+    recipe_path.parent.mkdir(parents=True, exist_ok=True)
+    recipe_path.write_text(
+        "source_name: Test Recipe\n"
+        "mode: static_html\n"
+        "listing:\n"
+        "  card_selector: article.job-card\n"
+        "  title_selector: a.job-link\n"
+        "  link_selector: a.job-link\n"
+        "  location_selector: .location\n"
+        "  description_selector: .description\n"
+        "accept:\n"
+        "  url_contains:\n"
+        "    - /jobs/\n",
+        encoding="utf-8",
+    )
+    return recipe_path
