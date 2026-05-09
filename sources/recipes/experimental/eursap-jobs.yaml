@@ -1,0 +1,60 @@
+# Experimental only. Not enabled in daily runs and not production source support.
+source_name: Eursap Jobs (experimental)
+start_url: https://eursap.eu/jobs
+mode: static_html
+
+listing:
+  card_selector: a.looking__card
+  title_selector: a.looking__card
+  link_selector: a.looking__card
+
+accept:
+  url_contains:
+    - /jobs/
+
+detail:
+  follow: false
+  max_detail_pages: 5
+
+reject:
+  title_exact:
+    - Apply
+    - Apply now
+    - More info
+    - Services
+    - SAP Jobs
+    - SAP Talent
+    - Countries
+  title_contains:
+    - Upload SAP Job
+    - Improve my CV
+    - Promote my CV
+    - SAP Talent
+    - Hire Services
+    - Why Eursap
+    - Referral Scheme
+    - Register Your CV
+    - Promote your SAP Job
+  url_contains:
+    - /hire-sap-talent
+    - /services
+    - /about
+    - /contact
+    - /blog
+    - /referral-scheme
+    - /countries
+    - '#'
+
+patterns:
+  title_regex: "SAP JOB VACANCY:\\s*(?P<title>.+?)\\s+Job ID:"
+  job_id_regex: "Job ID:\\s*(?P<job_id>[A-Z0-9-]+)"
+  location_regex: "Location:\\s*(?P<location>.+?)\\s+Language:"
+  language_regex: "Language:\\s*(?P<language>.+?)\\s+Start Date:"
+  start_date_regex: "Start Date:\\s*(?P<start_date>.+?)\\s+Work Type:"
+  work_type_regex: "Work Type:\\s*(?P<work_type>.+?)\\s+Pay:"
+  rate_regex: "Pay:\\s*(?P<rate>.+)$"
+
+limits:
+  max_cards: 25
+  min_title_length: 8
+  min_description_length: 0
