@@ -41,6 +41,7 @@
 <div class="panel">
   <h2>Recipe Health</h2>
   {% if source.recipe_path %}
+  <p class="muted">Extraction health is based on manual recipe preview/test results. It says whether extraction appears to work; it does not enable this source.</p>
   <div class="grid">
     <div class="stat"><span>Status</span><strong>{{ source.health.health_status }}</strong></div>
     <div class="stat"><span>Last preview</span><strong>{{ source.health.last_preview_at or "Never" }}</strong></div>
@@ -67,18 +68,30 @@
 </div>
 
 <div class="panel">
-  <h2>Performance</h2>
+  <h2>Source Value</h2>
+  <p class="muted">Source value is based on saved job packages and review statuses. It is a historical usefulness signal, separate from extraction health.</p>
   <div class="grid">
+    <div class="stat"><span>Value status</span><strong>{{ source.stats.value_status }}</strong></div>
     <div class="stat"><span>Jobs found</span><strong>{{ source.stats.jobs_found_total }}</strong></div>
     <div class="stat"><span>Strong matches</span><strong>{{ source.stats.strong_matches }}</strong></div>
     <div class="stat"><span>Exploratory matches</span><strong>{{ source.stats.exploratory_matches }}</strong></div>
+    <div class="stat"><span>Weak/excluded</span><strong>{{ source.stats.weak_or_excluded_matches }}</strong></div>
     <div class="stat"><span>Applied</span><strong>{{ source.stats.applied_count }}</strong></div>
     <div class="stat"><span>Not interesting</span><strong>{{ source.stats.not_interesting_count }}</strong></div>
+    <div class="stat"><span>Unreviewed</span><strong>{{ source.stats.unreviewed_count }}</strong></div>
     <div class="stat"><span>Average score</span><strong>{{ source.stats.average_match_score }}</strong></div>
+    <div class="stat"><span>Best score</span><strong>{{ source.stats.best_match_score }}</strong></div>
   </div>
-  <p><strong>Best recent match:</strong> {{ source.stats.best_recent_match or "No historical package data yet." }}</p>
-  <p><strong>Last checked:</strong> {{ source.stats.last_checked or "Not tracked yet." }}</p>
-  <p><strong>Last successful extraction:</strong> {{ source.stats.last_successful_extraction or "Not tracked yet." }}</p>
+  <p><strong>Summary:</strong> {{ source.stats.value_summary }}</p>
+  <p><strong>Best recent match:</strong>
+    {% if source.stats.best_recent_match_url %}
+    <a href="{{ source.stats.best_recent_match_url }}" target="_blank" rel="noreferrer">{{ source.stats.best_recent_match_title }}</a>
+    {% else %}
+    {{ source.stats.best_recent_match_title or "No historical package data yet." }}
+    {% endif %}
+  </p>
+  <p><strong>Last seen run:</strong> {{ source.stats.last_run_id or "Not tracked yet." }}</p>
+  <p><strong>Last successful run:</strong> {{ source.stats.last_successful_run_id or "Not tracked yet." }}</p>
 </div>
 
 <div class="panel">

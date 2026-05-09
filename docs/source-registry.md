@@ -1,6 +1,6 @@
 # Source Registry
 
-The source registry is the first version of a separate Sources area in the app. It treats sources as places jobs can come from, with review status, recipe health, notes, and eventually source-specific performance.
+The source registry is the first version of a separate Sources area in the app. It treats sources as places jobs can come from, with review status, recipe health, notes, and source-specific value signals from saved packages.
 
 This is separate from Setup:
 
@@ -72,7 +72,7 @@ Health answers: "Does extraction appear to work?" It is based on the latest manu
 - average description length
 - warnings
 
-Health does not answer: "Is this source valuable?" Source performance is kept separate and may later use historical match/application outcomes.
+Health does not answer: "Is this source valuable?" Source value/performance is kept separate and uses historical match/application outcomes from saved package indexes.
 
 Health statuses are intentionally simple:
 
@@ -83,11 +83,38 @@ Health statuses are intentionally simple:
 
 Saving source health does not enable a source and does not change daily-run behavior.
 
+## Source Value
+
+Source value answers: "Has this source produced useful jobs?" It is derived from package indexes already written under `output/` plus application review status where available.
+
+The Sources area shows:
+
+- total saved jobs matched to the source
+- strong, exploratory, weak, and excluded match counts
+- applied, not interesting, and unreviewed counts
+- average and best match score
+- best recent match title/link when available
+- last seen run id
+- a simple value status
+
+Value statuses are advisory:
+
+- `no_data`: no saved packages matched this source yet
+- `promising`: at least one strong/exploratory match, or a clearly high score
+- `mixed`: jobs exist, but the signal is not clearly strong or clearly low value
+- `low_value`: jobs exist, but they are mostly weak, excluded, or marked not interesting
+
+For experimental recipe sources that are not connected to daily runs, `no_data` is expected. They can have good extraction health from preview while still having no source value history.
+
+Matching is intentionally conservative. It uses exact source names where available, manual-intake labels for manual postings, and matching source URL domains/paths. Future recipe-backed daily-run integration should write a stable `source_id` into package indexes so value metrics no longer have to infer source identity.
+
+Source value does not enable a source and does not change daily-run behavior.
+
 ## Not Implemented Yet
 
 - Recipe-backed daily-run execution
 - Automatic recipe enabling
-- Historical source-value scoring beyond rough package-derived placeholders
+- Stable `source_id` writing in package indexes for future recipe-backed daily runs
 - Recruiter/contact tracking
 - Pagination or broader site traversal
 - Application submission or form filling

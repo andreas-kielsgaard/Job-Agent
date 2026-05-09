@@ -281,6 +281,8 @@ def test_source_overview_and_detail_routes_render(client: TestClient) -> None:
     overview = client.get("/sources")
 
     assert overview.status_code == 200
+    assert "Extraction health" in overview.text
+    assert "Source value" in overview.text
     assert "Manual Intake" in overview.text
     assert "Eursap Jobs" in overview.text
     assert "Whitehall Resources SAP Contract Jobs" in overview.text
@@ -291,6 +293,9 @@ def test_source_overview_and_detail_routes_render(client: TestClient) -> None:
     assert detail.status_code == 200
     assert "sources/recipes/experimental/eursap-jobs.yaml" in detail.text
     assert "live-calibrated experimental" in detail.text
+    assert "Extraction health is based on manual recipe preview/test results" in detail.text
+    assert "Source value is based on saved job packages and review statuses" in detail.text
+    assert "No run data yet" in detail.text
     assert "/recipe-preview" in detail.text
     assert "source_id=eursap-jobs" in detail.text
     assert "Contact tracking not implemented yet" in detail.text
@@ -330,3 +335,36 @@ def test_source_routes_render_saved_health(client: TestClient, project_root: Pat
     assert "Recipe Health" in detail.text
     assert "output/recipe-calibration/eursap/page.html" in detail.text
     assert "9 jobs extracted, 9 useful titles, no generic labels." in detail.text
+
+
+def test_source_routes_render_value_metrics(client: TestClient, project_root: Path) -> None:
+    import json
+
+    package_dir = project_root / "output" / "2026-05-09" / "run-1-pkg"
+    package_dir.mkdir(parents=True, exist_ok=True)
+    (package_dir / "index.json").write_text(
+        json.dumps(
+            {
+                "stable_id": "job-1",
+                "run_id": "run-1",
+                "title": "SAP ABAP Consultant",
+                "source": "Sample Jobs",
+                "source_url": "https://example.com/job-1",
+                "match_score": 84,
+                "match_category": "strong",
+                "application_status": "applied",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    overview = client.get("/sources")
+    detail = client.get("/sources/sample-jobs")
+
+    assert overview.status_code == 200
+    assert "promising" in overview.text
+    assert "Avg/best score: 84/84" in overview.text
+    assert detail.status_code == 200
+    assert "Value status" in detail.text
+    assert "SAP ABAP Consultant" in detail.text
+    assert "Last seen run" in detail.text

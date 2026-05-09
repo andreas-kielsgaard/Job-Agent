@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from statistics import mean
 from typing import Any
+from urllib.parse import urlparse
 
 from job_agent.config import ROOT
 from job_agent.io.yaml_store import read_yaml, write_yaml
@@ -20,12 +21,24 @@ class SourceStats:
     jobs_found_total: int = 0
     strong_matches: int = 0
     exploratory_matches: int = 0
+    weak_or_excluded_matches: int = 0
     applied_count: int = 0
     not_interesting_count: int = 0
+    unreviewed_count: int = 0
     average_match_score: int = 0
-    best_recent_match: str = ""
+    best_match_score: int = 0
+    best_recent_match_title: str = ""
+    best_recent_match_url: str = ""
     last_checked: str = ""
+    last_run_id: str = ""
     last_successful_extraction: str = ""
+    last_successful_run_id: str = ""
+    value_status: str = "no_data"
+    value_summary: str = "No run data yet."
+
+    @property
+    def best_recent_match(self) -> str:
+        return self.best_recent_match_title
 
 
 @dataclass
@@ -180,29 +193,135 @@ def _default_sources() -> list[dict[str, Any]]:
 def _stats_from_packages(packages: list[dict[str, Any]]) -> SourceStats:
     scores = [int(package.get("match_score", 0)) for package in packages if package.get("match_score") is not None]
     sorted_packages = sorted(packages, key=lambda item: (item.get("run_id", ""), item.get("match_score", 0)), reverse=True)
-    last_checked = sorted_packages[0].get("run_id", "") if sorted_packages else ""
+    last_run_id = str(sorted_packages[0].get("run_id", "")) if sorted_packages else ""
     best = max(packages, key=lambda item: int(item.get("match_score", 0)), default={})
+    strong_matches = sum(1 for package in packages if package.get("match_category") == "strong")
+    exploratory_matches = sum(1 for package in packages if package.get("match_category") == "exploratory")
+    weak_or_excluded_matches = sum(
+        1 for package in packages if package.get("match_category") in {"weak", "excluded"}
+    )
+    applied_count = sum(1 for package in packages if package.get("application_status") == "applied")
+    not_interesting_count = sum(1 for package in packages if package.get("application_status") == "not_interesting")
+    unreviewed_count = sum(1 for package in packages if package.get("application_status", "unreviewed") == "unreviewed")
+    average_score = round(mean(scores)) if scores else 0
+    best_score = int(best.get("match_score", 0)) if best else 0
+    value_status = _derive_value_status(
+        jobs_found_total=len(packages),
+        strong_matches=strong_matches,
+        exploratory_matches=exploratory_matches,
+        not_interesting_count=not_interesting_count,
+        average_match_score=average_score,
+        best_match_score=best_score,
+    )
     return SourceStats(
         jobs_found_total=len(packages),
-        strong_matches=sum(1 for package in packages if package.get("match_category") == "strong"),
-        exploratory_matches=sum(1 for package in packages if package.get("match_category") == "exploratory"),
-        applied_count=sum(1 for package in packages if package.get("application_status") == "applied"),
-        not_interesting_count=sum(1 for package in packages if package.get("application_status") == "not_interesting"),
-        average_match_score=round(mean(scores)) if scores else 0,
-        best_recent_match=str(best.get("title") or ""),
-        last_checked=str(last_checked),
-        last_successful_extraction=str(last_checked) if packages else "",
+        strong_matches=strong_matches,
+        exploratory_matches=exploratory_matches,
+        weak_or_excluded_matches=weak_or_excluded_matches,
+        applied_count=applied_count,
+        not_interesting_count=not_interesting_count,
+        unreviewed_count=unreviewed_count,
+        average_match_score=average_score,
+        best_match_score=best_score,
+        best_recent_match_title=str(best.get("title") or ""),
+        best_recent_match_url=str(best.get("source_url") or best.get("url") or ""),
+        last_checked=last_run_id,
+        last_run_id=last_run_id,
+        last_successful_extraction=last_run_id if packages else "",
+        last_successful_run_id=last_run_id if packages else "",
+        value_status=value_status,
+        value_summary=_value_summary(
+            value_status,
+            jobs_found_total=len(packages),
+            strong_matches=strong_matches,
+            exploratory_matches=exploratory_matches,
+            not_interesting_count=not_interesting_count,
+            average_match_score=average_score,
+        ),
     )
 
 
 def _package_matches_source(package: dict[str, Any], entry: SourceRegistryEntry) -> bool:
     package_source = str(package.get("source") or "").strip().lower()
-    if package_source and package_source == entry.name.lower():
+    entry_name = entry.name.strip().lower()
+    if package_source and package_source == entry_name:
         return True
-    if entry.id == "manual-intake" and package_source in {"manual intake", "manual", "recruiter mail"}:
+    if entry.id == "manual-intake" and (
+        package_source in {"manual intake", "manual", "manual posting", "recruiter mail", "recruiter email"}
+        or package_source.startswith("manual ")
+    ):
         return True
-    source_url = str(package.get("source_url") or package.get("url") or "").lower()
-    return bool(entry.url and entry.url.lower().rstrip("/") in source_url)
+    if not entry.url:
+        return False
+    package_url = str(package.get("source_url") or package.get("url") or "")
+    return _same_domain_or_url(entry.url, package_url)
+
+
+def _derive_value_status(
+    *,
+    jobs_found_total: int,
+    strong_matches: int,
+    exploratory_matches: int,
+    not_interesting_count: int,
+    average_match_score: int,
+    best_match_score: int,
+) -> str:
+    if jobs_found_total == 0:
+        return "no_data"
+    if not_interesting_count >= max(1, jobs_found_total - 1):
+        return "low_value"
+    if strong_matches or exploratory_matches or average_match_score >= 65 or best_match_score >= 75:
+        return "promising"
+    return "mixed"
+
+
+def _value_summary(
+    value_status: str,
+    *,
+    jobs_found_total: int,
+    strong_matches: int,
+    exploratory_matches: int,
+    not_interesting_count: int,
+    average_match_score: int,
+) -> str:
+    if value_status == "no_data":
+        return "No run data yet."
+    if value_status == "promising":
+        return (
+            f"{jobs_found_total} saved jobs with {strong_matches} strong and "
+            f"{exploratory_matches} exploratory matches."
+        )
+    if value_status == "low_value":
+        return f"{jobs_found_total} saved jobs, mostly low-value or not interesting."
+    return (
+        f"{jobs_found_total} saved jobs with average score {average_match_score}; "
+        f"{not_interesting_count} marked not interesting."
+    )
+
+
+def _same_domain_or_url(source_url: str, package_url: str) -> bool:
+    source = _parsed_url(source_url)
+    package = _parsed_url(package_url)
+    if not source or not package or not source.netloc or not package.netloc:
+        return False
+    source_host = _normalize_host(source.netloc)
+    package_host = _normalize_host(package.netloc)
+    if source_host != package_host:
+        return False
+    source_path = source.path.rstrip("/")
+    package_path = package.path.rstrip("/")
+    return not source_path or package_path == source_path or package_path.startswith(f"{source_path}/")
+
+
+def _parsed_url(value: str):
+    parsed = urlparse(value.strip())
+    if parsed.netloc:
+        return parsed
+    return urlparse(f"https://{value.strip()}")
+
+
+def _normalize_host(host: str) -> str:
+    return host.lower().removeprefix("www.")
 
 
 def _list_value(value: Any) -> list[str]:

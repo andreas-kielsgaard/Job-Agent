@@ -17,10 +17,10 @@
         <th>Source</th>
         <th>Kind</th>
         <th>Status</th>
-        <th>Health</th>
+        <th>Extraction health</th>
+        <th>Source value</th>
         <th>Recipe state</th>
         <th>URL</th>
-        <th>Signals</th>
         <th>Actions</th>
       </tr>
     </thead>
@@ -49,6 +49,14 @@
           <span class="muted">not applicable</span>
           {% endif %}
         </td>
+        <td>
+          <span class="badge {{ 'high' if source.stats.value_status == 'promising' else 'medium' if source.stats.value_status == 'mixed' else 'low' if source.stats.value_status == 'low_value' else '' }}">{{ source.stats.value_status }}</span>
+          <div>Jobs: {{ source.stats.jobs_found_total }}</div>
+          <div>Strong/exploratory: {{ source.stats.strong_matches }}/{{ source.stats.exploratory_matches }}</div>
+          <div>Applied/not interesting: {{ source.stats.applied_count }}/{{ source.stats.not_interesting_count }}</div>
+          <div>Avg/best score: {{ source.stats.average_match_score }}/{{ source.stats.best_match_score }}</div>
+          <div class="muted">{{ source.stats.value_summary }}</div>
+        </td>
         <td>{{ source.recipe_state }}</td>
         <td>
           {% if source.url %}
@@ -59,11 +67,6 @@
           {% if source.recipe_path %}
           <div class="muted">{{ source.recipe_path }}</div>
           {% endif %}
-        </td>
-        <td>
-          <div>Total jobs: {{ source.stats.jobs_found_total }}</div>
-          <div>Strong: {{ source.stats.strong_matches }}</div>
-          <div>Exploratory: {{ source.stats.exploratory_matches }}</div>
         </td>
         <td>
           <a class="button light" href="/sources/{{ source.id }}">Detail</a>

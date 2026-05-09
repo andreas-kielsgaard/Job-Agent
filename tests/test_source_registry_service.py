@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from job_agent.services.source_registry_service import SourceRegistryService
@@ -92,3 +93,169 @@ def test_registry_loading_does_not_change_daily_run_source_config(project_root: 
     SourceRegistryService(project_root).list_sources()
 
     assert source_config.read_text(encoding="utf-8") == before
+
+
+def test_source_stats_with_no_packages_show_no_data(project_root: Path) -> None:
+    source = SourceRegistryService(project_root).get_source("eursap-jobs")
+
+    assert source is not None
+    assert source.stats.jobs_found_total == 0
+    assert source.stats.value_status == "no_data"
+    assert source.stats.value_summary == "No run data yet."
+
+
+def test_source_stats_with_strong_and_exploratory_packages_are_promising(project_root: Path) -> None:
+    _write_package(
+        project_root,
+        "run-20260509",
+        "p1",
+        {
+            "stable_id": "job-1",
+            "run_id": "run-20260509",
+            "title": "SAP ABAP Consultant",
+            "source": "Sample Jobs",
+            "source_url": "https://example.com/job-1",
+            "match_score": 88,
+            "match_category": "strong",
+            "application_status": "applied",
+        },
+    )
+    _write_package(
+        project_root,
+        "run-20260510",
+        "p2",
+        {
+            "stable_id": "job-2",
+            "run_id": "run-20260510",
+            "title": "SAP Integration Consultant",
+            "source": "Sample Jobs",
+            "source_url": "https://example.com/job-2",
+            "match_score": 72,
+            "match_category": "exploratory",
+            "application_status": "unreviewed",
+        },
+    )
+
+    source = SourceRegistryService(project_root).get_source("sample-jobs")
+
+    assert source is not None
+    assert source.stats.jobs_found_total == 2
+    assert source.stats.strong_matches == 1
+    assert source.stats.exploratory_matches == 1
+    assert source.stats.applied_count == 1
+    assert source.stats.unreviewed_count == 1
+    assert source.stats.average_match_score == 80
+    assert source.stats.best_match_score == 88
+    assert source.stats.best_recent_match_title == "SAP ABAP Consultant"
+    assert source.stats.value_status == "promising"
+
+
+def test_source_stats_with_not_interesting_low_score_packages_are_low_value(project_root: Path) -> None:
+    _write_package(
+        project_root,
+        "run-20260509",
+        "p1",
+        {
+            "stable_id": "job-1",
+            "run_id": "run-20260509",
+            "title": "Unrelated Analyst",
+            "source": "Sample Jobs",
+            "source_url": "https://example.com/job-1",
+            "match_score": 20,
+            "match_category": "weak",
+            "application_status": "not_interesting",
+        },
+    )
+    _write_package(
+        project_root,
+        "run-20260509",
+        "p2",
+        {
+            "stable_id": "job-2",
+            "run_id": "run-20260509",
+            "title": "Excluded Manager",
+            "source": "Sample Jobs",
+            "source_url": "https://example.com/job-2",
+            "match_score": 12,
+            "match_category": "excluded",
+            "application_status": "not_interesting",
+        },
+    )
+
+    source = SourceRegistryService(project_root).get_source("sample-jobs")
+
+    assert source is not None
+    assert source.stats.jobs_found_total == 2
+    assert source.stats.weak_or_excluded_matches == 2
+    assert source.stats.not_interesting_count == 2
+    assert source.stats.value_status == "low_value"
+
+
+def test_manual_intake_matches_manual_posting_packages(project_root: Path) -> None:
+    _write_package(
+        project_root,
+        "manual-20260509",
+        "p1",
+        {
+            "stable_id": "manual-1",
+            "run_id": "manual-20260509",
+            "title": "Manual SAP Contract",
+            "source": "Recruiter Mail",
+            "source_url": "",
+            "match_score": 66,
+            "match_category": "exploratory",
+            "application_status": "interesting",
+        },
+    )
+
+    source = SourceRegistryService(project_root).get_source("manual-intake")
+
+    assert source is not None
+    assert source.stats.jobs_found_total == 1
+    assert source.stats.exploratory_matches == 1
+    assert source.stats.value_status == "promising"
+
+
+def test_source_url_matching_uses_matching_domain_and_path(project_root: Path) -> None:
+    _write_package(
+        project_root,
+        "run-20260509",
+        "match",
+        {
+            "stable_id": "eursap-1",
+            "run_id": "run-20260509",
+            "title": "SAP Basis Consultant",
+            "source": "Other Label",
+            "source_url": "https://eursap.eu/jobs/sap-basis-consultant",
+            "match_score": 70,
+            "match_category": "exploratory",
+            "application_status": "unreviewed",
+        },
+    )
+    _write_package(
+        project_root,
+        "run-20260509",
+        "miss",
+        {
+            "stable_id": "not-eursap",
+            "run_id": "run-20260509",
+            "title": "Different Source",
+            "source": "Other Label",
+            "source_url": "https://not-eursap.example/jobs/sap-basis-consultant",
+            "match_score": 90,
+            "match_category": "strong",
+            "application_status": "unreviewed",
+        },
+    )
+
+    source = SourceRegistryService(project_root).get_source("eursap-jobs")
+
+    assert source is not None
+    assert source.stats.jobs_found_total == 1
+    assert source.stats.best_recent_match_url == "https://eursap.eu/jobs/sap-basis-consultant"
+
+
+def _write_package(project_root: Path, run_id: str, package_id: str, data: dict) -> None:
+    package_dir = project_root / "output" / "2026-05-09" / f"{run_id}-{package_id}"
+    package_dir.mkdir(parents=True, exist_ok=True)
+    (package_dir / "index.json").write_text(json.dumps(data), encoding="utf-8")
