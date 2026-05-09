@@ -451,6 +451,59 @@ def test_source_execution_routes_create_guard_enable_and_disable(client: TestCli
     assert config["sources"][0]["enabled"] is False
 
 
+def test_source_detail_shows_dry_run_link_when_execution_entry_exists(client: TestClient) -> None:
+    client.post("/sources/eursap-jobs/execution/create", follow_redirects=False)
+
+    detail = client.get("/sources/eursap-jobs")
+
+    assert detail.status_code == 200
+    assert "/sources/eursap-jobs/dry-run" in detail.text
+    assert "Dry run execution source" in detail.text
+
+
+def test_source_dry_run_route_renders_result(monkeypatch: pytest.MonkeyPatch, client: TestClient) -> None:
+    from job_agent.services.source_dry_run_service import DryRunJobPreview, SourceDryRunResult
+
+    client.post("/sources/eursap-jobs/execution/create", follow_redirects=False)
+
+    class FakeDryRunService:
+        def __init__(self, root):
+            pass
+
+        def dry_run(self, source_id, *, force_disabled=False):
+            assert source_id == "eursap-jobs"
+            assert force_disabled is True
+            return SourceDryRunResult(
+                source_id="eursap-jobs",
+                source_name="Eursap Jobs",
+                source_type="recipe_html",
+                source_enabled=False,
+                forced_disabled=True,
+                status="success",
+                job_count=1,
+                jobs=[
+                    DryRunJobPreview(
+                        title="SAP Basis Consultant",
+                        url="https://eursap.eu/jobs/sap-basis",
+                        source="Eursap Jobs",
+                        source_id="eursap-jobs",
+                        location="Remote",
+                        extraction_notes=["Recipe-based extraction; verify details manually."],
+                    )
+                ],
+            )
+
+    monkeypatch.setattr("job_agent.web.routers.sources.SourceDryRunService", FakeDryRunService)
+
+    response = client.get("/sources/eursap-jobs/dry-run?force_disabled=true")
+
+    assert response.status_code == 200
+    assert "Source Dry Run" in response.text
+    assert "SAP Basis Consultant" in response.text
+    assert "Forced disabled source execution" in response.text
+    assert "No packages, seen state, materials, digests, or run records were written." in response.text
+
+
 def test_manual_source_cannot_create_recipe_execution_route(client: TestClient) -> None:
     response = client.post("/sources/manual-intake/execution/create", follow_redirects=False)
 

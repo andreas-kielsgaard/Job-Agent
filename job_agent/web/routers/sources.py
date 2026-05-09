@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from job_agent.web.dependencies import execution_source_service, source_registry_service, templates
+from job_agent.services.source_dry_run_service import SourceDryRunService
 
 router = APIRouter()
 
@@ -77,6 +78,27 @@ def disable_execution_source(source_id: str) -> RedirectResponse:
     except KeyError:
         return _redirect_to_source(source_id, warning="No execution entry exists to disable.")
     return _redirect_to_source(source_id, message="Execution entry disabled.")
+
+
+@router.get("/sources/{source_id}/dry-run", response_class=HTMLResponse)
+def source_dry_run(request: Request, source_id: str, force_disabled: bool = False) -> HTMLResponse:
+    source = _registry_source_or_404(source_id)
+    execution_entry = execution_source_service().find_by_source_id(source.id)
+    result = SourceDryRunService(execution_source_service().root).dry_run(
+        source.id,
+        force_disabled=force_disabled,
+    )
+    return templates.TemplateResponse(
+        request,
+        "source_dry_run.html",
+        {
+            "request": request,
+            "source": source,
+            "execution_entry": execution_entry,
+            "result": result,
+            "force_disabled": force_disabled,
+        },
+    )
 
 
 def _recipe_preview_url(source) -> str:

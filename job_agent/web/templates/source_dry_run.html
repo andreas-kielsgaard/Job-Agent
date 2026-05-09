@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="row">
+  <h1 style="margin-right:auto;">Source Dry Run</h1>
+  <a class="button light" href="/sources/{{ source.id }}">Back to source</a>
+</div>
+
+<div class="panel">
+  <h2>{{ source.name }}</h2>
+  <p class="muted">Source dry run tests the configured execution source as the daily-run adapter would see it. Recipe preview tests a recipe directly against an input.</p>
+  <div class="grid">
+    <div class="stat"><span>Source id</span><strong>{{ result.source_id }}</strong></div>
+    <div class="stat"><span>Source type</span><strong>{{ result.source_type or "Not found" }}</strong></div>
+    <div class="stat"><span>Enabled</span><strong>{{ "Yes" if result.source_enabled else "No" }}</strong></div>
+    <div class="stat"><span>Status</span><strong>{{ result.status }}</strong></div>
+    <div class="stat"><span>Jobs extracted</span><strong>{{ result.job_count }}</strong></div>
+    <div class="stat"><span>Warnings</span><strong>{{ result.warning_count }}</strong></div>
+  </div>
+  {% if result.forced_disabled %}
+  <p><span class="badge medium">Forced disabled source execution</span></p>
+  {% endif %}
+  <p class="muted">No packages, seen state, materials, digests, or run records were written.</p>
+</div>
+
+{% if result.status == "disabled" %}
+<div class="panel">
+  <p>This execution source is disabled and was not run.</p>
+  <a class="button light" href="/sources/{{ source.id }}/dry-run?force_disabled=true">Force dry run disabled source</a>
+</div>
+{% endif %}
+
+{% if result.warnings %}
+<div class="panel">
+  <h2>Warnings</h2>
+  <ul>
+    {% for warning in result.warnings %}
+    <li>{{ warning }}</li>
+    {% endfor %}
+  </ul>
+</div>
+{% endif %}
+
+<div class="panel">
+  <h2>Extracted Jobs</h2>
+  {% if result.jobs %}
+  <table>
+    <thead>
+      <tr>
+        <th>Job</th>
+        <th>Source</th>
+        <th>Details</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for job in result.jobs %}
+      <tr>
+        <td>
+          <strong>{{ job.title }}</strong><br>
+          {% if job.url %}<a href="{{ job.url }}" target="_blank" rel="noreferrer">{{ job.url }}</a>{% endif %}
+        </td>
+        <td>
+          {{ job.source }}<br>
+          <span class="muted">{{ job.source_id or "no source_id" }}</span>
+        </td>
+        <td>
+          <div>Location: {{ job.location }}</div>
+          <div>Remote: {{ job.remote }}</div>
+          <div>Rate: {{ job.rate }}</div>
+          <div>Workload: {{ job.workload }}</div>
+          <div>Posted: {{ job.posted_date }}</div>
+          <div>Start: {{ job.start_date }}</div>
+          <div>Languages: {{ job.languages|join(", ") or "Not listed" }}</div>
+          {% if job.extraction_notes %}<div class="muted">Notes: {{ job.extraction_notes|join("; ") }}</div>{% endif %}
+          {% if job.description_preview %}<div class="muted">{{ job.description_preview }}</div>{% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">No jobs were extracted.</p>
+  {% endif %}
+</div>
+{% endblock %}

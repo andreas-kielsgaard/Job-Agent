@@ -74,6 +74,16 @@ def main() -> None:
     calibrate.add_argument("--rendered", action="store_true", help="Force Playwright-rendered capture mode.")
     calibrate.add_argument("--static", action="store_true", help="Force static HTML capture mode.")
     calibrate.add_argument("--max-candidates", type=int, default=30, help="Maximum candidate regions to report.")
+    dry_run = subparsers.add_parser(
+        "dry-run-source",
+        help="Run one configured execution source through its adapter without writing packages or run state.",
+    )
+    dry_run.add_argument("source_id")
+    dry_run.add_argument(
+        "--force-disabled",
+        action="store_true",
+        help="Execute a disabled source entry for inspection without enabling it.",
+    )
 
     args = parser.parse_args()
     if args.command == "run-daily":
@@ -105,6 +115,8 @@ def main() -> None:
             static=args.static,
             max_candidates=args.max_candidates,
         )
+    if args.command == "dry-run-source":
+        dry_run_source(args.source_id, force_disabled=args.force_disabled)
 
 
 def run_daily(
@@ -239,6 +251,43 @@ def _print_recipe_preview(preview: RecipePreviewResult) -> None:
 def _safe_print(text: str = "") -> None:
     encoding = sys.stdout.encoding or "utf-8"
     print(str(text).encode(encoding, errors="replace").decode(encoding))
+
+
+def dry_run_source(source_id: str, force_disabled: bool = False) -> None:
+    from .services.source_dry_run_service import SourceDryRunService
+
+    result = SourceDryRunService().dry_run(source_id, force_disabled=force_disabled)
+    _safe_print(f"Source id: {result.source_id}")
+    _safe_print(f"Source name: {result.source_name or 'Not found'}")
+    _safe_print(f"Source type: {result.source_type or 'Not found'}")
+    _safe_print(f"Enabled: {result.source_enabled}")
+    if result.forced_disabled:
+        _safe_print("Forced disabled source execution: true")
+    _safe_print(f"Dry-run status: {result.status}")
+    _safe_print(f"Jobs extracted: {result.job_count}")
+    _safe_print(f"Warnings: {result.warning_count}")
+    for warning in result.warnings:
+        _safe_print(f"Warning: {warning}")
+    for index, job in enumerate(result.jobs[:10], start=1):
+        languages = ", ".join(job.languages) or "Not listed"
+        notes = "; ".join(job.extraction_notes) or "none"
+        _safe_print("")
+        _safe_print(f"{index}. {job.title}")
+        _safe_print(f"   URL: {job.url}")
+        _safe_print(f"   Source: {job.source}")
+        _safe_print(f"   Source id: {job.source_id}")
+        _safe_print(f"   Location: {job.location}")
+        _safe_print(f"   Remote/work arrangement: {job.remote}")
+        _safe_print(f"   Rate/pay: {job.rate}")
+        _safe_print(f"   Workload/work type: {job.workload}")
+        _safe_print(f"   Posted date: {job.posted_date}")
+        _safe_print(f"   Start date: {job.start_date}")
+        _safe_print(f"   Language: {languages}")
+        _safe_print(f"   Notes: {notes}")
+        if job.description_preview:
+            _safe_print(f"   Description: {job.description_preview}")
+    _safe_print("")
+    _safe_print("No packages, seen state, materials, digests, or run records were written.")
 
 
 def calibrate_recipe(

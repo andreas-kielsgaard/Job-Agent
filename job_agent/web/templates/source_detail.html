@@ -93,11 +93,13 @@ enabled: {{ "true" if execution_entry.enabled else "false" }}</pre>
   <form method="post" action="/sources/{{ source.id }}/execution/update" style="display:inline;">
     <button type="submit" class="button light">Update disabled execution entry</button>
   </form>
+  <a class="button light" href="/sources/{{ source.id }}/dry-run">Dry run execution source</a>
   {% if execution_entry.enabled %}
   <form method="post" action="/sources/{{ source.id }}/execution/disable" style="display:inline;">
     <button type="submit" class="button light">Disable for daily runs</button>
   </form>
   {% else %}
+  <a class="button light" href="/sources/{{ source.id }}/dry-run?force_disabled=true">Dry run disabled source</a>
   <form method="post" action="/sources/{{ source.id }}/execution/enable" style="display:inline;">
     <button type="submit" class="button">Enable for daily runs</button>
   </form>

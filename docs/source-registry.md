@@ -84,6 +84,29 @@ Source value is advisory only. It helps decide whether a source looks useful, bu
 
 The source registry remains the review/configuration layer; `sources/recruiting-sites.yaml` remains the execution source of truth until a later, more direct registry-to-execution workflow exists.
 
+## Source Dry Run
+
+Source dry run tests one configured execution source in isolation. It answers: "Does this `sources/recruiting-sites.yaml` entry work through the same adapter path daily runs would use?"
+
+This is different from recipe preview:
+
+- Recipe Preview: "Does this recipe extract from this input?"
+- Source Dry Run: "Does this configured execution source work as the daily-run adapter would see it?"
+
+Dry run can be launched from a source detail page when an execution entry exists, or from the CLI:
+
+```powershell
+python -m job_agent.cli dry-run-source eursap-jobs
+```
+
+Disabled execution sources are not run unless explicitly forced:
+
+```powershell
+python -m job_agent.cli dry-run-source eursap-jobs --force-disabled
+```
+
+Dry run reports source status, extracted jobs, warnings, and source ids. It does not write packages, generated materials, seen-job state, digests, application statuses, or run records. It is a low-risk check to use after guarded enablement and before relying on a source in the morning workflow.
+
 ## Source Health
 
 Source health is stored separately at:
