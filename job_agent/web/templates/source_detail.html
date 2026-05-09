@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="row">
+  <h1 style="margin-right:auto;">{{ source.name }}</h1>
+  <a class="button light" href="/sources">Back to sources</a>
+</div>
+
+<div class="panel">
+  <h2>Identity</h2>
+  <div class="grid">
+    <div class="stat"><span>Kind</span><strong>{{ source.kind }}</strong></div>
+    <div class="stat"><span>Status</span><strong>{{ source.status }}</strong></div>
+    <div class="stat"><span>Enabled</span><strong>{{ "Yes" if source.enabled else "No" }}</strong></div>
+    <div class="stat"><span>Added</span><strong>{{ source.added_at or "Unknown" }}</strong></div>
+  </div>
+  <p><strong>URL:</strong>
+    {% if source.url %}<a href="{{ source.url }}" target="_blank" rel="noreferrer">{{ source.url }}</a>{% else %}<span class="muted">none</span>{% endif %}
+  </p>
+  <p><strong>Tags:</strong> {{ source.tags|join(", ") or "none" }}</p>
+  <p><strong>Notes:</strong> {{ source.notes or "None yet." }}</p>
+</div>
+
+{% if source.recipe_path %}
+<div class="panel">
+  <h2>Recipe</h2>
+  <div class="grid">
+    <div class="stat"><span>Recipe state</span><strong>{{ source.recipe_state }}</strong></div>
+    <div class="stat"><span>Path</span><strong>{{ source.recipe_path }}</strong></div>
+  </div>
+  <p class="muted">Recipe preview is the manual trust gate before any later source integration.</p>
+  {% if recipe_preview_url %}
+  <a class="button" href="{{ recipe_preview_url }}">Preview recipe</a>
+  {% endif %}
+  <details>
+    <summary>Copyable preview command</summary>
+    <pre class="copy-source">python -m job_agent.cli test-recipe {{ source.recipe_path }} {{ source.url }} --base-url {{ source.url }}</pre>
+  </details>
+</div>
+{% endif %}
+
+<div class="panel">
+  <h2>Performance</h2>
+  <div class="grid">
+    <div class="stat"><span>Jobs found</span><strong>{{ source.stats.jobs_found_total }}</strong></div>
+    <div class="stat"><span>Strong matches</span><strong>{{ source.stats.strong_matches }}</strong></div>
+    <div class="stat"><span>Exploratory matches</span><strong>{{ source.stats.exploratory_matches }}</strong></div>
+    <div class="stat"><span>Applied</span><strong>{{ source.stats.applied_count }}</strong></div>
+    <div class="stat"><span>Not interesting</span><strong>{{ source.stats.not_interesting_count }}</strong></div>
+    <div class="stat"><span>Average score</span><strong>{{ source.stats.average_match_score }}</strong></div>
+  </div>
+  <p><strong>Best recent match:</strong> {{ source.stats.best_recent_match or "No historical package data yet." }}</p>
+  <p><strong>Last checked:</strong> {{ source.stats.last_checked or "Not tracked yet." }}</p>
+  <p><strong>Last successful extraction:</strong> {{ source.stats.last_successful_extraction or "Not tracked yet." }}</p>
+</div>
+
+<div class="panel">
+  <h2>Recruiter / Contact Notes</h2>
+  <p class="muted">Contact tracking not implemented yet.</p>
+</div>
+{% endblock %}

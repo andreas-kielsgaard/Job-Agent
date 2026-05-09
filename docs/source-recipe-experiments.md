@@ -4,6 +4,8 @@ These recipes are experimental fixtures for validating the constrained recipe en
 
 Manual preview workflow: see `docs/recipe-preview.md`. Preview is for reviewing one selected recipe against one saved artifact, fixture, or explicit URL before deciding whether later source integration is worth considering.
 
+Source registry and overview: see `docs/source-registry.md`. The registry is a review/configuration layer and does not replace the daily-run source config yet.
+
 ## Eursap Jobs
 
 - URL: https://eursap.eu/jobs

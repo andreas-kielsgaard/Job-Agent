@@ -20,6 +20,7 @@ from job_agent.web.routers import (
     recipe_preview,
     runs,
     setup,
+    sources,
     stats,
 )
 from job_agent.web.runtime import runtime
@@ -48,6 +49,7 @@ def create_app() -> FastAPI:
     app.include_router(postings.router)
     app.include_router(compatibility.router)
     app.include_router(recipe_preview.router)
+    app.include_router(sources.router)
     app.include_router(setup.router)
     app.include_router(files.router)
     app.include_router(ai_edit.router)

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Form, HTTPException, Request
+from fastapi import APIRouter, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
 
 from job_agent.services.recipe_preview_service import preview_recipe
@@ -10,11 +10,24 @@ router = APIRouter()
 
 
 @router.get("/recipe-preview", response_class=HTMLResponse)
-def recipe_preview_form(request: Request) -> HTMLResponse:
+def recipe_preview_form(
+    request: Request,
+    recipe_path: str = Query(""),
+    input_path_or_url: str = Query(""),
+    base_url: str = Query(""),
+    mode: str = Query("default"),
+) -> HTMLResponse:
     return templates.TemplateResponse(
         request,
         "recipe_preview.html",
-        {"request": request, "preview": None, "mode": "default"},
+        {
+            "request": request,
+            "preview": None,
+            "recipe_path": recipe_path,
+            "input_path_or_url": input_path_or_url,
+            "base_url": base_url,
+            "mode": mode if mode in {"default", "static", "rendered"} else "default",
+        },
     )
 
 

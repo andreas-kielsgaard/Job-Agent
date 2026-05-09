@@ -11,6 +11,7 @@ from job_agent.services.cv_reference_service import CvReferenceService
 from job_agent.services.material_service import MaterialService
 from job_agent.services.package_index_service import PackageIndexService
 from job_agent.services.setup_service import SetupService
+from job_agent.services.source_registry_service import SourceRegistryService
 
 WEB_DIR = Path(__file__).resolve().parent
 templates = Jinja2Templates(directory=WEB_DIR / "templates")
@@ -51,6 +52,10 @@ def material_service() -> MaterialService:
 
 def setup_service() -> SetupService:
     return SetupService(_current_root)
+
+
+def source_registry_service() -> SourceRegistryService:
+    return SourceRegistryService(_current_root)
 
 
 def cv_reference_service() -> CvReferenceService:

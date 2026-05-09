@@ -26,7 +26,17 @@ def test_app_creation_health_and_basic_routes_use_temp_root(client: TestClient, 
     assert response.status_code == 200
     assert response.json()["status"] == "ok"
 
-    for path in ["/", "/runs", "/jobs", "/stats", "/setup", "/postings/new", "/compatibility", "/recipe-preview"]:
+    for path in [
+        "/",
+        "/runs",
+        "/jobs",
+        "/stats",
+        "/setup",
+        "/postings/new",
+        "/compatibility",
+        "/recipe-preview",
+        "/sources",
+    ]:
         assert client.get(path).status_code == 200
 
     assert (project_root / "output" / "runs" / "runs.json").exists()
@@ -263,3 +273,21 @@ def test_recipe_preview_route_renders_preview(monkeypatch: pytest.MonkeyPatch, c
     assert "SAP Basis Consultant" in response.text
     assert "Remote Work" in response.text
     assert "Recipe extracted job ID: 34235" in response.text
+
+
+def test_source_overview_and_detail_routes_render(client: TestClient) -> None:
+    overview = client.get("/sources")
+
+    assert overview.status_code == 200
+    assert "Manual Intake" in overview.text
+    assert "Eursap Jobs" in overview.text
+    assert "Whitehall Resources SAP Contract Jobs" in overview.text
+    assert "Montreal Associates Job Search" in overview.text
+
+    detail = client.get("/sources/eursap-jobs")
+
+    assert detail.status_code == 200
+    assert "sources/recipes/experimental/eursap-jobs.yaml" in detail.text
+    assert "live-calibrated experimental" in detail.text
+    assert "/recipe-preview" in detail.text
+    assert "Contact tracking not implemented yet" in detail.text

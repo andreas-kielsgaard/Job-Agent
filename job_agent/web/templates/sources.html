@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Sources</h1>
+<div class="panel">
+  <p class="muted">Sources are places jobs can come from. This registry is a review and configuration layer; daily runs still use the existing source config.</p>
+  <div class="grid">
+    <div class="stat"><span>Registered sources</span><strong>{{ sources|length }}</strong></div>
+    <div class="stat"><span>Recipe-backed</span><strong>{{ sources|selectattr("recipe_path")|list|length }}</strong></div>
+    <div class="stat"><span>Enabled here</span><strong>{{ sources|selectattr("enabled")|list|length }}</strong></div>
+  </div>
+</div>
+
+<div class="panel">
+  <table>
+    <thead>
+      <tr>
+        <th>Source</th>
+        <th>Kind</th>
+        <th>Status</th>
+        <th>Recipe state</th>
+        <th>URL</th>
+        <th>Signals</th>
+        <th>Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for source in sources %}
+      <tr>
+        <td>
+          <strong>{{ source.name }}</strong><br>
+          <span class="muted">{{ source.id }}</span>
+        </td>
+        <td><span class="badge">{{ source.kind }}</span></td>
+        <td>
+          <span class="badge {{ 'high' if source.status == 'active' else 'medium' if source.status in ['experimental', 'needs_review'] else 'low' }}">{{ source.status }}</span><br>
+          <span class="muted">{{ "Enabled" if source.enabled else "Disabled" }}</span>
+        </td>
+        <td>{{ source.recipe_state }}</td>
+        <td>
+          {% if source.url %}
+          <a href="{{ source.url }}" target="_blank" rel="noreferrer">{{ source.url }}</a>
+          {% else %}
+          <span class="muted">none</span>
+          {% endif %}
+          {% if source.recipe_path %}
+          <div class="muted">{{ source.recipe_path }}</div>
+          {% endif %}
+        </td>
+        <td>
+          <div>Total jobs: {{ source.stats.jobs_found_total }}</div>
+          <div>Strong: {{ source.stats.strong_matches }}</div>
+          <div>Exploratory: {{ source.stats.exploratory_matches }}</div>
+        </td>
+        <td>
+          <a class="button light" href="/sources/{{ source.id }}">Detail</a>
+          {% if source.recipe_path %}
+          <a class="button light" href="/recipe-preview?recipe_path={{ source.recipe_path|urlencode }}&input_path_or_url={{ source.url|urlencode }}&base_url={{ source.url|urlencode }}&mode=default">Preview</a>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}
