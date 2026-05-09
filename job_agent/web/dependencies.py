@@ -8,6 +8,7 @@ from job_agent.application_status_store import ApplicationStatusStore
 from job_agent.config import ROOT
 from job_agent.run_store import RunStore
 from job_agent.services.cv_reference_service import CvReferenceService
+from job_agent.services.execution_source_service import ExecutionSourceService
 from job_agent.services.material_service import MaterialService
 from job_agent.services.package_index_service import PackageIndexService
 from job_agent.services.setup_service import SetupService
@@ -56,6 +57,10 @@ def setup_service() -> SetupService:
 
 def source_registry_service() -> SourceRegistryService:
     return SourceRegistryService(_current_root)
+
+
+def execution_source_service() -> ExecutionSourceService:
+    return ExecutionSourceService(_current_root)
 
 
 def cv_reference_service() -> CvReferenceService:

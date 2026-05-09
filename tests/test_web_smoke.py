@@ -295,6 +295,8 @@ def test_source_overview_and_detail_routes_render(client: TestClient) -> None:
     assert "live-calibrated experimental" in detail.text
     assert "Extraction health is based on manual recipe preview/test results" in detail.text
     assert "Source value is based on saved job packages and review statuses" in detail.text
+    assert "Daily-run Execution" in detail.text
+    assert "Create disabled execution entry" in detail.text
     assert "No run data yet" in detail.text
     assert "/recipe-preview" in detail.text
     assert "source_id=eursap-jobs" in detail.text
@@ -368,3 +370,88 @@ def test_source_routes_render_value_metrics(client: TestClient, project_root: Pa
     assert "Value status" in detail.text
     assert "SAP ABAP Consultant" in detail.text
     assert "Last seen run" in detail.text
+
+
+def test_viewing_source_pages_does_not_mutate_execution_config(client: TestClient, project_root: Path) -> None:
+    source_config = project_root / "sources" / "recruiting-sites.yaml"
+    source_config.write_text(
+        "sources:\n"
+        "  - name: Local Sample\n"
+        "    type: local_yaml\n"
+        "    path: jobs/raw/sample_jobs.yaml\n",
+        encoding="utf-8",
+    )
+    before = source_config.read_text(encoding="utf-8")
+
+    assert client.get("/sources").status_code == 200
+    assert client.get("/sources/eursap-jobs").status_code == 200
+
+    assert source_config.read_text(encoding="utf-8") == before
+
+
+def test_source_execution_routes_create_guard_enable_and_disable(client: TestClient, project_root: Path) -> None:
+    from job_agent.io.yaml_store import read_yaml
+    from job_agent.services.recipe_preview_service import RecipePreviewResult
+    from job_agent.services.source_health_service import SourceHealthService
+
+    create_response = client.post("/sources/eursap-jobs/execution/create", follow_redirects=False)
+
+    assert create_response.status_code == 303
+    config = read_yaml(project_root / "sources" / "recruiting-sites.yaml", {})
+    entry = config["sources"][0]
+    assert entry["source_id"] == "eursap-jobs"
+    assert entry["type"] == "recipe_html"
+    assert entry["enabled"] is False
+
+    blocked_response = client.post("/sources/eursap-jobs/execution/enable", follow_redirects=False)
+
+    assert blocked_response.status_code == 303
+    assert "warning=" in blocked_response.headers["location"]
+    config = read_yaml(project_root / "sources" / "recruiting-sites.yaml", {})
+    assert config["sources"][0]["enabled"] is False
+
+    SourceHealthService(project_root).save_preview(
+        "eursap-jobs",
+        RecipePreviewResult(
+            recipe_source_name="Eursap Jobs (experimental)",
+            recipe_path="sources/recipes/experimental/eursap-jobs.yaml",
+            recipe_status="experimental",
+            input_type="local artifact",
+            input_value="output/recipe-calibration/eursap/page.html",
+            base_url="https://eursap.eu/jobs",
+            mode_used="local_fixture_html",
+            extracted_job_count=9,
+            useful_titles=9,
+            generic_labels=0,
+            unique_urls=9,
+            average_description_length=177,
+            jobs=[],
+            warnings=[],
+        ),
+    )
+
+    enable_response = client.post("/sources/eursap-jobs/execution/enable", follow_redirects=False)
+
+    assert enable_response.status_code == 303
+    config = read_yaml(project_root / "sources" / "recruiting-sites.yaml", {})
+    assert config["sources"][0]["enabled"] is True
+
+    update_response = client.post("/sources/eursap-jobs/execution/update", follow_redirects=False)
+
+    assert update_response.status_code == 303
+    config = read_yaml(project_root / "sources" / "recruiting-sites.yaml", {})
+    assert len(config["sources"]) == 1
+    assert config["sources"][0]["enabled"] is False
+
+    client.post("/sources/eursap-jobs/execution/enable", follow_redirects=False)
+    disable_response = client.post("/sources/eursap-jobs/execution/disable", follow_redirects=False)
+
+    assert disable_response.status_code == 303
+    config = read_yaml(project_root / "sources" / "recruiting-sites.yaml", {})
+    assert config["sources"][0]["enabled"] is False
+
+
+def test_manual_source_cannot_create_recipe_execution_route(client: TestClient) -> None:
+    response = client.post("/sources/manual-intake/execution/create", follow_redirects=False)
+
+    assert response.status_code == 400

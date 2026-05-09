@@ -64,6 +64,26 @@ Use recipe preview and saved source health before manually enabling a recipe-bac
 
 Recipe-backed jobs can carry `source_id` into package indexes. Future registry-to-execution work should use this stable id instead of relying on source names or URLs.
 
+## Guarded Execution Setup
+
+Source detail pages can explicitly create or update a matching disabled `recipe_html` entry in:
+
+```text
+sources/recruiting-sites.yaml
+```
+
+This is the daily-run execution config. Viewing the Sources area does not mutate it. Creating or updating an execution entry keeps it disabled by default:
+
+```yaml
+enabled: false
+```
+
+Enabling for daily runs is a separate explicit action and requires saved source health with status `good`. If health is `untested`, `warning`, or `failing`, the UI blocks enablement and asks for recipe preview health to be saved first.
+
+Source value is advisory only. It helps decide whether a source looks useful, but it is not an automatic enablement gate.
+
+The source registry remains the review/configuration layer; `sources/recruiting-sites.yaml` remains the execution source of truth until a later, more direct registry-to-execution workflow exists.
+
 ## Source Health
 
 Source health is stored separately at:

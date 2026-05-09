@@ -6,7 +6,7 @@
 </div>
 
 <div class="panel">
-  <h2>Identity</h2>
+  <h2>Source Registry</h2>
   <div class="grid">
     <div class="stat"><span>Kind</span><strong>{{ source.kind }}</strong></div>
     <div class="stat"><span>Status</span><strong>{{ source.status }}</strong></div>
@@ -19,6 +19,13 @@
   <p><strong>Tags:</strong> {{ source.tags|join(", ") or "none" }}</p>
   <p><strong>Notes:</strong> {{ source.notes or "None yet." }}</p>
 </div>
+
+{% if execution_message %}
+<div class="panel"><span class="badge high">{{ execution_message }}</span></div>
+{% endif %}
+{% if execution_warning %}
+<div class="panel"><span class="badge low">{{ execution_warning }}</span></div>
+{% endif %}
 
 {% if source.recipe_path %}
 <div class="panel">
@@ -66,6 +73,47 @@
   <p class="muted">Recipe health is not applicable to this source yet.</p>
   {% endif %}
 </div>
+
+{% if source.recipe_path %}
+<div class="panel">
+  <h2>Daily-run Execution</h2>
+  <p class="muted">Execution setup controls whether this source is present in sources/recruiting-sites.yaml, which is what daily runs use. Sources are never enabled automatically.</p>
+  {% if execution_entry %}
+  <div class="grid">
+    <div class="stat"><span>Execution entry</span><strong>Present</strong></div>
+    <div class="stat"><span>Type</span><strong>{{ execution_entry.type or execution_entry["type"] }}</strong></div>
+    <div class="stat"><span>Enabled for daily runs</span><strong>{{ "Yes" if execution_entry.enabled else "No" }}</strong></div>
+  </div>
+  <pre class="copy-source">name: {{ execution_entry.name }}
+source_id: {{ execution_entry.source_id }}
+type: {{ execution_entry.type }}
+url: {{ execution_entry.url }}
+recipe_path: {{ execution_entry.recipe_path }}
+enabled: {{ "true" if execution_entry.enabled else "false" }}</pre>
+  <form method="post" action="/sources/{{ source.id }}/execution/update" style="display:inline;">
+    <button type="submit" class="button light">Update disabled execution entry</button>
+  </form>
+  {% if execution_entry.enabled %}
+  <form method="post" action="/sources/{{ source.id }}/execution/disable" style="display:inline;">
+    <button type="submit" class="button light">Disable for daily runs</button>
+  </form>
+  {% else %}
+  <form method="post" action="/sources/{{ source.id }}/execution/enable" style="display:inline;">
+    <button type="submit" class="button">Enable for daily runs</button>
+  </form>
+  {% endif %}
+  {% else %}
+  <p><strong>Execution entry:</strong> <span class="muted">Not present</span></p>
+  <form method="post" action="/sources/{{ source.id }}/execution/create">
+    <button type="submit" class="button">Create disabled execution entry</button>
+  </form>
+  {% endif %}
+  {% if source.health.health_status != "good" %}
+  <p class="muted">Run recipe preview and save source health before enabling.</p>
+  {% endif %}
+  <p class="muted">A source registry entry existing does not mean daily-run execution is enabled. Good health does not enable a source by itself.</p>
+</div>
+{% endif %}
 
 <div class="panel">
   <h2>Source Value</h2>
