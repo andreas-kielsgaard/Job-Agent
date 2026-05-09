@@ -10,6 +10,8 @@ Preview does not enable daily-run use, does not add recipes to `sources/recruiti
 
 The preview output includes the recipe name and experimental status, extraction mode, quality summary, warnings, and extracted job fields such as title, URL, location, remote/work arrangement, rate/pay, workload/work type, language, start date, notes, and a description preview.
 
+If a `source_id` is provided, preview can save the result as source health in `sources/source-health.yaml`. Without a source id, preview remains inspect-only and writes no health record.
+
 ## Current Recipe Status
 
 - Eursap: live-calibrated experimental; `static_html`; single vacancy anchors plus regex pattern extraction from saved local artifacts.
@@ -36,5 +38,6 @@ python -m job_agent.cli test-recipe sources/recipes/experimental/montreal-associ
 - Does not generate or edit recipes automatically.
 - Does not enable recipes by default.
 - Does not connect recipe sources to daily runs.
+- Does not enable a source when source health is saved.
 - Does not paginate, crawl, or traverse a site.
 - Does not submit applications or fill forms.

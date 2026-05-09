@@ -60,6 +60,11 @@ def main() -> None:
         action="store_true",
         help="Force static HTML mode even if the recipe uses mode: rendered_html.",
     )
+    recipe.add_argument(
+        "--source-id",
+        default="",
+        help="Optional source registry id. When provided, save this preview result to source-health.yaml.",
+    )
     calibrate = subparsers.add_parser(
         "calibrate-recipe",
         help="Capture one public page and report candidate regions for manual recipe calibration.",
@@ -90,6 +95,7 @@ def main() -> None:
             base_url=args.base_url,
             rendered=args.rendered,
             static=args.static,
+            source_id=args.source_id,
         )
     if args.command == "calibrate-recipe":
         calibrate_recipe(
@@ -172,13 +178,30 @@ def test_recipe(
     base_url: str = "",
     rendered: bool = False,
     static: bool = False,
+    source_id: str = "",
 ) -> None:
     try:
         preview = preview_recipe(recipe_path, url_or_html_path, base_url=base_url, rendered=rendered, static=static)
+        saved_source_id = source_id.strip()
+        if source_id.strip():
+            from .services.source_health_service import SourceHealthService
+
+            SourceHealthService().save_preview(saved_source_id, preview)
     except ValueError as exc:
+        if source_id.strip():
+            from .services.source_health_service import SourceHealthService
+
+            SourceHealthService().save_failure(
+                source_id.strip(),
+                url_or_html_path,
+                "rendered_html" if rendered else "static_html" if static else "unknown",
+                str(exc),
+            )
         print(exc)
         return
     _print_recipe_preview(preview)
+    if source_id.strip():
+        _safe_print(f"Source health saved: {source_id.strip()}")
 
 
 def _print_recipe_preview(preview: RecipePreviewResult) -> None:

@@ -263,6 +263,32 @@ def test_cli_recipe_command_runs_against_local_fixture(capsys: pytest.CaptureFix
     assert "Description: ABAP RAP CDS OData Gateway integration contract with hands-on delivery scope." in output
 
 
+def test_cli_recipe_command_can_save_source_health(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from job_agent.cli import test_recipe
+
+    saved = {}
+
+    class FakeHealthService:
+        def save_preview(self, source_id, preview):
+            saved["source_id"] = source_id
+            saved["count"] = preview.extracted_job_count
+
+    monkeypatch.setattr("job_agent.services.source_health_service.SourceHealthService", lambda: FakeHealthService())
+
+    test_recipe(
+        "sources/recipes/examples/synthetic-job-board.yaml",
+        str(FIXTURE_PATH),
+        base_url="https://example.com/jobs",
+        source_id="sample-jobs",
+    )
+
+    output = capsys.readouterr().out
+    assert saved == {"source_id": "sample-jobs", "count": 2}
+    assert "Source health saved: sample-jobs" in output
+
+
 def test_url_extraction_uses_recipe_rendered_mode_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
     calls = {}
 

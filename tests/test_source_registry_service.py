@@ -49,6 +49,35 @@ def test_get_source_by_id_and_recipe_status(project_root: Path) -> None:
     assert source.enabled is False
 
 
+def test_registry_includes_saved_source_health(project_root: Path) -> None:
+    from job_agent.services.recipe_preview_service import RecipePreviewResult
+    from job_agent.services.source_health_service import SourceHealthService
+
+    preview = RecipePreviewResult(
+        recipe_source_name="Eursap Jobs (experimental)",
+        recipe_path="sources/recipes/experimental/eursap-jobs.yaml",
+        recipe_status="experimental",
+        input_type="local artifact",
+        input_value="artifact/page.html",
+        base_url="https://eursap.eu/jobs",
+        mode_used="local_fixture_html",
+        extracted_job_count=9,
+        useful_titles=9,
+        generic_labels=0,
+        unique_urls=9,
+        average_description_length=177,
+        jobs=[],
+        warnings=[],
+    )
+    SourceHealthService(project_root).save_preview("eursap-jobs", preview)
+
+    source = SourceRegistryService(project_root).get_source("eursap-jobs")
+
+    assert source is not None
+    assert source.health.health_status == "good"
+    assert source.health.extracted_job_count == 9
+
+
 def test_registry_loading_does_not_change_daily_run_source_config(project_root: Path) -> None:
     source_config = project_root / "sources" / "recruiting-sites.yaml"
     source_config.write_text(

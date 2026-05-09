@@ -7,6 +7,7 @@ from typing import Any
 
 from job_agent.config import ROOT
 from job_agent.io.yaml_store import read_yaml, write_yaml
+from job_agent.services.source_health_service import SourceHealthRecord, SourceHealthService
 from job_agent.services.package_index_service import PackageIndexService
 
 REGISTRY_PATH = Path("sources/source-registry.yaml")
@@ -40,6 +41,7 @@ class SourceRegistryEntry:
     notes: str = ""
     tags: list[str] = field(default_factory=list)
     recipe_state: str = "none"
+    health: SourceHealthRecord = field(default_factory=lambda: SourceHealthRecord(source_id=""))
     stats: SourceStats = field(default_factory=SourceStats)
 
 
@@ -60,8 +62,10 @@ class SourceRegistryService:
         raw_sources = data.get("sources", []) if isinstance(data, dict) else []
         entries = [self._entry_from_mapping(item) for item in raw_sources if isinstance(item, dict)]
         stats = self._stats_by_source(entries)
+        health = SourceHealthService(self.root).load_all()
         for entry in entries:
             entry.stats = stats.get(entry.id, SourceStats())
+            entry.health = health.get(entry.id, SourceHealthRecord(source_id=entry.id))
         return entries
 
     def get_source(self, source_id: str) -> SourceRegistryEntry | None:

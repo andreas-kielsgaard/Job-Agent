@@ -33,10 +33,38 @@
   {% endif %}
   <details>
     <summary>Copyable preview command</summary>
-    <pre class="copy-source">python -m job_agent.cli test-recipe {{ source.recipe_path }} {{ source.url }} --base-url {{ source.url }}</pre>
+    <pre class="copy-source">python -m job_agent.cli test-recipe {{ source.recipe_path }} {{ source.url }} --base-url {{ source.url }} --source-id {{ source.id }}</pre>
   </details>
 </div>
 {% endif %}
+
+<div class="panel">
+  <h2>Recipe Health</h2>
+  {% if source.recipe_path %}
+  <div class="grid">
+    <div class="stat"><span>Status</span><strong>{{ source.health.health_status }}</strong></div>
+    <div class="stat"><span>Last preview</span><strong>{{ source.health.last_preview_at or "Never" }}</strong></div>
+    <div class="stat"><span>Input type</span><strong>{{ source.health.last_input_type or "Unknown" }}</strong></div>
+    <div class="stat"><span>Mode used</span><strong>{{ source.health.mode_used or "Unknown" }}</strong></div>
+    <div class="stat"><span>Jobs extracted</span><strong>{{ source.health.extracted_job_count }}</strong></div>
+    <div class="stat"><span>Useful titles</span><strong>{{ source.health.useful_titles }}</strong></div>
+    <div class="stat"><span>Generic labels</span><strong>{{ source.health.generic_labels }}</strong></div>
+    <div class="stat"><span>Unique URLs</span><strong>{{ source.health.unique_urls }}</strong></div>
+    <div class="stat"><span>Avg description</span><strong>{{ source.health.average_description_length }}</strong></div>
+  </div>
+  <p><strong>Input used:</strong> {{ source.health.last_input_value or "No saved preview input yet." }}</p>
+  <p><strong>Summary:</strong> {{ source.health.health_summary }}</p>
+  {% if source.health.warnings %}
+  <ul>
+    {% for warning in source.health.warnings %}
+    <li>{{ warning }}</li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+  {% else %}
+  <p class="muted">Recipe health is not applicable to this source yet.</p>
+  {% endif %}
+</div>
 
 <div class="panel">
   <h2>Performance</h2>

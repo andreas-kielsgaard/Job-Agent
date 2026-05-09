@@ -264,6 +264,7 @@ def test_recipe_preview_route_renders_preview(monkeypatch: pytest.MonkeyPatch, c
             "input_path_or_url": "output/recipe-calibration/page.html",
             "base_url": "https://eursap.eu/jobs",
             "mode": "static",
+            "source_id": "eursap-jobs",
         },
         follow_redirects=False,
     )
@@ -273,6 +274,7 @@ def test_recipe_preview_route_renders_preview(monkeypatch: pytest.MonkeyPatch, c
     assert "SAP Basis Consultant" in response.text
     assert "Remote Work" in response.text
     assert "Recipe extracted job ID: 34235" in response.text
+    assert "Source health saved" in response.text
 
 
 def test_source_overview_and_detail_routes_render(client: TestClient) -> None:
@@ -290,4 +292,41 @@ def test_source_overview_and_detail_routes_render(client: TestClient) -> None:
     assert "sources/recipes/experimental/eursap-jobs.yaml" in detail.text
     assert "live-calibrated experimental" in detail.text
     assert "/recipe-preview" in detail.text
+    assert "source_id=eursap-jobs" in detail.text
     assert "Contact tracking not implemented yet" in detail.text
+
+
+def test_source_routes_render_saved_health(client: TestClient, project_root: Path) -> None:
+    from job_agent.services.recipe_preview_service import RecipePreviewResult
+    from job_agent.services.source_health_service import SourceHealthService
+
+    SourceHealthService(project_root).save_preview(
+        "eursap-jobs",
+        RecipePreviewResult(
+            recipe_source_name="Eursap Jobs (experimental)",
+            recipe_path="sources/recipes/experimental/eursap-jobs.yaml",
+            recipe_status="experimental",
+            input_type="local artifact",
+            input_value="output/recipe-calibration/eursap/page.html",
+            base_url="https://eursap.eu/jobs",
+            mode_used="local_fixture_html",
+            extracted_job_count=9,
+            useful_titles=9,
+            generic_labels=0,
+            unique_urls=9,
+            average_description_length=177,
+            jobs=[],
+            warnings=[],
+        ),
+    )
+
+    overview = client.get("/sources")
+    detail = client.get("/sources/eursap-jobs")
+
+    assert overview.status_code == 200
+    assert "good" in overview.text
+    assert "9 jobs extracted, 9 useful titles, no generic labels." in overview.text
+    assert detail.status_code == 200
+    assert "Recipe Health" in detail.text
+    assert "output/recipe-calibration/eursap/page.html" in detail.text
+    assert "9 jobs extracted, 9 useful titles, no generic labels." in detail.text

@@ -17,6 +17,10 @@
       <input name="base_url" value="{{ base_url or '' }}" placeholder="https://example.com/jobs">
     </div>
     <div>
+      <label>Source id for health save</label>
+      <input name="source_id" value="{{ source_id or '' }}" placeholder="eursap-jobs">
+    </div>
+    <div>
       <label>Mode</label>
       <select name="mode">
         <option value="default" {% if mode == "default" %}selected{% endif %}>Use recipe default</option>
@@ -45,6 +49,9 @@
     <div class="stat"><span>Avg description length</span><strong>{{ preview.average_description_length }}</strong></div>
   </div>
   <p class="muted">Base URL: {{ preview.base_url }}</p>
+  {% if health_saved %}
+  <p><span class="badge high">Source health saved</span></p>
+  {% endif %}
   {% if preview.warnings %}
   <ul>
     {% for warning in preview.warnings %}

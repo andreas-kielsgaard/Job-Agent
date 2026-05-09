@@ -44,5 +44,6 @@ def _recipe_preview_url(source) -> str:
         "input_path_or_url": source.url,
         "base_url": source.url,
         "mode": "default",
+        "source_id": source.id,
     }
     return f"/recipe-preview?{urlencode(params)}"
