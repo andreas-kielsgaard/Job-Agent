@@ -116,6 +116,7 @@
         <td>
           <a class="button light" href="/recipe-candidates/{{ candidate.candidate_id }}?source_id={{ source.id }}">Show</a>
           {% if candidate.status == "pending" %}
+          <a class="button light" href="/recipe-candidates/{{ candidate.candidate_id }}?source_id={{ source.id }}">Approve</a>
           <form method="post" action="/recipe-candidates/{{ candidate.candidate_id }}/reject" style="display:inline;">
             <input type="hidden" name="source_id" value="{{ source.id }}">
             <input type="hidden" name="reason" value="Rejected from source detail.">

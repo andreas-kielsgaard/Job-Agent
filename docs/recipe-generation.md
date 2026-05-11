@@ -88,7 +88,7 @@ Reject one candidate:
 python -m job_agent.cli reject-recipe-candidate <candidate-id> --reason "Selector captures filter navigation"
 ```
 
-Rejecting a candidate records the rejection reason and timestamp. Approval and promotion to `sources/recipes/` are intentionally future work.
+Rejecting a candidate records the rejection reason and timestamp. Approval is an explicit later review action; automatic promotion remains intentionally absent.
 
 ## Source Detail UI
 
@@ -105,6 +105,30 @@ From a source detail page you can:
 
 The full candidate detail page shows schema status, quality summary, assumptions, warnings, refinement attempt history, and the final suggested YAML. This is a review surface only. The UI does not approve candidates, promote YAML into `sources/recipes/`, enable sources, execute sources, or change `sources/recruiting-sites.yaml`.
 
+## Approval
+
+Pending candidates can be explicitly approved after review. Approval is the first point where generated YAML becomes a real recipe file.
+
+CLI:
+
+```powershell
+python -m job_agent.cli approve-recipe-candidate <candidate-id> --recipe-path sources/recipes/experimental/<name>.yaml --source-id <source-id>
+```
+
+Approval:
+
+1. Requires the candidate to be `pending`.
+2. Requires an explicit recipe path under `sources/recipes/`.
+3. Refuses overwrite unless `--overwrite` is supplied.
+4. Validates the candidate YAML against the recipe schema again.
+5. Requires local `page.html` in the candidate artifact folder.
+6. Writes the recipe YAML to the requested recipe path.
+7. Runs recipe preview against local `page.html`.
+8. Saves source health when `--source-id` or a source-detail approval is supplied.
+9. Marks the candidate `approved` with recipe path, source id, preview counts, and preview warnings.
+
+The candidate detail page has the same approval workflow for pending candidates. It suggests the source registry recipe path when available, otherwise a safe experimental path. Approval writes a recipe file and preview health only; it does not create or enable execution entries and does not change `sources/recruiting-sites.yaml`.
+
 ## Boundaries
 
 - Proposes YAML only.
@@ -112,9 +136,10 @@ The full candidate detail page shows schema status, quality summary, assumptions
 - Optional refinement validates extraction against local `page.html` only.
 - `--save-candidate` creates a pending review object, not an active recipe.
 - Source detail recipe generation saves pending candidates only.
-- Does not edit real recipe files unless an explicit output path is provided.
+- Does not edit real recipe files unless an explicit output path or approval recipe path is provided.
 - Does not enable a source or update the source registry.
-- Does not promote candidates to `sources/recipes/`.
+- Does not promote candidates to `sources/recipes/` without explicit approval.
+- Approval does not enable source execution or update daily-run configuration.
 - Does not add pagination, browser automation, login handling, or arbitrary executable adapters.
 - Tests use fake LLM clients and do not call Claude.
 

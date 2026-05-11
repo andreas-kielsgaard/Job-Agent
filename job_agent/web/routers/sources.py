@@ -8,6 +8,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from job_agent.web.dependencies import (
     execution_source_service,
     recipe_artifact_service,
+    recipe_candidate_approval_service,
     recipe_candidate_store,
     source_registry_service,
     templates,
@@ -169,6 +170,7 @@ def recipe_candidate_detail(request: Request, candidate_id: str, source_id: str 
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     source = source_registry_service().get_source(source_id) if source_id else _source_for_candidate(candidate)
+    approval_recipe_path = recipe_candidate_approval_service().suggested_recipe_path(candidate, source)
     return templates.TemplateResponse(
         request,
         "recipe_candidate_detail.html",
@@ -176,6 +178,7 @@ def recipe_candidate_detail(request: Request, candidate_id: str, source_id: str 
             "request": request,
             "candidate": candidate,
             "source": source,
+            "approval_recipe_path": approval_recipe_path,
         },
     )
 
@@ -188,6 +191,40 @@ def reject_recipe_candidate(candidate_id: str, source_id: str = Form(""), reason
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     if source_id:
         return _redirect_to_source(source_id, message=f"Recipe candidate rejected: {candidate_id}")
+    return RedirectResponse(f"/recipe-candidates/{candidate_id}", status_code=303)
+
+
+@router.post("/recipe-candidates/{candidate_id}/approve")
+def approve_recipe_candidate(
+    candidate_id: str,
+    recipe_path: str = Form(...),
+    source_id: str = Form(""),
+    overwrite: str = Form(""),
+) -> RedirectResponse:
+    source = source_registry_service().get_source(source_id) if source_id else None
+    try:
+        result = recipe_candidate_approval_service().approve(
+            candidate_id,
+            recipe_path,
+            source_id=source_id,
+            overwrite=bool(overwrite),
+            base_url=source.url if source else "",
+        )
+    except ValueError as exc:
+        if source_id:
+            return _redirect_to_source(source_id, warning=f"Recipe candidate approval failed: {exc}")
+        return RedirectResponse(
+            f"/recipe-candidates/{candidate_id}?{urlencode({'warning': str(exc)})}",
+            status_code=303,
+        )
+    if source_id:
+        return _redirect_to_source(
+            source_id,
+            message=(
+                f"Recipe candidate approved: {result.candidate.candidate_id}. "
+                f"Preview extracted {result.preview.extracted_job_count if result.preview else 0} jobs."
+            ),
+        )
     return RedirectResponse(f"/recipe-candidates/{candidate_id}", status_code=303)
 
 

@@ -106,7 +106,7 @@ def main() -> None:
         "list-recipe-candidates",
         help="List pending/rejected generated recipe candidates.",
     )
-    list_candidates.add_argument("--status", default="", choices=["", "pending", "rejected"])
+    list_candidates.add_argument("--status", default="", choices=["", "pending", "rejected", "approved"])
     show_candidate = subparsers.add_parser(
         "show-recipe-candidate",
         help="Show a generated recipe candidate review object.",
@@ -118,6 +118,14 @@ def main() -> None:
     )
     reject_candidate.add_argument("candidate_id")
     reject_candidate.add_argument("--reason", default="")
+    approve_candidate = subparsers.add_parser(
+        "approve-recipe-candidate",
+        help="Approve a pending candidate into a recipe file and save local preview health.",
+    )
+    approve_candidate.add_argument("candidate_id")
+    approve_candidate.add_argument("--recipe-path", required=True)
+    approve_candidate.add_argument("--source-id", default="")
+    approve_candidate.add_argument("--overwrite", action="store_true")
 
     args = parser.parse_args()
     if args.command == "run-daily":
@@ -171,6 +179,13 @@ def main() -> None:
         show_recipe_candidate(args.candidate_id)
     if args.command == "reject-recipe-candidate":
         reject_recipe_candidate(args.candidate_id, reason=args.reason)
+    if args.command == "approve-recipe-candidate":
+        approve_recipe_candidate(
+            args.candidate_id,
+            recipe_path=args.recipe_path,
+            source_id=args.source_id,
+            overwrite=args.overwrite,
+        )
 
 
 def run_daily(
@@ -536,6 +551,42 @@ def reject_recipe_candidate(candidate_id: str, reason: str = "", root=None) -> N
         _safe_print(f"Reason: {candidate.rejection_reason}")
 
 
+def approve_recipe_candidate(
+    candidate_id: str,
+    *,
+    recipe_path: str,
+    source_id: str = "",
+    overwrite: bool = False,
+    root=None,
+) -> None:
+    from pathlib import Path
+
+    from .config import ROOT
+    from .services.recipe_candidate_approval_service import RecipeCandidateApprovalService
+
+    try:
+        result = RecipeCandidateApprovalService(Path(root) if root else ROOT).approve(
+            candidate_id,
+            recipe_path,
+            source_id=source_id,
+            overwrite=overwrite,
+        )
+    except ValueError as exc:
+        _safe_print(f"Recipe candidate approval failed: {exc}")
+        return
+    _safe_print(f"Recipe candidate approved: {result.candidate.candidate_id}")
+    _safe_print(f"Approved recipe path: {result.recipe_path}")
+    _safe_print(f"Preview ran: {result.preview is not None}")
+    if result.preview:
+        _safe_print(f"Jobs extracted: {result.preview.extracted_job_count}")
+        _safe_print(f"Useful titles: {result.preview.useful_titles}")
+        _safe_print(f"Unique URLs: {result.preview.unique_urls}")
+    _safe_print(f"Source health saved: {result.health_record is not None}")
+    for warning in result.warnings:
+        _safe_print(f"Warning: {warning}")
+    _safe_print("Source execution was not enabled and daily-run configuration was not changed.")
+
+
 def _print_recipe_candidate(candidate) -> None:
     _safe_print(f"Candidate id: {candidate.candidate_id}")
     _safe_print(f"Status: {candidate.status}")
@@ -566,6 +617,12 @@ def _print_recipe_candidate(candidate) -> None:
         _safe_print(f"Assumption: {assumption}")
     if candidate.rejection_reason:
         _safe_print(f"Rejection reason: {candidate.rejection_reason}")
+    if candidate.approved_recipe_path:
+        _safe_print(f"Approved recipe path: {candidate.approved_recipe_path}")
+        _safe_print(f"Approved source id: {candidate.approved_source_id or 'none'}")
+        _safe_print(f"Preview saved: {candidate.preview_saved}")
+        _safe_print(f"Preview status: {candidate.preview_status}")
+        _safe_print(f"Preview jobs: {candidate.preview_extracted_job_count}")
     for attempt in candidate.attempts:
         _safe_print("")
         _safe_print(f"Attempt {attempt.get('attempt_number')}")

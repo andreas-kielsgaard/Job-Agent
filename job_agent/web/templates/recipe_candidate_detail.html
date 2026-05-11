@@ -27,6 +27,11 @@
   {% if candidate.rejection_reason %}
   <p><strong>Rejection reason:</strong> {{ candidate.rejection_reason }}</p>
   {% endif %}
+  {% if candidate.approved_recipe_path %}
+  <p><strong>Approved recipe path:</strong> {{ candidate.approved_recipe_path }}</p>
+  <p><strong>Approved source id:</strong> {{ candidate.approved_source_id or "none" }}</p>
+  <p><strong>Preview saved:</strong> {{ "Yes" if candidate.preview_saved else "No" }}</p>
+  {% endif %}
 </div>
 
 <div class="panel">
@@ -40,6 +45,9 @@
     <div class="stat"><span>Avg description</span><strong>{{ candidate.average_description_length }}</strong></div>
     <div class="stat"><span>Refinement used</span><strong>{{ "Yes" if candidate.refinement_used else "No" }}</strong></div>
     <div class="stat"><span>Refinement accepted</span><strong>{{ "Yes" if candidate.refinement_accepted else "No" }}</strong></div>
+    <div class="stat"><span>Preview jobs</span><strong>{{ candidate.preview_extracted_job_count }}</strong></div>
+    <div class="stat"><span>Preview useful titles</span><strong>{{ candidate.preview_useful_titles }}</strong></div>
+    <div class="stat"><span>Preview unique URLs</span><strong>{{ candidate.preview_unique_urls }}</strong></div>
   </div>
   {% for error in candidate.validation_errors %}
   <p class="muted">Validation error: {{ error }}</p>
@@ -49,6 +57,9 @@
   {% endfor %}
   {% for warning in candidate.warnings %}
   <p class="muted">Warning: {{ warning }}</p>
+  {% endfor %}
+  {% for warning in candidate.preview_warnings %}
+  <p class="muted">Preview warning: {{ warning }}</p>
   {% endfor %}
   {% for assumption in candidate.assumptions %}
   <p class="muted">Assumption: {{ assumption }}</p>
@@ -76,6 +87,18 @@
 
 {% if candidate.status == "pending" %}
 <div class="panel">
+  <h2>Approve Candidate</h2>
+  <p class="muted">Approval writes the suggested YAML to a recipe file, previews it against local artifact page.html, and saves source health when a source id is supplied. It does not enable daily runs or edit sources/recruiting-sites.yaml.</p>
+  <form method="post" action="/recipe-candidates/{{ candidate.candidate_id }}/approve">
+    {% if source %}<input type="hidden" name="source_id" value="{{ source.id }}">{% endif %}
+    <label>Recipe path</label>
+    <input type="text" name="recipe_path" value="{{ approval_recipe_path }}" required>
+    <label class="check"><input type="checkbox" name="overwrite" value="1"> Overwrite existing recipe file</label>
+    <button type="submit" class="button">Approve candidate and preview recipe</button>
+  </form>
+</div>
+
+<div class="panel">
   <h2>Reject Candidate</h2>
   <form method="post" action="/recipe-candidates/{{ candidate.candidate_id }}/reject">
     {% if source %}<input type="hidden" name="source_id" value="{{ source.id }}">{% endif %}
@@ -83,6 +106,11 @@
     <input type="text" name="reason" placeholder="Why this candidate should not be promoted later">
     <button type="submit" class="button light">Reject candidate</button>
   </form>
+</div>
+{% else %}
+<div class="panel">
+  <h2>Approval</h2>
+  <p class="muted">This candidate is {{ candidate.status }} and cannot be approved from this review page.</p>
 </div>
 {% endif %}
 

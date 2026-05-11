@@ -47,6 +47,15 @@ class RecipeCandidate:
     quality_warnings: list[str] = field(default_factory=list)
     rejected_at: str = ""
     rejection_reason: str = ""
+    approved_at: str = ""
+    approved_recipe_path: str = ""
+    approved_source_id: str = ""
+    preview_saved: bool = False
+    preview_status: str = ""
+    preview_extracted_job_count: int = 0
+    preview_useful_titles: int = 0
+    preview_unique_urls: int = 0
+    preview_warnings: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -149,6 +158,35 @@ class RecipeCandidateStore:
         self._write(candidate)
         return candidate
 
+    def approve_candidate(
+        self,
+        candidate_id: str,
+        *,
+        recipe_path: str,
+        source_id: str = "",
+        preview_saved: bool = False,
+        preview_status: str = "",
+        preview_extracted_job_count: int = 0,
+        preview_useful_titles: int = 0,
+        preview_unique_urls: int = 0,
+        preview_warnings: list[str] | None = None,
+    ) -> RecipeCandidate:
+        candidate = self.load_candidate(candidate_id)
+        now = _now()
+        candidate.status = "approved"
+        candidate.updated_at = now
+        candidate.approved_at = now
+        candidate.approved_recipe_path = recipe_path
+        candidate.approved_source_id = source_id.strip()
+        candidate.preview_saved = preview_saved
+        candidate.preview_status = preview_status
+        candidate.preview_extracted_job_count = preview_extracted_job_count
+        candidate.preview_useful_titles = preview_useful_titles
+        candidate.preview_unique_urls = preview_unique_urls
+        candidate.preview_warnings = list(preview_warnings or [])
+        self._write(candidate)
+        return candidate
+
     def candidate_path(self, candidate_id: str) -> Path:
         return self._candidate_path(candidate_id)
 
@@ -205,6 +243,15 @@ def _candidate_to_dict(candidate: RecipeCandidate) -> dict[str, Any]:
         "quality_warnings": candidate.quality_warnings,
         "rejected_at": candidate.rejected_at,
         "rejection_reason": candidate.rejection_reason,
+        "approved_at": candidate.approved_at,
+        "approved_recipe_path": candidate.approved_recipe_path,
+        "approved_source_id": candidate.approved_source_id,
+        "preview_saved": candidate.preview_saved,
+        "preview_status": candidate.preview_status,
+        "preview_extracted_job_count": candidate.preview_extracted_job_count,
+        "preview_useful_titles": candidate.preview_useful_titles,
+        "preview_unique_urls": candidate.preview_unique_urls,
+        "preview_warnings": candidate.preview_warnings,
     }
 
 
@@ -224,6 +271,7 @@ def _candidate_fields(data: dict[str, Any]) -> dict[str, Any]:
     values.setdefault("referenced_artifact_files", [])
     values.setdefault("attempts", [])
     values.setdefault("quality_warnings", [])
+    values.setdefault("preview_warnings", [])
     return values
 
 
