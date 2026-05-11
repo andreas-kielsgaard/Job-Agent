@@ -10,6 +10,7 @@ from job_agent.web.dependencies import (
     recipe_artifact_service,
     recipe_candidate_approval_service,
     recipe_candidate_store,
+    recipe_generation_status_service,
     source_registry_service,
     templates,
 )
@@ -38,6 +39,7 @@ def source_detail(request: Request, source_id: str, message: str = "", warning: 
     execution_entry = execution_source_service().find_by_source_id(source.id)
     artifacts = recipe_artifact_service().list_artifacts_for_source(source)
     recipe_candidates = _candidates_for_source(source, artifacts)
+    generation_status = recipe_generation_status_service().build_for_source(source.id)
     return templates.TemplateResponse(
         request,
         "source_detail.html",
@@ -50,6 +52,7 @@ def source_detail(request: Request, source_id: str, message: str = "", warning: 
             "execution_warning": warning,
             "recipe_artifacts": artifacts,
             "recipe_candidates": recipe_candidates,
+            "recipe_generation_status": generation_status,
         },
     )
 

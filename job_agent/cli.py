@@ -126,6 +126,11 @@ def main() -> None:
     approve_candidate.add_argument("--recipe-path", required=True)
     approve_candidate.add_argument("--source-id", default="")
     approve_candidate.add_argument("--overwrite", action="store_true")
+    generation_status = subparsers.add_parser(
+        "recipe-generation-status",
+        help="Summarize local recipe generation state for one source.",
+    )
+    generation_status.add_argument("--source-id", required=True)
 
     args = parser.parse_args()
     if args.command == "run-daily":
@@ -186,6 +191,8 @@ def main() -> None:
             source_id=args.source_id,
             overwrite=args.overwrite,
         )
+    if args.command == "recipe-generation-status":
+        recipe_generation_status(args.source_id)
 
 
 def run_daily(
@@ -585,6 +592,38 @@ def approve_recipe_candidate(
     for warning in result.warnings:
         _safe_print(f"Warning: {warning}")
     _safe_print("Source execution was not enabled and daily-run configuration was not changed.")
+
+
+def recipe_generation_status(source_id: str, root=None) -> None:
+    from pathlib import Path
+
+    from .config import ROOT
+    from .services.recipe_generation_status_service import RecipeGenerationStatusService
+
+    try:
+        status = RecipeGenerationStatusService(Path(root) if root else ROOT).build_for_source(source_id)
+    except ValueError as exc:
+        _safe_print(str(exc))
+        return
+    _safe_print(f"Source: {status.source_name} ({status.source_id})")
+    _safe_print(f"URL: {status.source_url or 'not listed'}")
+    _safe_print(f"Registry recipe path: {status.source_recipe_path or 'none'}")
+    _safe_print(f"Calibration artifacts: {status.artifact_count}")
+    if status.best_artifact:
+        _safe_print(f"Best artifact: {status.best_artifact.artifact_dir} [{status.best_artifact.match_status}]")
+    _safe_print(
+        f"Candidates: pending={status.pending_candidates}, "
+        f"approved={status.approved_candidates}, rejected={status.rejected_candidates}"
+    )
+    _safe_print(f"Latest candidate: {status.latest_candidate_id or 'none'} [{status.latest_candidate_status or 'n/a'}]")
+    _safe_print(f"Latest approved recipe: {status.latest_approved_recipe_path or 'none'}")
+    _safe_print(f"Approved path matches registry: {status.approved_matches_source_recipe_path}")
+    _safe_print(f"Source health: {status.source_health_status} - {status.source_health_summary}")
+    _safe_print(f"Execution entry present: {status.execution_entry_exists}")
+    _safe_print(f"Execution enabled: {status.execution_enabled}")
+    for warning in status.warnings:
+        _safe_print(f"Workflow note: {warning}")
+    _safe_print("Approval/source health and execution enablement are separate; this command does not mutate anything.")
 
 
 def _print_recipe_candidate(candidate) -> None:

@@ -1,146 +1,119 @@
 # Recipe Generation
 
-Recipe suggestion is a manual assistant for proposing constrained YAML recipes from saved local calibration artifacts.
+Recipe generation is a local review workflow for turning saved calibration artifacts into constrained YAML recipes. It helps discover selectors and patterns, but it does not create executable adapters, enable sources, or change daily-run execution by itself.
 
-It uses folders under:
+The workflow uses local artifacts under:
 
 ```text
 output/recipe-calibration/
 ```
 
-The suggestion flow reads local evidence such as `summary.md`, `selector-report.json`, `candidate-elements.html`, and `visible-text.txt`. It builds a compact prompt for an LLM and asks for strict JSON containing proposed recipe YAML, assumptions, warnings, confidence, and strategy.
+Generation and refinement read files such as `summary.md`, `selector-report.json`, `candidate-elements.html`, `visible-text.txt`, and `page.html`. Tests use fake LLM clients; real API calls are not required for automated tests.
 
-It does not browse websites, fetch pages, inspect hidden endpoints, generate Python adapters, enable sources, or connect recipes to daily runs.
+## Lifecycle
 
-## Command
+1. Capture a calibration artifact.
+2. Suggest or refine recipe YAML from the saved artifact.
+3. Save a pending candidate review object.
+4. Review, show, or reject the candidate.
+5. Explicitly approve a pending candidate into `sources/recipes/`.
+6. Run a local preview against artifact `page.html` and save source health.
+7. Separately use guarded execution setup, dry-run, or single-source run when you are ready.
 
-```powershell
-python -m job_agent.cli suggest-recipe output/recipe-calibration/<folder> --source-name "Eursap Jobs" --start-url https://eursap.eu/jobs
-```
+Approval and execution enablement are intentionally separate.
 
-With an existing recipe for comparison:
+## CLI Workflow
 
-```powershell
-python -m job_agent.cli suggest-recipe output/recipe-calibration/<folder> --existing-recipe sources/recipes/experimental/eursap-jobs.yaml
-```
-
-To write the suggestion to a file:
-
-```powershell
-python -m job_agent.cli suggest-recipe output/recipe-calibration/<folder> --output scratch/suggested-eursap.yaml
-```
-
-Existing output files are not overwritten unless `--overwrite` is supplied.
-
-To save the result as a pending review object:
+Capture evidence:
 
 ```powershell
-python -m job_agent.cli suggest-recipe output/recipe-calibration/<folder> --save-candidate
+python -m job_agent.cli calibrate-recipe https://example.com/jobs --static
 ```
 
-This writes a candidate under:
-
-```text
-output/recipe-candidates/
-```
-
-The candidate stores the final YAML plus source name, artifact path, schema validation status, assumptions, warnings, evidence summary, referenced artifact files, and selected strategy. When refinement is used, it also stores the attempt history and final local quality summary.
-
-## Local Refinement
-
-The suggestion command can also run a bounded local validation/refinement loop:
+Suggest and save a pending candidate:
 
 ```powershell
-python -m job_agent.cli suggest-recipe output/recipe-calibration/<folder> --refine --max-attempts 3
+python -m job_agent.cli suggest-recipe output/recipe-calibration/<folder> --source-name "Eursap Jobs" --start-url https://eursap.eu/jobs --refine --max-attempts 3 --save-candidate
 ```
 
-The refinement loop stays inside the saved artifact folder:
-
-1. Ask the LLM for strict JSON containing proposed recipe YAML.
-2. Validate the YAML against the existing recipe schema.
-3. Run the suggested recipe against local `page.html`.
-4. Summarize extraction quality, including extracted jobs, useful titles, generic labels, unique URLs, and average description length.
-5. If the schema is invalid or local extraction is poor, ask for a revised strict JSON response.
-6. Stop when the candidate is acceptable or when `--max-attempts` is reached.
-
-Refinement does not follow detail pages, fetch public URLs, browse sites, discover APIs, or write real recipe files automatically. If `--output` is supplied, only the final candidate YAML is written, and existing files are still protected unless `--overwrite` is supplied.
-
-## Candidate Review
-
-Pending recipe candidates are durable review objects between generation and any future approval/promotion step. They are not real recipe files, are not connected to sources, and are never executed by daily runs.
-
-List candidates:
+Review candidates:
 
 ```powershell
 python -m job_agent.cli list-recipe-candidates
 python -m job_agent.cli list-recipe-candidates --status pending
-```
-
-Show one candidate:
-
-```powershell
 python -m job_agent.cli show-recipe-candidate <candidate-id>
-```
-
-Reject one candidate:
-
-```powershell
 python -m job_agent.cli reject-recipe-candidate <candidate-id> --reason "Selector captures filter navigation"
 ```
 
-Rejecting a candidate records the rejection reason and timestamp. Approval is an explicit later review action; automatic promotion remains intentionally absent.
-
-## Source Detail UI
-
-Recipe-backed source detail pages include a local Recipe Generation panel. The panel scans saved artifact folders under `output/recipe-calibration/`, prefers artifacts whose capture URL matches the source URL, and still shows other local artifacts with a warning-style match reason.
-
-From a source detail page you can:
-
-- select a local calibration artifact
-- generate a plain or refined recipe suggestion
-- save the result as a pending recipe candidate
-- review recent candidates related to the source
-- open the full candidate detail page
-- reject pending candidates
-
-The full candidate detail page shows schema status, quality summary, assumptions, warnings, refinement attempt history, and the final suggested YAML. This is a review surface only. The UI does not approve candidates, promote YAML into `sources/recipes/`, enable sources, execute sources, or change `sources/recruiting-sites.yaml`.
-
-## Approval
-
-Pending candidates can be explicitly approved after review. Approval is the first point where generated YAML becomes a real recipe file.
-
-CLI:
+Approve a pending candidate:
 
 ```powershell
 python -m job_agent.cli approve-recipe-candidate <candidate-id> --recipe-path sources/recipes/experimental/<name>.yaml --source-id <source-id>
 ```
 
-Approval:
+Inspect workflow state:
 
-1. Requires the candidate to be `pending`.
-2. Requires an explicit recipe path under `sources/recipes/`.
-3. Refuses overwrite unless `--overwrite` is supplied.
-4. Validates the candidate YAML against the recipe schema again.
-5. Requires local `page.html` in the candidate artifact folder.
-6. Writes the recipe YAML to the requested recipe path.
-7. Runs recipe preview against local `page.html`.
-8. Saves source health when `--source-id` or a source-detail approval is supplied.
-9. Marks the candidate `approved` with recipe path, source id, preview counts, and preview warnings.
+```powershell
+python -m job_agent.cli recipe-generation-status --source-id <source-id>
+```
 
-The candidate detail page has the same approval workflow for pending candidates. It suggests the source registry recipe path when available, otherwise a safe experimental path. Approval writes a recipe file and preview health only; it does not create or enable execution entries and does not change `sources/recruiting-sites.yaml`.
+Verify or exercise later stages manually:
+
+```powershell
+python -m job_agent.cli test-recipe sources/recipes/experimental/<name>.yaml output/recipe-calibration/<folder>/page.html --base-url https://example.com/jobs --source-id <source-id>
+python -m job_agent.cli dry-run-source <source-id>
+python -m job_agent.cli run-source <source-id>
+```
+
+`dry-run-source` does not write packages. `run-source` writes normal outputs, but only for an enabled execution source.
+
+## Web Workflow
+
+Recipe-backed source detail pages show a Recipe Lifecycle panel:
+
+- calibration artifacts found locally
+- pending, rejected, and approved candidates
+- latest approved recipe path
+- source health status
+- execution entry presence and enabled state
+
+The Recipe Generation panel lets you select a local calibration artifact, optionally refine, and save a pending candidate. Candidate detail pages show schema status, local quality, warnings, attempt history, YAML, approval controls for pending candidates, and post-approval preview metadata for approved candidates.
+
+## Approval
+
+Approval is the first point where generated YAML becomes a real recipe file. It:
+
+- only works for `pending` candidates
+- requires an explicit recipe path under `sources/recipes/`
+- refuses overwrite unless `--overwrite` is supplied
+- validates the YAML again
+- requires local artifact `page.html`
+- writes the recipe YAML
+- runs local recipe preview against `page.html`
+- saves source health when a source id is supplied
+- marks the candidate `approved` with recipe path, source id, preview counts, and warnings
+
+Approval does not create or enable daily-run execution entries and does not edit `sources/recruiting-sites.yaml`.
+
+## Troubleshooting
+
+Missing `page.html`: approval fails before writing a recipe, because local preview and health would be misleading.
+
+Invalid YAML: suggestion can save a candidate for review, but approval blocks schema-invalid YAML.
+
+Zero jobs extracted: refinement treats this as poor quality. Approval can still preview the written recipe and source health will show failing/warning counts rather than enabling anything.
+
+Approved recipe path differs from source registry path: source detail and `recipe-generation-status` show a workflow note. Review whether the source registry recipe path should be updated in a later, explicit task.
+
+Source health is good but execution is disabled or missing: this is expected. Use guarded execution setup separately when you want daily-run behavior.
 
 ## Boundaries
 
-- Proposes YAML only.
-- Validates the suggested YAML against the existing recipe schema.
-- Optional refinement validates extraction against local `page.html` only.
-- `--save-candidate` creates a pending review object, not an active recipe.
-- Source detail recipe generation saves pending candidates only.
-- Does not edit real recipe files unless an explicit output path or approval recipe path is provided.
-- Does not enable a source or update the source registry.
-- Does not promote candidates to `sources/recipes/` without explicit approval.
-- Approval does not enable source execution or update daily-run configuration.
-- Does not add pagination, browser automation, login handling, or arbitrary executable adapters.
-- Tests use fake LLM clients and do not call Claude.
-
-Next likely steps are approval/promotion review, recipe diff checks, and explicit source workflow integration after candidates have been inspected.
+- Generation/refinement uses local saved artifacts.
+- No hidden endpoint or API discovery is performed.
+- No arbitrary executable adapters are generated.
+- No source is enabled automatically.
+- Daily-run execution remains controlled by `sources/recruiting-sites.yaml`.
+- Existing recipe files are not overwritten without explicit overwrite.
+- Candidate approval writes recipe YAML and preview health only.
+- Tests do not call real Claude/API services.

@@ -47,6 +47,27 @@
 
 {% if source.recipe_path %}
 <div class="panel">
+  <h2>Recipe Lifecycle</h2>
+  <p class="muted">Generation, approval, health, and execution are separate stages. Approval can create a recipe and save health; it does not enable daily runs.</p>
+  <div class="grid">
+    <div class="stat"><span>Calibration artifacts</span><strong>{{ recipe_generation_status.artifact_count }}</strong></div>
+    <div class="stat"><span>Pending candidates</span><strong>{{ recipe_generation_status.pending_candidates }}</strong></div>
+    <div class="stat"><span>Approved candidates</span><strong>{{ recipe_generation_status.approved_candidates }}</strong></div>
+    <div class="stat"><span>Latest candidate</span><strong>{{ recipe_generation_status.latest_candidate_status or "none" }}</strong></div>
+    <div class="stat"><span>Approved recipe</span><strong>{{ recipe_generation_status.latest_approved_recipe_path or "none" }}</strong></div>
+    <div class="stat"><span>Source health</span><strong>{{ recipe_generation_status.source_health_status }}</strong></div>
+    <div class="stat"><span>Execution entry</span><strong>{{ "present" if recipe_generation_status.execution_entry_exists else "missing" }}</strong></div>
+    <div class="stat"><span>Execution enabled</span><strong>{{ "yes" if recipe_generation_status.execution_enabled else "no" }}</strong></div>
+  </div>
+  {% if recipe_generation_status.best_artifact %}
+  <p><strong>Best local artifact:</strong> {{ recipe_generation_status.best_artifact.display_name }} - {{ recipe_generation_status.best_artifact.match_reason }}</p>
+  {% endif %}
+  {% for warning in recipe_generation_status.warnings %}
+  <p class="muted">Workflow note: {{ warning }}</p>
+  {% endfor %}
+</div>
+
+<div class="panel">
   <h2>Recipe Generation</h2>
   <p class="muted">Generate a pending recipe candidate from saved local calibration artifacts. This does not promote a recipe, enable a source, execute a source, or edit daily-run configuration.</p>
   {% if recipe_artifacts %}

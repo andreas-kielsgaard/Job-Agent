@@ -31,6 +31,7 @@
   <p><strong>Approved recipe path:</strong> {{ candidate.approved_recipe_path }}</p>
   <p><strong>Approved source id:</strong> {{ candidate.approved_source_id or "none" }}</p>
   <p><strong>Preview saved:</strong> {{ "Yes" if candidate.preview_saved else "No" }}</p>
+  <p class="muted">Approval did not enable daily-run execution. Use source execution controls separately after review.</p>
   {% endif %}
 </div>
 
@@ -117,5 +118,18 @@
 <div class="panel">
   <h2>Suggested YAML</h2>
   <pre class="copy-source">{{ candidate.suggested_recipe_yaml }}</pre>
+</div>
+
+<div class="panel">
+  <h2>Useful Commands</h2>
+  {% if candidate.status == "pending" %}
+  <pre class="copy-source">python -m job_agent.cli approve-recipe-candidate {{ candidate.candidate_id }} --recipe-path {{ approval_recipe_path }}{% if source %} --source-id {{ source.id }}{% endif %}</pre>
+  {% endif %}
+  {% if candidate.approved_recipe_path %}
+  <pre class="copy-source">python -m job_agent.cli test-recipe {{ candidate.approved_recipe_path }} {{ candidate.artifact_dir }}/page.html --base-url {{ candidate.start_url }}{% if candidate.approved_source_id %} --source-id {{ candidate.approved_source_id }}{% endif %}</pre>
+  {% if candidate.approved_source_id %}
+  <pre class="copy-source">python -m job_agent.cli dry-run-source {{ candidate.approved_source_id }}</pre>
+  {% endif %}
+  {% endif %}
 </div>
 {% endblock %}
