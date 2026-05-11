@@ -101,6 +101,23 @@ def main() -> None:
     suggest.add_argument("--overwrite", action="store_true")
     suggest.add_argument("--refine", action="store_true", help="Run a bounded local validation/refinement loop.")
     suggest.add_argument("--max-attempts", type=int, default=3, help="Maximum LLM suggestion attempts when refining.")
+    suggest.add_argument("--save-candidate", action="store_true", help="Save a pending recipe candidate review object.")
+    list_candidates = subparsers.add_parser(
+        "list-recipe-candidates",
+        help="List pending/rejected generated recipe candidates.",
+    )
+    list_candidates.add_argument("--status", default="", choices=["", "pending", "rejected"])
+    show_candidate = subparsers.add_parser(
+        "show-recipe-candidate",
+        help="Show a generated recipe candidate review object.",
+    )
+    show_candidate.add_argument("candidate_id")
+    reject_candidate = subparsers.add_parser(
+        "reject-recipe-candidate",
+        help="Reject a generated recipe candidate without promoting it.",
+    )
+    reject_candidate.add_argument("candidate_id")
+    reject_candidate.add_argument("--reason", default="")
 
     args = parser.parse_args()
     if args.command == "run-daily":
@@ -146,7 +163,14 @@ def main() -> None:
             overwrite=args.overwrite,
             refine=args.refine,
             max_attempts=args.max_attempts,
+            save_candidate=args.save_candidate,
         )
+    if args.command == "list-recipe-candidates":
+        list_recipe_candidates(status=args.status)
+    if args.command == "show-recipe-candidate":
+        show_recipe_candidate(args.candidate_id)
+    if args.command == "reject-recipe-candidate":
+        reject_recipe_candidate(args.candidate_id, reason=args.reason)
 
 
 def run_daily(
@@ -358,11 +382,16 @@ def suggest_recipe(
     overwrite: bool = False,
     refine: bool = False,
     max_attempts: int = 3,
+    save_candidate: bool = False,
+    root=None,
 ) -> None:
     from pathlib import Path
 
+    from .config import ROOT
+    from .services.recipe_candidate_service import RecipeCandidateStore
     from .services.recipe_suggestion_service import suggest_recipe_from_artifact, suggest_recipe_with_refinement
 
+    project_root = Path(root) if root else ROOT
     output_path = Path(output) if output else None
     if output_path and output_path.exists() and not overwrite:
         _safe_print(f"Output already exists: {output_path}. Re-run with --overwrite to replace it.")
@@ -375,6 +404,7 @@ def suggest_recipe(
                 start_url=start_url,
                 existing_recipe_path=Path(existing_recipe) if existing_recipe else None,
                 max_attempts=max_attempts,
+                root=project_root,
             )
             result = refinement.final_result
         else:
@@ -384,6 +414,7 @@ def suggest_recipe(
                 source_name=source_name,
                 start_url=start_url,
                 existing_recipe_path=Path(existing_recipe) if existing_recipe else None,
+                root=project_root,
             )
     except RuntimeError as exc:
         _safe_print(f"Recipe suggestion unavailable: {exc}")
@@ -400,6 +431,15 @@ def suggest_recipe(
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_text(result.suggested_recipe_yaml.strip() + "\n", encoding="utf-8")
         _safe_print(f"Suggested recipe written to: {output_path}")
+    if save_candidate:
+        store = RecipeCandidateStore(project_root)
+        candidate = (
+            store.save_candidate_from_refinement(refinement)
+            if refinement
+            else store.save_candidate_from_suggestion(result)
+        )
+        _safe_print(f"Recipe candidate saved: {candidate.candidate_id}")
+        _safe_print(f"Candidate path: {store.candidate_path(candidate.candidate_id)}")
 
 
 def _print_recipe_suggestion(result) -> None:
@@ -444,6 +484,99 @@ def _print_recipe_refinement(refinement) -> None:
             _safe_print(f"  Revision reason: {attempt.revision_reason}")
     _safe_print("")
     _print_recipe_suggestion(refinement.final_result)
+
+
+def list_recipe_candidates(status: str = "", root=None) -> None:
+    from pathlib import Path
+
+    from .config import ROOT
+    from .services.recipe_candidate_service import RecipeCandidateStore
+
+    store = RecipeCandidateStore(Path(root) if root else ROOT)
+    candidates = store.list_candidates(status=status)
+    if not candidates:
+        _safe_print("No recipe candidates found.")
+        return
+    for candidate in candidates:
+        _safe_print(
+            f"{candidate.candidate_id} | {candidate.status} | {candidate.source_name} | "
+            f"created {candidate.created_at} | schema_valid={candidate.schema_valid} | "
+            f"refinement_accepted={candidate.refinement_accepted} | "
+            f"quality={candidate.quality_status or 'n/a'} | artifact={candidate.artifact_dir}"
+        )
+
+
+def show_recipe_candidate(candidate_id: str, root=None) -> None:
+    from pathlib import Path
+
+    from .config import ROOT
+    from .services.recipe_candidate_service import RecipeCandidateStore
+
+    try:
+        candidate = RecipeCandidateStore(Path(root) if root else ROOT).load_candidate(candidate_id)
+    except ValueError as exc:
+        _safe_print(str(exc))
+        return
+    _print_recipe_candidate(candidate)
+
+
+def reject_recipe_candidate(candidate_id: str, reason: str = "", root=None) -> None:
+    from pathlib import Path
+
+    from .config import ROOT
+    from .services.recipe_candidate_service import RecipeCandidateStore
+
+    try:
+        candidate = RecipeCandidateStore(Path(root) if root else ROOT).reject_candidate(candidate_id, reason=reason)
+    except ValueError as exc:
+        _safe_print(str(exc))
+        return
+    _safe_print(f"Recipe candidate rejected: {candidate.candidate_id}")
+    if candidate.rejection_reason:
+        _safe_print(f"Reason: {candidate.rejection_reason}")
+
+
+def _print_recipe_candidate(candidate) -> None:
+    _safe_print(f"Candidate id: {candidate.candidate_id}")
+    _safe_print(f"Status: {candidate.status}")
+    _safe_print(f"Created: {candidate.created_at}")
+    _safe_print(f"Updated: {candidate.updated_at}")
+    _safe_print(f"Source: {candidate.source_name}")
+    _safe_print(f"Start URL: {candidate.start_url}")
+    _safe_print(f"Artifact dir: {candidate.artifact_dir}")
+    _safe_print(f"Selected strategy: {candidate.selected_strategy}")
+    _safe_print(f"Confidence: {candidate.confidence}")
+    _safe_print(f"Schema valid: {candidate.schema_valid}")
+    _safe_print(f"Refinement used: {candidate.refinement_used}")
+    _safe_print(f"Refinement accepted: {candidate.refinement_accepted}")
+    _safe_print(f"Attempt count: {candidate.attempt_count}")
+    _safe_print(f"Quality status: {candidate.quality_status or 'n/a'}")
+    _safe_print(f"Jobs extracted: {candidate.extracted_job_count}")
+    _safe_print(f"Useful titles: {candidate.useful_titles}")
+    _safe_print(f"Generic labels: {candidate.generic_labels}")
+    _safe_print(f"Unique URLs: {candidate.unique_urls}")
+    _safe_print(f"Average description length: {candidate.average_description_length}")
+    for error in candidate.validation_errors:
+        _safe_print(f"Validation error: {error}")
+    for warning in candidate.warnings:
+        _safe_print(f"Warning: {warning}")
+    for warning in candidate.quality_warnings:
+        _safe_print(f"Quality warning: {warning}")
+    for assumption in candidate.assumptions:
+        _safe_print(f"Assumption: {assumption}")
+    if candidate.rejection_reason:
+        _safe_print(f"Rejection reason: {candidate.rejection_reason}")
+    for attempt in candidate.attempts:
+        _safe_print("")
+        _safe_print(f"Attempt {attempt.get('attempt_number')}")
+        _safe_print(f"  Schema valid: {attempt.get('schema_valid')}")
+        _safe_print(f"  Quality status: {attempt.get('quality_status')}")
+        _safe_print(f"  Jobs extracted: {attempt.get('extracted_job_count')}")
+        for warning in attempt.get("quality_warnings", []):
+            _safe_print(f"  Quality warning: {warning}")
+    _safe_print("")
+    _safe_print("Suggested recipe YAML:")
+    _safe_print(candidate.suggested_recipe_yaml)
 
 
 def calibrate_recipe(

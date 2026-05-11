@@ -32,6 +32,20 @@ python -m job_agent.cli suggest-recipe output/recipe-calibration/<folder> --outp
 
 Existing output files are not overwritten unless `--overwrite` is supplied.
 
+To save the result as a pending review object:
+
+```powershell
+python -m job_agent.cli suggest-recipe output/recipe-calibration/<folder> --save-candidate
+```
+
+This writes a candidate under:
+
+```text
+output/recipe-candidates/
+```
+
+The candidate stores the final YAML plus source name, artifact path, schema validation status, assumptions, warnings, evidence summary, referenced artifact files, and selected strategy. When refinement is used, it also stores the attempt history and final local quality summary.
+
 ## Local Refinement
 
 The suggestion command can also run a bounded local validation/refinement loop:
@@ -51,14 +65,41 @@ The refinement loop stays inside the saved artifact folder:
 
 Refinement does not follow detail pages, fetch public URLs, browse sites, discover APIs, or write real recipe files automatically. If `--output` is supplied, only the final candidate YAML is written, and existing files are still protected unless `--overwrite` is supplied.
 
+## Candidate Review
+
+Pending recipe candidates are durable review objects between generation and any future approval/promotion step. They are not real recipe files, are not connected to sources, and are never executed by daily runs.
+
+List candidates:
+
+```powershell
+python -m job_agent.cli list-recipe-candidates
+python -m job_agent.cli list-recipe-candidates --status pending
+```
+
+Show one candidate:
+
+```powershell
+python -m job_agent.cli show-recipe-candidate <candidate-id>
+```
+
+Reject one candidate:
+
+```powershell
+python -m job_agent.cli reject-recipe-candidate <candidate-id> --reason "Selector captures filter navigation"
+```
+
+Rejecting a candidate records the rejection reason and timestamp. Approval and promotion to `sources/recipes/` are intentionally future work.
+
 ## Boundaries
 
 - Proposes YAML only.
 - Validates the suggested YAML against the existing recipe schema.
 - Optional refinement validates extraction against local `page.html` only.
+- `--save-candidate` creates a pending review object, not an active recipe.
 - Does not edit real recipe files unless an explicit output path is provided.
 - Does not enable a source or update the source registry.
+- Does not promote candidates to `sources/recipes/`.
 - Does not add pagination, browser automation, login handling, or arbitrary executable adapters.
 - Tests use fake LLM clients and do not call Claude.
 
-Next likely steps are iterative validation, recipe diff review, and a pending-review workflow before any suggested recipe is promoted.
+Next likely steps are approval/promotion review, recipe diff checks, and explicit source workflow integration after candidates have been inspected.
