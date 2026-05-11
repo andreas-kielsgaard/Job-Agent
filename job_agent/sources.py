@@ -169,8 +169,11 @@ def load_jobs_from_sources(
 def iter_source_results(
     root: Path = ROOT,
     progress_callback: SourceProgressCallback | None = None,
+    source_id: str = "",
 ):
     sources = load_sources(root)
+    if source_id:
+        sources = [source for source in sources if str(source.get("source_id") or "") == source_id]
     source_count = len(sources)
     for source_index, source in enumerate(sources, start=1):
         source_name = source.get("name", "Unknown")

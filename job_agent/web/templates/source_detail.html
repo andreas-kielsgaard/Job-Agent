@@ -95,11 +95,15 @@ enabled: {{ "true" if execution_entry.enabled else "false" }}</pre>
   </form>
   <a class="button light" href="/sources/{{ source.id }}/dry-run">Dry run execution source</a>
   {% if execution_entry.enabled %}
+  <form method="post" action="/sources/{{ source.id }}/run-now" style="display:inline;">
+    <button type="submit" class="button">Run this source now</button>
+  </form>
   <form method="post" action="/sources/{{ source.id }}/execution/disable" style="display:inline;">
     <button type="submit" class="button light">Disable for daily runs</button>
   </form>
   {% else %}
   <a class="button light" href="/sources/{{ source.id }}/dry-run?force_disabled=true">Dry run disabled source</a>
+  <p class="muted">Enable this source before running.</p>
   <form method="post" action="/sources/{{ source.id }}/execution/enable" style="display:inline;">
     <button type="submit" class="button">Enable for daily runs</button>
   </form>
@@ -114,6 +118,7 @@ enabled: {{ "true" if execution_entry.enabled else "false" }}</pre>
   <p class="muted">Run recipe preview and save source health before enabling.</p>
   {% endif %}
   <p class="muted">A source registry entry existing does not mean daily-run execution is enabled. Good health does not enable a source by itself.</p>
+  <p class="muted">Progression: Recipe Preview tests extraction from one input. Source Dry Run tests this configured execution source without writes. Run this source now writes normal outputs for this source only. Daily Run executes all enabled sources.</p>
 </div>
 {% endif %}
 

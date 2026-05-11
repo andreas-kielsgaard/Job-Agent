@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
 
@@ -25,6 +25,7 @@ class RunResult:
     record: RunRecord
     digest_items: list[dict]
     excluded_items: list[dict]
+    source_warnings: list = field(default_factory=list)
 
 
 def run_daily_agent(
@@ -32,6 +33,7 @@ def run_daily_agent(
     progress_callback: ProgressCallback | None = None,
     root: Path = ROOT,
     run_id: str | None = None,
+    source_id: str = "",
 ) -> RunResult:
     run_store = RunStore(root)
     record = run_store.get(run_id) if run_id else None
@@ -64,7 +66,11 @@ def run_daily_agent(
 
     try:
         run_store.update(run_id, status="running")
-        emit("run_started", "Daily agent run started.", "startup")
+        emit(
+            "run_started",
+            f"Single-source run started for {source_id}." if source_id else "Daily agent run started.",
+            "startup",
+        )
 
         profile = load_profile(root)
         emit("profile_loaded", "Profile loaded.", "startup")
@@ -99,7 +105,7 @@ def run_daily_agent(
         processed_states = []
         processed_keys: set[str] = set()
 
-        for source_fetch in iter_source_results(root, progress_callback=emit_source_progress):
+        for source_fetch in iter_source_results(root, progress_callback=emit_source_progress, source_id=source_id):
             total_loaded += len(source_fetch.result.jobs)
             all_warnings.extend(source_fetch.result.warnings)
             source_states = store.classify(source_fetch.result.jobs)
@@ -392,8 +398,14 @@ def run_daily_agent(
             token_usage=token_summary,
             total_estimated_llm_cost=token_summary.get("estimated_cost"),
         )
-        emit("run_completed", "Daily agent run completed.", "complete", status="completed", counts=summary)
-        return RunResult(record=record, digest_items=digest_items, excluded_items=excluded_items)
+        emit(
+            "run_completed",
+            f"Single-source run completed for {source_id}." if source_id else "Daily agent run completed.",
+            "complete",
+            status="completed",
+            counts=summary,
+        )
+        return RunResult(record=record, digest_items=digest_items, excluded_items=excluded_items, source_warnings=all_warnings)
     except Exception as exc:
         record = run_store.update(run_id, status="failed", finished_at=utc_now(), error_message=str(exc))
         emit("run_failed", f"Daily agent run failed: {exc}", "failed", status="failed")

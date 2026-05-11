@@ -504,6 +504,50 @@ def test_source_dry_run_route_renders_result(monkeypatch: pytest.MonkeyPatch, cl
     assert "No packages, seen state, materials, digests, or run records were written." in response.text
 
 
+def test_source_detail_run_now_requires_enabled_source(client: TestClient) -> None:
+    client.post("/sources/eursap-jobs/execution/create", follow_redirects=False)
+
+    response = client.post("/sources/eursap-jobs/run-now", follow_redirects=False)
+
+    assert response.status_code == 303
+    assert "warning=" in response.headers["location"]
+
+
+def test_source_detail_run_now_redirects_to_run_detail(
+    monkeypatch: pytest.MonkeyPatch, client: TestClient, project_root: Path
+) -> None:
+    from job_agent.io.yaml_store import read_yaml, write_yaml
+    from job_agent.services.single_source_run_service import SingleSourceRunResult
+
+    client.post("/sources/eursap-jobs/execution/create", follow_redirects=False)
+    config_path = project_root / "sources" / "recruiting-sites.yaml"
+    config = read_yaml(config_path, {})
+    config["sources"][0]["enabled"] = True
+    write_yaml(config_path, config)
+
+    class FakeSingleSourceRunService:
+        def __init__(self, root):
+            pass
+
+        def run(self, source_id):
+            assert source_id == "eursap-jobs"
+            return SingleSourceRunResult(
+                source_id="eursap-jobs",
+                source_name="Eursap Jobs",
+                source_type="recipe_html",
+                status="completed",
+                run_id="run-1",
+                run_detail_url="/runs/run-1",
+            )
+
+    monkeypatch.setattr("job_agent.web.routers.sources.SingleSourceRunService", FakeSingleSourceRunService)
+
+    response = client.post("/sources/eursap-jobs/run-now", follow_redirects=False)
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/runs/run-1"
+
+
 def test_manual_source_cannot_create_recipe_execution_route(client: TestClient) -> None:
     response = client.post("/sources/manual-intake/execution/create", follow_redirects=False)
 

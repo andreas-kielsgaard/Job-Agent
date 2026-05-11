@@ -7,6 +7,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 
 from job_agent.web.dependencies import execution_source_service, source_registry_service, templates
 from job_agent.services.source_dry_run_service import SourceDryRunService
+from job_agent.services.single_source_run_service import SingleSourceRunService
 
 router = APIRouter()
 
@@ -98,6 +99,23 @@ def source_dry_run(request: Request, source_id: str, force_disabled: bool = Fals
             "result": result,
             "force_disabled": force_disabled,
         },
+    )
+
+
+@router.post("/sources/{source_id}/run-now")
+def run_source_now(source_id: str) -> RedirectResponse:
+    source = _registry_source_or_404(source_id)
+    execution_entry = execution_source_service().find_by_source_id(source.id)
+    if not execution_entry:
+        return _redirect_to_source(source_id, warning="Create an execution entry before running this source.")
+    if not bool(execution_entry.get("enabled", True)):
+        return _redirect_to_source(source_id, warning="Enable this source before running.")
+    result = SingleSourceRunService(execution_source_service().root).run(source.id)
+    if result.run_detail_url:
+        return RedirectResponse(result.run_detail_url, status_code=303)
+    return _redirect_to_source(
+        source_id,
+        warning=f"Single-source run did not start: {result.status}.",
     )
 
 
