@@ -45,6 +45,94 @@
 </div>
 {% endif %}
 
+{% if source.recipe_path %}
+<div class="panel">
+  <h2>Recipe Generation</h2>
+  <p class="muted">Generate a pending recipe candidate from saved local calibration artifacts. This does not promote a recipe, enable a source, execute a source, or edit daily-run configuration.</p>
+  {% if recipe_artifacts %}
+  <form method="post" action="/sources/{{ source.id }}/recipe-candidates/generate">
+    <label>Local calibration artifact</label>
+    <select name="artifact_dir">
+      {% for artifact in recipe_artifacts %}
+      <option value="{{ artifact.artifact_dir }}">{{ artifact.display_name }} - {{ artifact.match_status }} - {{ artifact.capture_url or "unknown URL" }}</option>
+      {% endfor %}
+    </select>
+    <div class="row">
+      <label class="check"><input type="checkbox" name="refine" value="1" checked> Refine locally</label>
+      <label>Max attempts <input type="number" name="max_attempts" value="3" min="1" max="8" style="max-width:7rem;"></label>
+      <button type="submit" class="button">Generate pending candidate</button>
+    </div>
+  </form>
+  <details>
+    <summary>Local calibration artifacts</summary>
+    {% for artifact in recipe_artifacts %}
+    <div class="stat" style="margin:0.6rem 0;">
+      <span>{{ artifact.display_name }} | {{ artifact.match_reason }}</span>
+      <strong>{{ artifact.capture_mode or "unknown mode" }} | {{ artifact.candidate_count }} candidates | page.html: {{ "yes" if artifact.has_page_html else "no" }}</strong>
+      <p class="muted">{{ artifact.capture_url or "No capture URL" }}</p>
+      {% if artifact.top_candidate_selectors %}
+      <p class="muted">Selectors: {{ artifact.top_candidate_selectors|join(", ") }}</p>
+      {% endif %}
+      {% for warning in artifact.warnings %}
+      <p class="muted">Warning: {{ warning }}</p>
+      {% endfor %}
+    </div>
+    {% endfor %}
+  </details>
+  <details>
+    <summary>Copyable generation command</summary>
+    <pre class="copy-source">python -m job_agent.cli suggest-recipe {{ recipe_artifacts[0].artifact_dir }} --source-name "{{ source.name }}" --start-url {{ source.url }} --refine --max-attempts 3 --save-candidate</pre>
+  </details>
+  {% else %}
+  <p class="muted">No local calibration artifacts found under output/recipe-calibration yet.</p>
+  {% endif %}
+</div>
+
+<div class="panel">
+  <h2>Recipe Candidates</h2>
+  <p class="muted">Candidates are review objects only. They are not active recipes and are not connected to daily runs.</p>
+  {% if recipe_candidates %}
+  <table>
+    <thead>
+      <tr>
+        <th>Candidate</th>
+        <th>Status</th>
+        <th>Schema</th>
+        <th>Refinement</th>
+        <th>Quality</th>
+        <th>Jobs</th>
+        <th>Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for candidate in recipe_candidates %}
+      <tr>
+        <td><a href="/recipe-candidates/{{ candidate.candidate_id }}?source_id={{ source.id }}">{{ candidate.candidate_id }}</a><br><span class="muted">{{ candidate.created_at }}</span></td>
+        <td>{{ candidate.status }}</td>
+        <td>{{ "valid" if candidate.schema_valid else "invalid" }}</td>
+        <td>{{ "accepted" if candidate.refinement_accepted else ("used" if candidate.refinement_used else "not used") }}</td>
+        <td>{{ candidate.quality_status or "n/a" }}</td>
+        <td>{{ candidate.extracted_job_count }} extracted / {{ candidate.useful_titles }} useful / {{ candidate.unique_urls }} URLs</td>
+        <td>
+          <a class="button light" href="/recipe-candidates/{{ candidate.candidate_id }}?source_id={{ source.id }}">Show</a>
+          {% if candidate.status == "pending" %}
+          <form method="post" action="/recipe-candidates/{{ candidate.candidate_id }}/reject" style="display:inline;">
+            <input type="hidden" name="source_id" value="{{ source.id }}">
+            <input type="hidden" name="reason" value="Rejected from source detail.">
+            <button type="submit" class="button light">Reject</button>
+          </form>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">No saved recipe candidates match this source yet.</p>
+  {% endif %}
+</div>
+{% endif %}
+
 <div class="panel">
   <h2>Recipe Health</h2>
   {% if source.recipe_path %}

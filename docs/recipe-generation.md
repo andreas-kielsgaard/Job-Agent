@@ -90,12 +90,28 @@ python -m job_agent.cli reject-recipe-candidate <candidate-id> --reason "Selecto
 
 Rejecting a candidate records the rejection reason and timestamp. Approval and promotion to `sources/recipes/` are intentionally future work.
 
+## Source Detail UI
+
+Recipe-backed source detail pages include a local Recipe Generation panel. The panel scans saved artifact folders under `output/recipe-calibration/`, prefers artifacts whose capture URL matches the source URL, and still shows other local artifacts with a warning-style match reason.
+
+From a source detail page you can:
+
+- select a local calibration artifact
+- generate a plain or refined recipe suggestion
+- save the result as a pending recipe candidate
+- review recent candidates related to the source
+- open the full candidate detail page
+- reject pending candidates
+
+The full candidate detail page shows schema status, quality summary, assumptions, warnings, refinement attempt history, and the final suggested YAML. This is a review surface only. The UI does not approve candidates, promote YAML into `sources/recipes/`, enable sources, execute sources, or change `sources/recruiting-sites.yaml`.
+
 ## Boundaries
 
 - Proposes YAML only.
 - Validates the suggested YAML against the existing recipe schema.
 - Optional refinement validates extraction against local `page.html` only.
 - `--save-candidate` creates a pending review object, not an active recipe.
+- Source detail recipe generation saves pending candidates only.
 - Does not edit real recipe files unless an explicit output path is provided.
 - Does not enable a source or update the source registry.
 - Does not promote candidates to `sources/recipes/`.

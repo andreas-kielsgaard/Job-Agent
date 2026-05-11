@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="row">
+  <h1 style="margin-right:auto;">Recipe Candidate</h1>
+  {% if source %}
+  <a class="button light" href="/sources/{{ source.id }}">Back to {{ source.name }}</a>
+  {% else %}
+  <a class="button light" href="/sources">Back to sources</a>
+  {% endif %}
+</div>
+
+<div class="panel">
+  <h2>Review Summary</h2>
+  <p class="muted">This is a pending/rejected review object only. It is not an active recipe and does not affect daily-run execution.</p>
+  <div class="grid">
+    <div class="stat"><span>Candidate id</span><strong>{{ candidate.candidate_id }}</strong></div>
+    <div class="stat"><span>Status</span><strong>{{ candidate.status }}</strong></div>
+    <div class="stat"><span>Created</span><strong>{{ candidate.created_at }}</strong></div>
+    <div class="stat"><span>Updated</span><strong>{{ candidate.updated_at }}</strong></div>
+    <div class="stat"><span>Source</span><strong>{{ candidate.source_name }}</strong></div>
+    <div class="stat"><span>Schema valid</span><strong>{{ "Yes" if candidate.schema_valid else "No" }}</strong></div>
+    <div class="stat"><span>Strategy</span><strong>{{ candidate.selected_strategy or "n/a" }}</strong></div>
+    <div class="stat"><span>Confidence</span><strong>{{ candidate.confidence or "n/a" }}</strong></div>
+  </div>
+  <p><strong>Start URL:</strong> {{ candidate.start_url or "Not listed" }}</p>
+  <p><strong>Artifact:</strong> {{ candidate.artifact_dir }}</p>
+  {% if candidate.rejection_reason %}
+  <p><strong>Rejection reason:</strong> {{ candidate.rejection_reason }}</p>
+  {% endif %}
+</div>
+
+<div class="panel">
+  <h2>Quality</h2>
+  <div class="grid">
+    <div class="stat"><span>Status</span><strong>{{ candidate.quality_status or "n/a" }}</strong></div>
+    <div class="stat"><span>Jobs extracted</span><strong>{{ candidate.extracted_job_count }}</strong></div>
+    <div class="stat"><span>Useful titles</span><strong>{{ candidate.useful_titles }}</strong></div>
+    <div class="stat"><span>Generic labels</span><strong>{{ candidate.generic_labels }}</strong></div>
+    <div class="stat"><span>Unique URLs</span><strong>{{ candidate.unique_urls }}</strong></div>
+    <div class="stat"><span>Avg description</span><strong>{{ candidate.average_description_length }}</strong></div>
+    <div class="stat"><span>Refinement used</span><strong>{{ "Yes" if candidate.refinement_used else "No" }}</strong></div>
+    <div class="stat"><span>Refinement accepted</span><strong>{{ "Yes" if candidate.refinement_accepted else "No" }}</strong></div>
+  </div>
+  {% for error in candidate.validation_errors %}
+  <p class="muted">Validation error: {{ error }}</p>
+  {% endfor %}
+  {% for warning in candidate.quality_warnings %}
+  <p class="muted">Quality warning: {{ warning }}</p>
+  {% endfor %}
+  {% for warning in candidate.warnings %}
+  <p class="muted">Warning: {{ warning }}</p>
+  {% endfor %}
+  {% for assumption in candidate.assumptions %}
+  <p class="muted">Assumption: {{ assumption }}</p>
+  {% endfor %}
+</div>
+
+{% if candidate.attempts %}
+<div class="panel">
+  <h2>Attempt History</h2>
+  {% for attempt in candidate.attempts %}
+  <div class="stat" style="margin:0.6rem 0;">
+    <span>Attempt {{ attempt.attempt_number or attempt["attempt_number"] }}</span>
+    <strong>{{ attempt.quality_status or attempt["quality_status"] }}</strong>
+    <p class="muted">Schema valid: {{ attempt.schema_valid if attempt.schema_valid is defined else attempt["schema_valid"] }} | Jobs: {{ attempt.extracted_job_count or attempt["extracted_job_count"] }} | Useful titles: {{ attempt.useful_titles or attempt["useful_titles"] }} | URLs: {{ attempt.unique_urls or attempt["unique_urls"] }}</p>
+    {% for warning in attempt.quality_warnings or attempt["quality_warnings"] %}
+    <p class="muted">Quality warning: {{ warning }}</p>
+    {% endfor %}
+    {% if attempt.revision_reason or attempt["revision_reason"] %}
+    <p class="muted">Revision reason: {{ attempt.revision_reason or attempt["revision_reason"] }}</p>
+    {% endif %}
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+{% if candidate.status == "pending" %}
+<div class="panel">
+  <h2>Reject Candidate</h2>
+  <form method="post" action="/recipe-candidates/{{ candidate.candidate_id }}/reject">
+    {% if source %}<input type="hidden" name="source_id" value="{{ source.id }}">{% endif %}
+    <label>Reason</label>
+    <input type="text" name="reason" placeholder="Why this candidate should not be promoted later">
+    <button type="submit" class="button light">Reject candidate</button>
+  </form>
+</div>
+{% endif %}
+
+<div class="panel">
+  <h2>Suggested YAML</h2>
+  <pre class="copy-source">{{ candidate.suggested_recipe_yaml }}</pre>
+</div>
+{% endblock %}

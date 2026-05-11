@@ -2,12 +2,19 @@ from __future__ import annotations
 
 from urllib.parse import urlencode
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
-from job_agent.web.dependencies import execution_source_service, source_registry_service, templates
+from job_agent.web.dependencies import (
+    execution_source_service,
+    recipe_artifact_service,
+    recipe_candidate_store,
+    source_registry_service,
+    templates,
+)
 from job_agent.services.source_dry_run_service import SourceDryRunService
 from job_agent.services.single_source_run_service import SingleSourceRunService
+from job_agent.services.recipe_suggestion_service import suggest_recipe_from_artifact, suggest_recipe_with_refinement
 
 router = APIRouter()
 
@@ -28,6 +35,8 @@ def source_detail(request: Request, source_id: str, message: str = "", warning: 
     if not source:
         raise HTTPException(status_code=404, detail="Source not found.")
     execution_entry = execution_source_service().find_by_source_id(source.id)
+    artifacts = recipe_artifact_service().list_artifacts_for_source(source)
+    recipe_candidates = _candidates_for_source(source, artifacts)
     return templates.TemplateResponse(
         request,
         "source_detail.html",
@@ -38,6 +47,8 @@ def source_detail(request: Request, source_id: str, message: str = "", warning: 
             "execution_entry": execution_entry,
             "execution_message": message,
             "execution_warning": warning,
+            "recipe_artifacts": artifacts,
+            "recipe_candidates": recipe_candidates,
         },
     )
 
@@ -119,6 +130,67 @@ def run_source_now(source_id: str) -> RedirectResponse:
     )
 
 
+@router.post("/sources/{source_id}/recipe-candidates/generate")
+def generate_recipe_candidate(
+    source_id: str,
+    artifact_dir: str = Form(...),
+    refine: str = Form(""),
+    max_attempts: int = Form(3),
+) -> RedirectResponse:
+    source = _registry_source_or_404(source_id)
+    try:
+        artifact_path = recipe_artifact_service().resolve_artifact_path(artifact_dir)
+        if bool(refine):
+            refinement = suggest_recipe_with_refinement(
+                artifact_path,
+                source_name=source.name,
+                start_url=source.url,
+                max_attempts=max_attempts,
+                root=execution_source_service().root,
+            )
+            candidate = recipe_candidate_store().save_candidate_from_refinement(refinement)
+        else:
+            suggestion = suggest_recipe_from_artifact(
+                artifact_path,
+                source_name=source.name,
+                start_url=source.url,
+                root=execution_source_service().root,
+            )
+            candidate = recipe_candidate_store().save_candidate_from_suggestion(suggestion)
+    except (RuntimeError, ValueError) as exc:
+        return _redirect_to_source(source_id, warning=f"Recipe candidate generation failed: {exc}")
+    return _redirect_to_source(source_id, message=f"Pending recipe candidate saved: {candidate.candidate_id}")
+
+
+@router.get("/recipe-candidates/{candidate_id}", response_class=HTMLResponse)
+def recipe_candidate_detail(request: Request, candidate_id: str, source_id: str = "") -> HTMLResponse:
+    try:
+        candidate = recipe_candidate_store().load_candidate(candidate_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    source = source_registry_service().get_source(source_id) if source_id else _source_for_candidate(candidate)
+    return templates.TemplateResponse(
+        request,
+        "recipe_candidate_detail.html",
+        {
+            "request": request,
+            "candidate": candidate,
+            "source": source,
+        },
+    )
+
+
+@router.post("/recipe-candidates/{candidate_id}/reject")
+def reject_recipe_candidate(candidate_id: str, source_id: str = Form(""), reason: str = Form("")) -> RedirectResponse:
+    try:
+        recipe_candidate_store().reject_candidate(candidate_id, reason=reason)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if source_id:
+        return _redirect_to_source(source_id, message=f"Recipe candidate rejected: {candidate_id}")
+    return RedirectResponse(f"/recipe-candidates/{candidate_id}", status_code=303)
+
+
 def _recipe_preview_url(source) -> str:
     if not source.recipe_path:
         return ""
@@ -152,3 +224,45 @@ def _redirect_to_source(source_id: str, *, message: str = "", warning: str = "")
         params["warning"] = warning
     suffix = f"?{urlencode(params)}" if params else ""
     return RedirectResponse(f"/sources/{source_id}{suffix}", status_code=303)
+
+
+def _candidates_for_source(source, artifacts) -> list:
+    artifact_dirs = {artifact.artifact_dir for artifact in artifacts}
+    result = []
+    for summary in recipe_candidate_store().list_candidates():
+        try:
+            candidate = recipe_candidate_store().load_candidate(summary.candidate_id)
+        except ValueError:
+            continue
+        if _candidate_matches_source(candidate, source, artifact_dirs):
+            result.append(candidate)
+    return sorted(result, key=lambda item: item.created_at, reverse=True)[:10]
+
+
+def _source_for_candidate(candidate):
+    for source in source_registry_service().list_sources():
+        if _candidate_matches_source(candidate, source, set()):
+            return source
+    return None
+
+
+def _candidate_matches_source(candidate, source, artifact_dirs: set[str]) -> bool:
+    if candidate.source_name.strip().lower() == source.name.strip().lower():
+        return True
+    if source.url and candidate.start_url and _same_host_path(source.url, candidate.start_url):
+        return True
+    return bool(candidate.artifact_dir and candidate.artifact_dir in artifact_dirs)
+
+
+def _same_host_path(left: str, right: str) -> bool:
+    from urllib.parse import urlparse
+
+    left_parsed = urlparse(left if "://" in left else f"https://{left}")
+    right_parsed = urlparse(right if "://" in right else f"https://{right}")
+    left_host = left_parsed.netloc.lower().removeprefix("www.")
+    right_host = right_parsed.netloc.lower().removeprefix("www.")
+    if not left_host or left_host != right_host:
+        return False
+    left_path = left_parsed.path.rstrip("/")
+    right_path = right_parsed.path.rstrip("/")
+    return not left_path or right_path == left_path or right_path.startswith(f"{left_path}/")
