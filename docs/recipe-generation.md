@@ -32,10 +32,30 @@ python -m job_agent.cli suggest-recipe output/recipe-calibration/<folder> --outp
 
 Existing output files are not overwritten unless `--overwrite` is supplied.
 
+## Local Refinement
+
+The suggestion command can also run a bounded local validation/refinement loop:
+
+```powershell
+python -m job_agent.cli suggest-recipe output/recipe-calibration/<folder> --refine --max-attempts 3
+```
+
+The refinement loop stays inside the saved artifact folder:
+
+1. Ask the LLM for strict JSON containing proposed recipe YAML.
+2. Validate the YAML against the existing recipe schema.
+3. Run the suggested recipe against local `page.html`.
+4. Summarize extraction quality, including extracted jobs, useful titles, generic labels, unique URLs, and average description length.
+5. If the schema is invalid or local extraction is poor, ask for a revised strict JSON response.
+6. Stop when the candidate is acceptable or when `--max-attempts` is reached.
+
+Refinement does not follow detail pages, fetch public URLs, browse sites, discover APIs, or write real recipe files automatically. If `--output` is supplied, only the final candidate YAML is written, and existing files are still protected unless `--overwrite` is supplied.
+
 ## Boundaries
 
 - Proposes YAML only.
 - Validates the suggested YAML against the existing recipe schema.
+- Optional refinement validates extraction against local `page.html` only.
 - Does not edit real recipe files unless an explicit output path is provided.
 - Does not enable a source or update the source registry.
 - Does not add pagination, browser automation, login handling, or arbitrary executable adapters.

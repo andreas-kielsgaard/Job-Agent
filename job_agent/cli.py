@@ -99,6 +99,8 @@ def main() -> None:
     suggest.add_argument("--existing-recipe", default="")
     suggest.add_argument("--output", default="")
     suggest.add_argument("--overwrite", action="store_true")
+    suggest.add_argument("--refine", action="store_true", help="Run a bounded local validation/refinement loop.")
+    suggest.add_argument("--max-attempts", type=int, default=3, help="Maximum LLM suggestion attempts when refining.")
 
     args = parser.parse_args()
     if args.command == "run-daily":
@@ -142,6 +144,8 @@ def main() -> None:
             existing_recipe=args.existing_recipe,
             output=args.output,
             overwrite=args.overwrite,
+            refine=args.refine,
+            max_attempts=args.max_attempts,
         )
 
 
@@ -352,22 +356,35 @@ def suggest_recipe(
     existing_recipe: str = "",
     output: str = "",
     overwrite: bool = False,
+    refine: bool = False,
+    max_attempts: int = 3,
 ) -> None:
     from pathlib import Path
 
-    from .services.recipe_suggestion_service import suggest_recipe_from_artifact
+    from .services.recipe_suggestion_service import suggest_recipe_from_artifact, suggest_recipe_with_refinement
 
     output_path = Path(output) if output else None
     if output_path and output_path.exists() and not overwrite:
         _safe_print(f"Output already exists: {output_path}. Re-run with --overwrite to replace it.")
         return
     try:
-        result = suggest_recipe_from_artifact(
-            Path(artifact_dir),
-            source_name=source_name,
-            start_url=start_url,
-            existing_recipe_path=Path(existing_recipe) if existing_recipe else None,
-        )
+        if refine:
+            refinement = suggest_recipe_with_refinement(
+                Path(artifact_dir),
+                source_name=source_name,
+                start_url=start_url,
+                existing_recipe_path=Path(existing_recipe) if existing_recipe else None,
+                max_attempts=max_attempts,
+            )
+            result = refinement.final_result
+        else:
+            refinement = None
+            result = suggest_recipe_from_artifact(
+                Path(artifact_dir),
+                source_name=source_name,
+                start_url=start_url,
+                existing_recipe_path=Path(existing_recipe) if existing_recipe else None,
+            )
     except RuntimeError as exc:
         _safe_print(f"Recipe suggestion unavailable: {exc}")
         return
@@ -375,7 +392,10 @@ def suggest_recipe(
         _safe_print(f"Recipe suggestion failed: {exc}")
         return
 
-    _print_recipe_suggestion(result)
+    if refinement:
+        _print_recipe_refinement(refinement)
+    else:
+        _print_recipe_suggestion(result)
     if output_path:
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_text(result.suggested_recipe_yaml.strip() + "\n", encoding="utf-8")
@@ -401,6 +421,29 @@ def _print_recipe_suggestion(result) -> None:
     _safe_print("")
     _safe_print("Suggested recipe YAML:")
     _safe_print(result.suggested_recipe_yaml)
+
+
+def _print_recipe_refinement(refinement) -> None:
+    _safe_print(f"Refinement attempts: {len(refinement.attempts)}")
+    _safe_print(f"Accepted: {refinement.accepted}")
+    for attempt in refinement.attempts:
+        _safe_print("")
+        _safe_print(f"Attempt {attempt.attempt_number}")
+        _safe_print(f"  Schema valid: {attempt.schema_valid}")
+        _safe_print(f"  Quality status: {attempt.quality_status}")
+        _safe_print(f"  Jobs extracted: {attempt.extracted_job_count}")
+        _safe_print(f"  Useful titles: {attempt.useful_titles}")
+        _safe_print(f"  Generic labels: {attempt.generic_labels}")
+        _safe_print(f"  Unique URLs: {attempt.unique_urls}")
+        _safe_print(f"  Average description length: {attempt.average_description_length}")
+        for error in attempt.validation_errors:
+            _safe_print(f"  Validation error: {error}")
+        for warning in attempt.quality_warnings:
+            _safe_print(f"  Quality warning: {warning}")
+        if attempt.revision_reason:
+            _safe_print(f"  Revision reason: {attempt.revision_reason}")
+    _safe_print("")
+    _print_recipe_suggestion(refinement.final_result)
 
 
 def calibrate_recipe(
