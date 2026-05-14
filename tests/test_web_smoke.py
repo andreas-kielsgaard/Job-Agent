@@ -552,3 +552,11 @@ def test_manual_source_cannot_create_recipe_execution_route(client: TestClient) 
     response = client.post("/sources/manual-intake/execution/create", follow_redirects=False)
 
     assert response.status_code == 400
+
+
+def test_jobs_row_click_handler_allows_rows_inside_bulk_form(client: TestClient) -> None:
+    response = client.get("/jobs")
+
+    assert response.status_code == 200
+    assert 'closest("a, button, input, select, textarea, label")' in response.text
+    assert 'closest("a, button, input, select, textarea, label, form")' not in response.text

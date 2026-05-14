@@ -93,7 +93,7 @@
       }
 
       function goToRow(event, url) {
-        if (event.target.closest("a, button, input, select, textarea, label, form")) return;
+        if (event.target.closest("a, button, input, select, textarea, label")) return;
         window.location.href = url;
       }
 
