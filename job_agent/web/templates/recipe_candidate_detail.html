@@ -31,6 +31,9 @@
   <p><strong>Approved recipe path:</strong> {{ candidate.approved_recipe_path }}</p>
   <p><strong>Approved source id:</strong> {{ candidate.approved_source_id or "none" }}</p>
   <p><strong>Preview saved:</strong> {{ "Yes" if candidate.preview_saved else "No" }}</p>
+  {% if candidate.adopted_at %}
+  <p><strong>Adopted by source:</strong> {{ candidate.adopted_source_id }} using {{ candidate.adopted_recipe_path }}</p>
+  {% endif %}
   <p class="muted">Approval did not enable daily-run execution. Use source execution controls separately after review.</p>
   {% endif %}
 </div>
@@ -115,6 +118,18 @@
 </div>
 {% endif %}
 
+{% if candidate.status == "approved" and source %}
+<div class="panel">
+  <h2>Adopt For Source</h2>
+  <p class="muted">Adoption updates the source registry recipe_path to this approved recipe. It can optionally prepare a disabled execution entry, but it never enables daily-run execution.</p>
+  <form method="post" action="/recipe-candidates/{{ candidate.candidate_id }}/adopt">
+    <input type="hidden" name="source_id" value="{{ source.id }}">
+    <label class="check"><input type="checkbox" name="prepare_disabled_execution_entry" value="1"> Prepare disabled execution entry</label>
+    <button type="submit" class="button">Adopt approved recipe for this source</button>
+  </form>
+</div>
+{% endif %}
+
 <div class="panel">
   <h2>Suggested YAML</h2>
   <pre class="copy-source">{{ candidate.suggested_recipe_yaml }}</pre>
@@ -126,6 +141,9 @@
   <pre class="copy-source">python -m job_agent.cli approve-recipe-candidate {{ candidate.candidate_id }} --recipe-path {{ approval_recipe_path }}{% if source %} --source-id {{ source.id }}{% endif %}</pre>
   {% endif %}
   {% if candidate.approved_recipe_path %}
+  {% if source %}
+  <pre class="copy-source">python -m job_agent.cli adopt-approved-recipe {{ candidate.candidate_id }} --source-id {{ source.id }}</pre>
+  {% endif %}
   <pre class="copy-source">python -m job_agent.cli test-recipe {{ candidate.approved_recipe_path }} {{ candidate.artifact_dir }}/page.html --base-url {{ candidate.start_url }}{% if candidate.approved_source_id %} --source-id {{ candidate.approved_source_id }}{% endif %}</pre>
   {% if candidate.approved_source_id %}
   <pre class="copy-source">python -m job_agent.cli dry-run-source {{ candidate.approved_source_id }}</pre>

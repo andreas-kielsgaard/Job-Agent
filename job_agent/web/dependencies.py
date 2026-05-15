@@ -8,6 +8,7 @@ from job_agent.application_status_store import ApplicationStatusStore
 from job_agent.config import ROOT
 from job_agent.run_store import RunStore
 from job_agent.services.cv_reference_service import CvReferenceService
+from job_agent.services.approved_recipe_adoption_service import ApprovedRecipeAdoptionService
 from job_agent.services.execution_source_service import ExecutionSourceService
 from job_agent.services.material_service import MaterialService
 from job_agent.services.package_index_service import PackageIndexService
@@ -81,6 +82,10 @@ def recipe_candidate_approval_service() -> RecipeCandidateApprovalService:
 
 def recipe_generation_status_service() -> RecipeGenerationStatusService:
     return RecipeGenerationStatusService(_current_root)
+
+
+def approved_recipe_adoption_service() -> ApprovedRecipeAdoptionService:
+    return ApprovedRecipeAdoptionService(_current_root)
 
 
 def cv_reference_service() -> CvReferenceService:

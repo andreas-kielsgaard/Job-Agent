@@ -131,6 +131,13 @@ def main() -> None:
         help="Summarize local recipe generation state for one source.",
     )
     generation_status.add_argument("--source-id", required=True)
+    adopt_candidate = subparsers.add_parser(
+        "adopt-approved-recipe",
+        help="Adopt an approved candidate recipe path into a source registry entry.",
+    )
+    adopt_candidate.add_argument("candidate_id")
+    adopt_candidate.add_argument("--source-id", required=True)
+    adopt_candidate.add_argument("--prepare-disabled-execution-entry", action="store_true")
 
     args = parser.parse_args()
     if args.command == "run-daily":
@@ -193,6 +200,12 @@ def main() -> None:
         )
     if args.command == "recipe-generation-status":
         recipe_generation_status(args.source_id)
+    if args.command == "adopt-approved-recipe":
+        adopt_approved_recipe(
+            args.candidate_id,
+            source_id=args.source_id,
+            prepare_disabled_execution_entry=args.prepare_disabled_execution_entry,
+        )
 
 
 def run_daily(
@@ -624,6 +637,39 @@ def recipe_generation_status(source_id: str, root=None) -> None:
     for warning in status.warnings:
         _safe_print(f"Workflow note: {warning}")
     _safe_print("Approval/source health and execution enablement are separate; this command does not mutate anything.")
+
+
+def adopt_approved_recipe(
+    candidate_id: str,
+    *,
+    source_id: str,
+    prepare_disabled_execution_entry: bool = False,
+    root=None,
+) -> None:
+    from pathlib import Path
+
+    from .config import ROOT
+    from .services.approved_recipe_adoption_service import ApprovedRecipeAdoptionService
+
+    try:
+        result = ApprovedRecipeAdoptionService(Path(root) if root else ROOT).adopt(
+            candidate_id,
+            source_id,
+            prepare_disabled_execution_entry=prepare_disabled_execution_entry,
+        )
+    except ValueError as exc:
+        _safe_print(f"Approved recipe adoption failed: {exc}")
+        return
+    _safe_print(f"Candidate adopted: {result.candidate.candidate_id}")
+    _safe_print(f"Source: {result.source_name} ({result.source_id})")
+    _safe_print(f"Previous registry recipe path: {result.previous_recipe_path or 'none'}")
+    _safe_print(f"Adopted recipe path: {result.adopted_recipe_path}")
+    _safe_print(f"Registry updated: {result.registry_updated}")
+    _safe_print(f"Disabled execution entry created: {result.execution_entry_created}")
+    _safe_print(f"Disabled execution entry updated: {result.execution_entry_updated}")
+    for warning in result.warnings:
+        _safe_print(f"Warning: {warning}")
+    _safe_print("Execution was not enabled. Daily-run enablement remains a separate guarded action.")
 
 
 def _print_recipe_candidate(candidate) -> None:

@@ -84,6 +84,42 @@ class SourceRegistryService:
     def get_source(self, source_id: str) -> SourceRegistryEntry | None:
         return next((source for source in self.list_sources() if source.id == source_id), None)
 
+    def adopt_recipe_path(self, source_id: str, recipe_path: str, note: str = "") -> SourceRegistryEntry:
+        self.ensure_registry()
+        data = read_yaml(self.path, {"sources": []})
+        if not isinstance(data, dict):
+            data = {"sources": []}
+        sources = data.setdefault("sources", [])
+        if not isinstance(sources, list):
+            sources = []
+            data["sources"] = sources
+        normalized_source_id = _slug(source_id)
+        normalized_recipe_path = recipe_path.replace("\\", "/").strip()
+        for item in sources:
+            if not isinstance(item, dict):
+                continue
+            if _slug(str(item.get("id") or item.get("name") or "")) != normalized_source_id:
+                continue
+            item["recipe_path"] = normalized_recipe_path
+            if str(item.get("kind") or "") not in {"recipe", "experimental_recipe"}:
+                item["kind"] = "experimental_recipe"
+            if str(item.get("status") or "") == "needs_review":
+                item["status"] = "experimental"
+            tags = _list_value(item.get("tags"))
+            for tag in ["recipe", "adopted"]:
+                if tag not in tags:
+                    tags.append(tag)
+            item["tags"] = tags
+            if note:
+                existing_note = str(item.get("notes") or "").strip()
+                item["notes"] = f"{existing_note} {note}".strip()
+            write_yaml(self.path, data)
+            updated = self.get_source(normalized_source_id)
+            if not updated:
+                raise KeyError(f"Source not found after update: {source_id}")
+            return updated
+        raise KeyError(f"Source not found: {source_id}")
+
     def _entry_from_mapping(self, data: dict[str, Any]) -> SourceRegistryEntry:
         source_id = _slug(str(data.get("id") or data.get("name") or "source"))
         kind = str(data.get("kind") or "manual").strip()

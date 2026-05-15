@@ -65,6 +65,9 @@
   {% for warning in recipe_generation_status.warnings %}
   <p class="muted">Workflow note: {{ warning }}</p>
   {% endfor %}
+  {% if recipe_generation_status.latest_approved_recipe_path and not recipe_generation_status.approved_matches_source_recipe_path and recipe_generation_status.latest_candidate_id %}
+  <p><a class="button light" href="/recipe-candidates/{{ recipe_generation_status.latest_candidate_id }}?source_id={{ source.id }}">Review adoption for latest approved candidate</a></p>
+  {% endif %}
 </div>
 
 <div class="panel">

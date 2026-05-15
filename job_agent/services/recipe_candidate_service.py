@@ -56,6 +56,11 @@ class RecipeCandidate:
     preview_useful_titles: int = 0
     preview_unique_urls: int = 0
     preview_warnings: list[str] = field(default_factory=list)
+    adopted_at: str = ""
+    adopted_source_id: str = ""
+    adopted_recipe_path: str = ""
+    execution_entry_created: bool = False
+    execution_entry_updated: bool = False
 
 
 @dataclass
@@ -187,6 +192,26 @@ class RecipeCandidateStore:
         self._write(candidate)
         return candidate
 
+    def adopt_candidate(
+        self,
+        candidate_id: str,
+        *,
+        source_id: str,
+        recipe_path: str,
+        execution_entry_created: bool = False,
+        execution_entry_updated: bool = False,
+    ) -> RecipeCandidate:
+        candidate = self.load_candidate(candidate_id)
+        now = _now()
+        candidate.updated_at = now
+        candidate.adopted_at = now
+        candidate.adopted_source_id = source_id.strip()
+        candidate.adopted_recipe_path = recipe_path
+        candidate.execution_entry_created = execution_entry_created
+        candidate.execution_entry_updated = execution_entry_updated
+        self._write(candidate)
+        return candidate
+
     def candidate_path(self, candidate_id: str) -> Path:
         return self._candidate_path(candidate_id)
 
@@ -252,6 +277,11 @@ def _candidate_to_dict(candidate: RecipeCandidate) -> dict[str, Any]:
         "preview_useful_titles": candidate.preview_useful_titles,
         "preview_unique_urls": candidate.preview_unique_urls,
         "preview_warnings": candidate.preview_warnings,
+        "adopted_at": candidate.adopted_at,
+        "adopted_source_id": candidate.adopted_source_id,
+        "adopted_recipe_path": candidate.adopted_recipe_path,
+        "execution_entry_created": candidate.execution_entry_created,
+        "execution_entry_updated": candidate.execution_entry_updated,
     }
 
 

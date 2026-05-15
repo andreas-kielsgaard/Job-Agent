@@ -18,9 +18,10 @@ Generation and refinement read files such as `summary.md`, `selector-report.json
 4. Review, show, or reject the candidate.
 5. Explicitly approve a pending candidate into `sources/recipes/`.
 6. Run a local preview against artifact `page.html` and save source health.
-7. Separately use guarded execution setup, dry-run, or single-source run when you are ready.
+7. Adopt an approved recipe for a source by updating the source registry recipe path.
+8. Separately use guarded execution setup, dry-run, or single-source run when you are ready.
 
-Approval and execution enablement are intentionally separate.
+Approval, adoption, and execution enablement are intentionally separate.
 
 ## CLI Workflow
 
@@ -51,6 +52,13 @@ Approve a pending candidate:
 python -m job_agent.cli approve-recipe-candidate <candidate-id> --recipe-path sources/recipes/experimental/<name>.yaml --source-id <source-id>
 ```
 
+Adopt an approved recipe for a source:
+
+```powershell
+python -m job_agent.cli adopt-approved-recipe <candidate-id> --source-id <source-id>
+python -m job_agent.cli adopt-approved-recipe <candidate-id> --source-id <source-id> --prepare-disabled-execution-entry
+```
+
 Inspect workflow state:
 
 ```powershell
@@ -79,6 +87,8 @@ Recipe-backed source detail pages show a Recipe Lifecycle panel:
 
 The Recipe Generation panel lets you select a local calibration artifact, optionally refine, and save a pending candidate. Candidate detail pages show schema status, local quality, warnings, attempt history, YAML, approval controls for pending candidates, and post-approval preview metadata for approved candidates.
 
+Approved candidate pages also show an adoption control when opened from a source. Adoption updates the source registry recipe path to the approved recipe. A checkbox can prepare a disabled execution entry, but it never enables the source.
+
 ## Approval
 
 Approval is the first point where generated YAML becomes a real recipe file. It:
@@ -95,6 +105,21 @@ Approval is the first point where generated YAML becomes a real recipe file. It:
 
 Approval does not create or enable daily-run execution entries and does not edit `sources/recruiting-sites.yaml`.
 
+## Adoption
+
+Adoption is the step after approval that tells a source registry entry to use the approved recipe path. It:
+
+- only works for `approved` candidates
+- requires a source id
+- requires the approved recipe file to still exist under `sources/recipes/`
+- updates `sources/source-registry.yaml` for that source
+- records adoption metadata on the candidate
+- can optionally prepare or refresh a disabled `recipe_html` execution entry
+
+Preparing a disabled execution entry can edit `sources/recruiting-sites.yaml`, but only when explicitly requested with `--prepare-disabled-execution-entry` or the matching web checkbox. If an existing execution entry is enabled, adoption refuses to refresh it; disable it first and then update deliberately.
+
+Adoption does not run the source, run the daily workflow, or enable execution.
+
 ## Troubleshooting
 
 Missing `page.html`: approval fails before writing a recipe, because local preview and health would be misleading.
@@ -107,6 +132,8 @@ Approved recipe path differs from source registry path: source detail and `recip
 
 Source health is good but execution is disabled or missing: this is expected. Use guarded execution setup separately when you want daily-run behavior.
 
+Enabled execution entry exists during adoption: adoption refuses disabled-entry refresh until the source is disabled, so an active daily-run source is not silently rewritten.
+
 ## Boundaries
 
 - Generation/refinement uses local saved artifacts.
@@ -116,4 +143,6 @@ Source health is good but execution is disabled or missing: this is expected. Us
 - Daily-run execution remains controlled by `sources/recruiting-sites.yaml`.
 - Existing recipe files are not overwritten without explicit overwrite.
 - Candidate approval writes recipe YAML and preview health only.
+- Candidate adoption updates source registry only, unless disabled execution preparation is explicitly requested.
+- Adoption never enables source execution.
 - Tests do not call real Claude/API services.

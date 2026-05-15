@@ -6,6 +6,7 @@ from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from job_agent.web.dependencies import (
+    approved_recipe_adoption_service,
     execution_source_service,
     recipe_artifact_service,
     recipe_candidate_approval_service,
@@ -195,6 +196,28 @@ def reject_recipe_candidate(candidate_id: str, source_id: str = Form(""), reason
     if source_id:
         return _redirect_to_source(source_id, message=f"Recipe candidate rejected: {candidate_id}")
     return RedirectResponse(f"/recipe-candidates/{candidate_id}", status_code=303)
+
+
+@router.post("/recipe-candidates/{candidate_id}/adopt")
+def adopt_recipe_candidate(
+    candidate_id: str,
+    source_id: str = Form(...),
+    prepare_disabled_execution_entry: str = Form(""),
+) -> RedirectResponse:
+    try:
+        result = approved_recipe_adoption_service().adopt(
+            candidate_id,
+            source_id,
+            prepare_disabled_execution_entry=bool(prepare_disabled_execution_entry),
+        )
+    except ValueError as exc:
+        return _redirect_to_source(source_id, warning=f"Approved recipe adoption failed: {exc}")
+    parts = [f"Approved recipe adopted for {result.source_name}."]
+    if result.execution_entry_created:
+        parts.append("Disabled execution entry created.")
+    if result.execution_entry_updated:
+        parts.append("Disabled execution entry updated.")
+    return _redirect_to_source(source_id, message=" ".join(parts))
 
 
 @router.post("/recipe-candidates/{candidate_id}/approve")
