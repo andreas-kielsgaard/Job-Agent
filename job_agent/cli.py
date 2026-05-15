@@ -84,6 +84,11 @@ def main() -> None:
         action="store_true",
         help="Execute a disabled source entry for inspection without enabling it.",
     )
+    dry_run.add_argument(
+        "--save-readiness",
+        action="store_true",
+        help="Save this dry-run as the latest source go-live readiness result.",
+    )
     run_source = subparsers.add_parser(
         "run-source",
         help="Run one enabled execution source through the normal package-writing pipeline.",
@@ -131,6 +136,16 @@ def main() -> None:
         help="Summarize local recipe generation state for one source.",
     )
     generation_status.add_argument("--source-id", required=True)
+    go_live = subparsers.add_parser(
+        "source-go-live-status",
+        help="Show go-live readiness for one execution source.",
+    )
+    go_live.add_argument("source_id")
+    enable_ready = subparsers.add_parser(
+        "enable-source-when-ready",
+        help="Enable one execution source only when saved readiness checks pass.",
+    )
+    enable_ready.add_argument("source_id")
     adopt_candidate = subparsers.add_parser(
         "adopt-approved-recipe",
         help="Adopt an approved candidate recipe path into a source registry entry.",
@@ -170,7 +185,7 @@ def main() -> None:
             max_candidates=args.max_candidates,
         )
     if args.command == "dry-run-source":
-        dry_run_source(args.source_id, force_disabled=args.force_disabled)
+        dry_run_source(args.source_id, force_disabled=args.force_disabled, save_readiness=args.save_readiness)
     if args.command == "run-source":
         run_source_now(args.source_id)
     if args.command == "suggest-recipe":
@@ -200,6 +215,10 @@ def main() -> None:
         )
     if args.command == "recipe-generation-status":
         recipe_generation_status(args.source_id)
+    if args.command == "source-go-live-status":
+        source_go_live_status(args.source_id)
+    if args.command == "enable-source-when-ready":
+        enable_source_when_ready(args.source_id)
     if args.command == "adopt-approved-recipe":
         adopt_approved_recipe(
             args.candidate_id,
@@ -342,10 +361,16 @@ def _safe_print(text: str = "") -> None:
     print(str(text).encode(encoding, errors="replace").decode(encoding))
 
 
-def dry_run_source(source_id: str, force_disabled: bool = False) -> None:
-    from .services.source_dry_run_service import SourceDryRunService
+def dry_run_source(source_id: str, force_disabled: bool = False, save_readiness: bool = False, root=None) -> None:
+    from pathlib import Path
 
-    result = SourceDryRunService().dry_run(source_id, force_disabled=force_disabled)
+    from .config import ROOT
+    from .services.source_dry_run_service import SourceDryRunService
+    from .services.source_execution_readiness_service import SourceExecutionReadinessService
+
+    project_root = Path(root) if root else ROOT
+    service = SourceDryRunService(project_root) if root else SourceDryRunService()
+    result = service.dry_run(source_id, force_disabled=force_disabled)
     _safe_print(f"Source id: {result.source_id}")
     _safe_print(f"Source name: {result.source_name or 'Not found'}")
     _safe_print(f"Source type: {result.source_type or 'Not found'}")
@@ -377,6 +402,10 @@ def dry_run_source(source_id: str, force_disabled: bool = False) -> None:
             _safe_print(f"   Description: {job.description_preview}")
     _safe_print("")
     _safe_print("No packages, seen state, materials, digests, or run records were written.")
+    if save_readiness:
+        readiness = SourceExecutionReadinessService(project_root).save_from_dry_run(result)
+        _safe_print(f"Readiness saved: {readiness.readiness_status}")
+        _safe_print(f"Readiness summary: {readiness.readiness_summary}")
 
 
 def run_source_now(source_id: str) -> None:
@@ -637,6 +666,52 @@ def recipe_generation_status(source_id: str, root=None) -> None:
     for warning in status.warnings:
         _safe_print(f"Workflow note: {warning}")
     _safe_print("Approval/source health and execution enablement are separate; this command does not mutate anything.")
+
+
+def source_go_live_status(source_id: str, root=None) -> None:
+    from pathlib import Path
+
+    from .config import ROOT
+    from .services.source_execution_readiness_service import SourceExecutionReadinessService
+
+    readiness = SourceExecutionReadinessService(Path(root) if root else ROOT).evaluate(source_id)
+    _safe_print(f"Source id: {readiness.source_id}")
+    _safe_print(f"Readiness status: {readiness.readiness_status}")
+    _safe_print(f"Readiness summary: {readiness.readiness_summary}")
+    _safe_print(f"Last dry-run: {readiness.last_checked_at or 'never'}")
+    _safe_print(f"Dry-run status: {readiness.dry_run_status}")
+    _safe_print(f"Dry-run jobs: {readiness.dry_run_job_count}")
+    _safe_print(f"Dry-run warnings: {readiness.dry_run_warning_count}")
+    _safe_print(f"Source health: {readiness.checks.get('source_health_status', 'unknown')}")
+    _safe_print(f"Execution entry present: {readiness.checks.get('execution_entry_exists', False)}")
+    _safe_print(f"Execution enabled: {readiness.checks.get('execution_entry_enabled', False)}")
+    _safe_print(
+        "Execution recipe matches registry: "
+        f"{readiness.checks.get('execution_entry_recipe_path_matches_registry', False)}"
+    )
+    for blocker in readiness.blockers:
+        _safe_print(f"Blocker: {blocker}")
+    for warning in readiness.warnings:
+        _safe_print(f"Warning: {warning}")
+    _safe_print("Enablement is separate. This command does not run sources or mutate configuration.")
+
+
+def enable_source_when_ready(source_id: str, root=None) -> None:
+    from pathlib import Path
+
+    from .config import ROOT
+    from .services.source_execution_readiness_service import SourceExecutionReadinessService
+
+    result = SourceExecutionReadinessService(Path(root) if root else ROOT).enable_when_ready(source_id)
+    if result.enabled:
+        _safe_print(f"Source enabled: {source_id}")
+        _safe_print("No source run or daily run was started.")
+        return
+    _safe_print(f"Source not enabled: {source_id}")
+    for blocker in result.check.blockers:
+        _safe_print(f"Blocker: {blocker}")
+    for warning in result.check.warnings:
+        _safe_print(f"Warning: {warning}")
 
 
 def adopt_approved_recipe(

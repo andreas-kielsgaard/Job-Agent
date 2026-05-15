@@ -17,6 +17,7 @@ from job_agent.services.recipe_candidate_approval_service import RecipeCandidate
 from job_agent.services.recipe_candidate_service import RecipeCandidateStore
 from job_agent.services.recipe_generation_status_service import RecipeGenerationStatusService
 from job_agent.services.setup_service import SetupService
+from job_agent.services.source_execution_readiness_service import SourceExecutionReadinessService
 from job_agent.services.source_registry_service import SourceRegistryService
 
 WEB_DIR = Path(__file__).resolve().parent
@@ -86,6 +87,10 @@ def recipe_generation_status_service() -> RecipeGenerationStatusService:
 
 def approved_recipe_adoption_service() -> ApprovedRecipeAdoptionService:
     return ApprovedRecipeAdoptionService(_current_root)
+
+
+def source_execution_readiness_service() -> SourceExecutionReadinessService:
+    return SourceExecutionReadinessService(_current_root)
 
 
 def cv_reference_service() -> CvReferenceService:

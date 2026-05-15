@@ -392,6 +392,8 @@ def test_viewing_source_pages_does_not_mutate_execution_config(client: TestClien
 def test_source_execution_routes_create_guard_enable_and_disable(client: TestClient, project_root: Path) -> None:
     from job_agent.io.yaml_store import read_yaml
     from job_agent.services.recipe_preview_service import RecipePreviewResult
+    from job_agent.services.source_dry_run_service import DryRunJobPreview, SourceDryRunResult
+    from job_agent.services.source_execution_readiness_service import SourceExecutionReadinessService
     from job_agent.services.source_health_service import SourceHealthService
 
     create_response = client.post("/sources/eursap-jobs/execution/create", follow_redirects=False)
@@ -428,6 +430,25 @@ def test_source_execution_routes_create_guard_enable_and_disable(client: TestCli
             jobs=[],
             warnings=[],
         ),
+    )
+    SourceExecutionReadinessService(project_root).save_from_dry_run(
+        SourceDryRunResult(
+            source_id="eursap-jobs",
+            source_name="Eursap Jobs",
+            source_type="recipe_html",
+            source_enabled=False,
+            forced_disabled=True,
+            status="success",
+            job_count=1,
+            jobs=[
+                DryRunJobPreview(
+                    title="SAP Basis Consultant",
+                    url="https://eursap.eu/jobs/sap-basis",
+                    source="Eursap Jobs",
+                    source_id="eursap-jobs",
+                )
+            ],
+        )
     )
 
     enable_response = client.post("/sources/eursap-jobs/execution/enable", follow_redirects=False)

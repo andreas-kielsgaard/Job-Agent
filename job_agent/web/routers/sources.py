@@ -12,6 +12,7 @@ from job_agent.web.dependencies import (
     recipe_candidate_approval_service,
     recipe_candidate_store,
     recipe_generation_status_service,
+    source_execution_readiness_service,
     source_registry_service,
     templates,
 )
@@ -41,6 +42,7 @@ def source_detail(request: Request, source_id: str, message: str = "", warning: 
     artifacts = recipe_artifact_service().list_artifacts_for_source(source)
     recipe_candidates = _candidates_for_source(source, artifacts)
     generation_status = recipe_generation_status_service().build_for_source(source.id)
+    go_live_readiness = source_execution_readiness_service().evaluate(source.id)
     return templates.TemplateResponse(
         request,
         "source_detail.html",
@@ -54,6 +56,7 @@ def source_detail(request: Request, source_id: str, message: str = "", warning: 
             "recipe_artifacts": artifacts,
             "recipe_candidates": recipe_candidates,
             "recipe_generation_status": generation_status,
+            "go_live_readiness": go_live_readiness,
         },
     )
 
@@ -78,12 +81,10 @@ def update_execution_source(source_id: str) -> RedirectResponse:
 def enable_execution_source(source_id: str) -> RedirectResponse:
     source = _registry_source_or_404(source_id)
     _require_recipe_source(source)
-    if source.health.health_status != "good":
-        return _redirect_to_source(source_id, warning="Run recipe preview and save source health before enabling.")
-    try:
-        execution_source_service().enable(source.id)
-    except KeyError:
-        return _redirect_to_source(source_id, warning="Create a disabled execution entry before enabling.")
+    result = source_execution_readiness_service().enable_when_ready(source.id)
+    if not result.enabled:
+        warning = " ".join(result.check.blockers[:3]) or "Source is not ready for daily-run enablement."
+        return _redirect_to_source(source_id, warning=warning)
     return _redirect_to_source(source_id, message="Execution entry enabled for daily runs.")
 
 
@@ -116,6 +117,33 @@ def source_dry_run(request: Request, source_id: str, force_disabled: bool = Fals
             "force_disabled": force_disabled,
         },
     )
+
+
+@router.post("/sources/{source_id}/dry-run-readiness")
+def dry_run_source_readiness(source_id: str) -> RedirectResponse:
+    source = _registry_source_or_404(source_id)
+    execution_entry = execution_source_service().find_by_source_id(source.id)
+    force_disabled = bool(execution_entry and not bool(execution_entry.get("enabled", True)))
+    result = SourceDryRunService(execution_source_service().root).dry_run(
+        source.id,
+        force_disabled=force_disabled,
+    )
+    readiness = source_execution_readiness_service().save_from_dry_run(result)
+    message = f"Dry-run readiness saved: {readiness.readiness_status}. {readiness.dry_run_job_count} jobs extracted."
+    if readiness.readiness_status == "blocked":
+        return _redirect_to_source(source_id, warning=message)
+    return _redirect_to_source(source_id, message=message)
+
+
+@router.post("/sources/{source_id}/enable-when-ready")
+def enable_source_when_ready(source_id: str) -> RedirectResponse:
+    source = _registry_source_or_404(source_id)
+    _require_recipe_source(source)
+    result = source_execution_readiness_service().enable_when_ready(source.id)
+    if not result.enabled:
+        warning = " ".join(result.check.blockers[:3]) or "Source is not ready for daily-run enablement."
+        return _redirect_to_source(source_id, warning=warning)
+    return _redirect_to_source(source_id, message="Execution entry enabled after go-live readiness checks passed.")
 
 
 @router.post("/sources/{source_id}/run-now")

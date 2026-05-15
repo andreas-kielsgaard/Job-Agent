@@ -189,6 +189,46 @@
 
 {% if source.recipe_path %}
 <div class="panel">
+  <h2>Go-Live Readiness</h2>
+  <p class="muted">Go-live readiness is based on the configured execution source dry run. It is separate from recipe preview health and does not write packages or run records.</p>
+  <div class="grid">
+    <div class="stat"><span>Readiness</span><strong>{{ go_live_readiness.readiness_status }}</strong></div>
+    <div class="stat"><span>Last dry run</span><strong>{{ go_live_readiness.last_checked_at or "Never" }}</strong></div>
+    <div class="stat"><span>Dry-run status</span><strong>{{ go_live_readiness.dry_run_status }}</strong></div>
+    <div class="stat"><span>Dry-run jobs</span><strong>{{ go_live_readiness.dry_run_job_count }}</strong></div>
+    <div class="stat"><span>Dry-run warnings</span><strong>{{ go_live_readiness.dry_run_warning_count }}</strong></div>
+    <div class="stat"><span>Source health</span><strong>{{ go_live_readiness.checks.source_health_status }}</strong></div>
+    <div class="stat"><span>Execution entry</span><strong>{{ "present" if go_live_readiness.checks.execution_entry_exists else "missing" }}</strong></div>
+    <div class="stat"><span>Recipe paths match</span><strong>{{ "yes" if go_live_readiness.checks.execution_entry_recipe_path_matches_registry else "no" }}</strong></div>
+  </div>
+  <p><strong>Summary:</strong> {{ go_live_readiness.readiness_summary }}</p>
+  {% if go_live_readiness.sample_titles %}
+  <p><strong>Sample titles:</strong> {{ go_live_readiness.sample_titles|join(", ") }}</p>
+  {% endif %}
+  {% for blocker in go_live_readiness.blockers %}
+  <p class="muted">Blocker: {{ blocker }}</p>
+  {% endfor %}
+  {% for warning in go_live_readiness.warnings %}
+  <p class="muted">Warning: {{ warning }}</p>
+  {% endfor %}
+  {% if execution_entry %}
+  <form method="post" action="/sources/{{ source.id }}/dry-run-readiness" style="display:inline;">
+    <button type="submit" class="button light">
+      {% if execution_entry.enabled %}Dry run source and save readiness{% else %}Dry run disabled source and save readiness{% endif %}
+    </button>
+  </form>
+  {% if not execution_entry.enabled and go_live_readiness.readiness_status == "ready" %}
+  <form method="post" action="/sources/{{ source.id }}/enable-when-ready" style="display:inline;">
+    <button type="submit" class="button">Enable when ready</button>
+  </form>
+  {% endif %}
+  {% else %}
+  <p class="muted">Create a disabled execution entry before saving dry-run readiness.</p>
+  {% endif %}
+  <p class="muted">Enabling is explicit and does not start a source run or daily run.</p>
+</div>
+
+<div class="panel">
   <h2>Daily-run Execution</h2>
   <p class="muted">Execution setup controls whether this source is present in sources/recruiting-sites.yaml, which is what daily runs use. Sources are never enabled automatically.</p>
   {% if execution_entry %}
@@ -218,7 +258,7 @@ enabled: {{ "true" if execution_entry.enabled else "false" }}</pre>
   <a class="button light" href="/sources/{{ source.id }}/dry-run?force_disabled=true">Dry run disabled source</a>
   <p class="muted">Enable this source before running.</p>
   <form method="post" action="/sources/{{ source.id }}/execution/enable" style="display:inline;">
-    <button type="submit" class="button">Enable for daily runs</button>
+    <button type="submit" class="button">Enable for daily runs when ready</button>
   </form>
   {% endif %}
   {% else %}

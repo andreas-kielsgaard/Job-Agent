@@ -19,9 +19,11 @@ Generation and refinement read files such as `summary.md`, `selector-report.json
 5. Explicitly approve a pending candidate into `sources/recipes/`.
 6. Run a local preview against artifact `page.html` and save source health.
 7. Adopt an approved recipe for a source by updating the source registry recipe path.
-8. Separately use guarded execution setup, dry-run, or single-source run when you are ready.
+8. Prepare a disabled execution entry if you want the source available to execution tooling.
+9. Save source go-live readiness from a dry run of the configured execution source.
+10. Explicitly enable the source only after readiness checks pass.
 
-Approval, adoption, and execution enablement are intentionally separate.
+Approval, adoption, dry-run readiness, and execution enablement are intentionally separate.
 
 ## CLI Workflow
 
@@ -63,13 +65,15 @@ Inspect workflow state:
 
 ```powershell
 python -m job_agent.cli recipe-generation-status --source-id <source-id>
+python -m job_agent.cli source-go-live-status <source-id>
 ```
 
 Verify or exercise later stages manually:
 
 ```powershell
 python -m job_agent.cli test-recipe sources/recipes/experimental/<name>.yaml output/recipe-calibration/<folder>/page.html --base-url https://example.com/jobs --source-id <source-id>
-python -m job_agent.cli dry-run-source <source-id>
+python -m job_agent.cli dry-run-source <source-id> --force-disabled --save-readiness
+python -m job_agent.cli enable-source-when-ready <source-id>
 python -m job_agent.cli run-source <source-id>
 ```
 
@@ -88,6 +92,8 @@ Recipe-backed source detail pages show a Recipe Lifecycle panel:
 The Recipe Generation panel lets you select a local calibration artifact, optionally refine, and save a pending candidate. Candidate detail pages show schema status, local quality, warnings, attempt history, YAML, approval controls for pending candidates, and post-approval preview metadata for approved candidates.
 
 Approved candidate pages also show an adoption control when opened from a source. Adoption updates the source registry recipe path to the approved recipe. A checkbox can prepare a disabled execution entry, but it never enables the source.
+
+The Go-Live Readiness panel shows the latest saved execution-source dry run, registry/execution recipe path alignment, source health, and blockers. It can run a disabled execution source with an explicit forced dry run and save the readiness result. Enabling remains a separate action and is blocked until the saved readiness is ready.
 
 ## Approval
 
@@ -120,6 +126,30 @@ Preparing a disabled execution entry can edit `sources/recruiting-sites.yaml`, b
 
 Adoption does not run the source, run the daily workflow, or enable execution.
 
+## Go-Live Readiness
+
+Go-live readiness is the gate between an adopted recipe-backed source and daily-run enablement. It answers a different question than source health:
+
+- source health: did the recipe extract useful jobs from a chosen local preview input?
+- go-live readiness: does the configured execution source work through the adapter layer, without writing outputs?
+
+Readiness is saved under `sources/source-execution-readiness.yaml` after an explicit dry run:
+
+```powershell
+python -m job_agent.cli dry-run-source <source-id> --force-disabled --save-readiness
+```
+
+The readiness record includes the dry-run status, extracted job count, warnings, sample job titles/URLs, source health status, execution entry presence, recipe path matching, and blockers. Dry-run readiness writes no packages, materials, seen state, digests, or run records.
+
+Enablement is guarded:
+
+```powershell
+python -m job_agent.cli source-go-live-status <source-id>
+python -m job_agent.cli enable-source-when-ready <source-id>
+```
+
+`enable-source-when-ready` requires a source registry recipe path, good source health, a disabled execution entry, matching registry/execution recipe paths, and a saved ready dry-run with at least one extracted job. It only flips the execution entry to enabled; it does not run the source or start the daily workflow.
+
 ## Troubleshooting
 
 Missing `page.html`: approval fails before writing a recipe, because local preview and health would be misleading.
@@ -134,6 +164,8 @@ Source health is good but execution is disabled or missing: this is expected. Us
 
 Enabled execution entry exists during adoption: adoption refuses disabled-entry refresh until the source is disabled, so an active daily-run source is not silently rewritten.
 
+Go-live status is blocked: check `source-go-live-status <source-id>` for blockers. Common causes are missing execution entry, source health not good, mismatched recipe paths, no saved dry-run readiness, or a dry run that extracted zero jobs.
+
 ## Boundaries
 
 - Generation/refinement uses local saved artifacts.
@@ -145,4 +177,6 @@ Enabled execution entry exists during adoption: adoption refuses disabled-entry 
 - Candidate approval writes recipe YAML and preview health only.
 - Candidate adoption updates source registry only, unless disabled execution preparation is explicitly requested.
 - Adoption never enables source execution.
+- Dry-run readiness writes only readiness metadata; it does not write packages, materials, seen state, digests, or run records.
+- Guarded enablement does not run the source or daily workflow.
 - Tests do not call real Claude/API services.
