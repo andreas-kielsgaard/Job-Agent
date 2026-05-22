@@ -236,6 +236,23 @@ def test_mark_seen_and_test_run_seen_rules(local_yaml_source_project: Path) -> N
     assert read_json(second_root / "jobs" / "seen_jobs.json", []) == []
 
 
+def test_run_daily_agent_explains_previously_seen_skips(local_yaml_source_project: Path) -> None:
+    run_daily_agent(
+        RunOptions(include_seen=True, mark_seen=True, generate_materials=False), root=local_yaml_source_project
+    )
+
+    result = run_daily_agent(
+        RunOptions(include_seen=False, mark_seen=False, generate_materials=False), root=local_yaml_source_project
+    )
+
+    events = RunStore(local_yaml_source_project).read_events(result.record.run_id)
+    source_processed = next(event for event in events if event["event_type"] == "source_processed")
+    assert source_processed["counts"]["jobs_found"] == 1
+    assert source_processed["counts"]["previously_seen"] == 1
+    assert source_processed["counts"]["previously_seen_skipped"] == 1
+    assert "already seen skipped" in source_processed["message"]
+
+
 def test_generate_materials_false_writes_placeholder_and_skips_generator(
     monkeypatch: pytest.MonkeyPatch, local_yaml_source_project: Path
 ) -> None:

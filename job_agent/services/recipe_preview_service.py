@@ -75,6 +75,14 @@ class RecipePreviewResult:
     pagination_max_pages: int = 1
     pagination_links: list[PaginationLink] = field(default_factory=list)
     pagination_fetch_count: int = 0
+    listing_observed_count: int = 0
+    listing_extracted_count: int = 0
+    listing_missing_url_count: int = 0
+    listing_rejected_count: int = 0
+    listing_duplicate_count: int = 0
+    listing_limit_skipped_count: int = 0
+    listing_pages: list = field(default_factory=list)
+    count_explanations: list[str] = field(default_factory=list)
     detail_follow_enabled: bool = False
     detail_max_pages: int = 0
     detail_request_delay_seconds: float = 0.0
@@ -228,6 +236,14 @@ def preview_recipe(
         pagination_max_pages=recipe.pagination.max_pages,
         pagination_links=extraction.pagination_links,
         pagination_fetch_count=extraction.pagination_fetch_count,
+        listing_observed_count=extraction.listing_observed_count,
+        listing_extracted_count=extraction.listing_extracted_count,
+        listing_missing_url_count=extraction.listing_missing_url_count,
+        listing_rejected_count=extraction.listing_rejected_count,
+        listing_duplicate_count=extraction.listing_duplicate_count,
+        listing_limit_skipped_count=extraction.listing_limit_skipped_count,
+        listing_pages=extraction.listing_pages,
+        count_explanations=_preview_count_explanations(extraction),
         detail_follow_enabled=recipe.detail.follow,
         detail_max_pages=recipe.detail.max_detail_pages,
         detail_request_delay_seconds=recipe.detail.request_delay_seconds,
@@ -439,6 +455,35 @@ def _coverage_sentence(field_coverage: list[FieldCoverage]) -> str:
         if field.field in {"title", "url", "location", "rate", "workload", "description"}
     ]
     return "; ".join(interesting) + "."
+
+
+def _preview_count_explanations(extraction: RecipeExtractionResult) -> list[str]:
+    explanations: list[str] = []
+    observed = extraction.listing_observed_count
+    retained = len(extraction.jobs)
+    if observed:
+        if observed == retained and not any(
+            [
+                extraction.listing_missing_url_count,
+                extraction.listing_rejected_count,
+                extraction.listing_duplicate_count,
+                extraction.listing_limit_skipped_count,
+            ]
+        ):
+            explanations.append(f"Observed {observed} listing card(s) and retained all {retained} as jobs.")
+        else:
+            reasons = []
+            if extraction.listing_missing_url_count:
+                reasons.append(f"{extraction.listing_missing_url_count} card(s) had no recipe-readable job URL")
+            if extraction.listing_rejected_count:
+                reasons.append(f"{extraction.listing_rejected_count} card(s) were rejected by recipe filters")
+            if extraction.listing_duplicate_count:
+                reasons.append(f"{extraction.listing_duplicate_count} duplicate URL(s) were ignored")
+            if extraction.listing_limit_skipped_count:
+                reasons.append(f"{extraction.listing_limit_skipped_count} card(s) were outside the configured run limit")
+            reason_text = "; ".join(reasons) if reasons else "some cards did not produce retained jobs"
+            explanations.append(f"Observed {observed} listing card(s) and retained {retained} job(s): {reason_text}.")
+    return explanations
 
 
 def _capability_sentence(checks) -> str:

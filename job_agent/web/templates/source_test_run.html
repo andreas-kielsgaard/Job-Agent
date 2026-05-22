@@ -39,6 +39,7 @@
   </div>
   <p><strong>Summary:</strong> <span id="source-test-summary"></span></p>
   <div id="source-test-blockers"></div>
+  <div id="source-test-counts"></div>
   <div class="action-row">
     <a class="button" href="/sources/{{ source.id }}">Back to source</a>
   </div>
@@ -164,8 +165,27 @@
     document.getElementById("source-test-blockers").innerHTML = blockers.length
       ? `<ul>${blockers.map(item => `<li>${escapeHtml(item)}</li>`).join("")}</ul>`
       : "";
+    renderCountExplanation(data);
     renderTrace(data);
     renderJobs(data);
+  }
+
+  function renderCountExplanation(data) {
+    const explanations = data.count_explanations || [];
+    const counts = [
+      `Listing cards observed: ${data.listing_observed_count || 0}`,
+      `Jobs retained: ${data.job_count || 0}`,
+      `Missing job URL: ${data.listing_missing_url_count || 0}`,
+      `Rejected by recipe: ${data.listing_rejected_count || 0}`,
+      `Duplicate URLs: ${data.listing_duplicate_count || 0}`,
+      `Outside limit: ${data.listing_limit_skipped_count || 0}`,
+      `Seen before: ${data.seen_previously_seen_count || 0}`
+    ];
+    document.getElementById("source-test-counts").innerHTML = `
+      <h3>Count Explanation</h3>
+      <div class="badge-row">${counts.map(item => `<span class="badge">${escapeHtml(item)}</span>`).join("")}</div>
+      ${explanations.length ? `<ul>${explanations.map(item => `<li>${escapeHtml(item)}</li>`).join("")}</ul>` : ""}
+    `;
   }
 
   function renderTrace(data) {
@@ -198,6 +218,28 @@
     document.getElementById("source-test-pagination").innerHTML = paginationUrls.length
       ? `<h3>Pagination Pages Fetched</h3><ul>${paginationUrls.map(url => `<li><a href="${escapeHtml(url)}" target="_blank" rel="noreferrer">${escapeHtml(url)}</a></li>`).join("")}</ul>`
       : `<h3>Pagination Pages Fetched</h3><p class="muted">No additional pagination page was fetched in this run.</p>`;
+
+    const listingPages = data.listing_pages || [];
+    const listingPageRows = listingPages.length
+      ? `<h3>Listing Pages Read</h3>
+        <table>
+          <thead><tr><th>Page</th><th>Cards observed</th><th>Jobs retained</th><th>Not retained</th></tr></thead>
+          <tbody>${listingPages.map(page => `
+            <tr>
+              <td><a href="${escapeHtml(page.page_url)}" target="_blank" rel="noreferrer">${escapeHtml(page.page_url)}</a></td>
+              <td>${escapeHtml(page.observed_cards || 0)}</td>
+              <td>${escapeHtml(page.extracted_jobs || 0)}</td>
+              <td>
+                Missing URL: ${escapeHtml(page.missing_url_count || 0)}<br>
+                Rejected: ${escapeHtml(page.rejected_count || 0)}<br>
+                Duplicate: ${escapeHtml(page.duplicate_count || 0)}<br>
+                Outside limit: ${escapeHtml(page.limit_skipped_count || 0)}
+              </td>
+            </tr>
+          `).join("")}</tbody>
+        </table>`
+      : "";
+    document.getElementById("source-test-pagination").insertAdjacentHTML("afterend", listingPageRows);
 
     const attempts = data.detail_attempts || [];
     document.getElementById("source-test-detail-attempts").innerHTML = attempts.length

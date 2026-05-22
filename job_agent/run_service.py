@@ -115,6 +115,11 @@ def run_daily_agent(
                 else [state for state in source_states if state.status in {"new", "changed"}]
             )
             source_counts = _new_source_counts(source_fetch)
+            status_counts = _state_status_counts(source_states)
+            source_counts["new_candidates"] = status_counts["new"]
+            source_counts["changed_candidates"] = status_counts["changed"]
+            source_counts["previously_seen"] = status_counts["previously_seen"]
+            source_counts["previously_seen_skipped"] = 0 if options.include_seen else status_counts["previously_seen"]
 
             for index, state in enumerate(candidate_states, start=1):
                 duplicate_key = state.stable_id
@@ -433,6 +438,10 @@ def _new_source_counts(source_fetch: SourceFetchResult) -> dict:
         "excluded_roles": 0,
         "included_roles": 0,
         "duplicates_skipped": 0,
+        "new_candidates": 0,
+        "changed_candidates": 0,
+        "previously_seen": 0,
+        "previously_seen_skipped": 0,
         "highlighted_matches": 0,
         "ai_evaluations_completed": 0,
         "ai_evaluations_failed": 0,
@@ -442,12 +451,25 @@ def _new_source_counts(source_fetch: SourceFetchResult) -> dict:
 
 def _source_processed_message(source_fetch: SourceFetchResult, counts: dict) -> str:
     changed_text = counts["new_roles"] + counts["changed_roles"]
+    seen_text = (
+        f", {counts['previously_seen_skipped']} already seen skipped"
+        if counts.get("previously_seen_skipped")
+        else ""
+    )
     return (
         f"Processed source {source_fetch.source_index}/{source_fetch.source_count}: {source_fetch.source_name} - "
-        f"{counts['jobs_found']} jobs, {changed_text} new/changed, "
+        f"{counts['jobs_found']} jobs, {changed_text} new/changed{seen_text}, "
         f"{counts['strong_matches']} strong, {counts['exploratory_matches']} exploratory, "
         f"{counts['highlighted_matches']} highlights, {counts['ai_evaluations_completed']} AI summaries"
     )
+
+
+def _state_status_counts(states: list) -> dict[str, int]:
+    return {
+        "new": sum(1 for state in states if state.status == "new"),
+        "changed": sum(1 for state in states if state.status == "changed"),
+        "previously_seen": sum(1 for state in states if state.status == "previously_seen"),
+    }
 
 
 def _match_highlight_message(job_title: str, score: int, reasons: list[str]) -> str:

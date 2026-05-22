@@ -701,6 +701,28 @@ def test_source_test_run_view_and_api_save_readiness(monkeypatch: pytest.MonkeyP
                 pagination_configured=True,
                 pagination_fetch_count=1,
                 pagination_fetch_attempts=["https://eursap.eu/jobs/page/2"],
+                listing_observed_count=14,
+                listing_extracted_count=13,
+                listing_duplicate_count=1,
+                listing_pages=[
+                    {
+                        "page_url": "https://eursap.eu/jobs",
+                        "observed_cards": 14,
+                        "extracted_jobs": 13,
+                        "missing_url_count": 0,
+                        "rejected_count": 0,
+                        "duplicate_count": 1,
+                        "limit_skipped_count": 0,
+                        "limit": 25,
+                    }
+                ],
+                seen_new_count=10,
+                seen_changed_count=1,
+                seen_previously_seen_count=2,
+                count_explanations=[
+                    "Observed 14 listing card(s) and retained 13 job(s): 1 duplicate URL(s) were ignored.",
+                    "Seen-state check: 10 new, 1 changed, 2 already seen in previous runs.",
+                ],
                 detail_follow_enabled=True,
                 detail_fetch_count=13,
                 detail_enriched_count=13,
@@ -745,6 +767,10 @@ def test_source_test_run_view_and_api_save_readiness(monkeypatch: pytest.MonkeyP
     assert payload["jobs"][0]["description"].startswith("Detailed SAP Basis role")
     assert payload["pagination_fetch_attempts"] == ["https://eursap.eu/jobs/page/2"]
     assert payload["detail_fetch_count"] == 13
+    assert payload["listing_observed_count"] == 14
+    assert payload["listing_duplicate_count"] == 1
+    assert payload["seen_previously_seen_count"] == 2
+    assert "already seen" in payload["count_explanations"][1]
     assert payload["readiness_status"] in {"ready", "blocked", "warning"}
     assert stream_response.status_code == 200
     assert '"type": "progress"' in stream_response.text

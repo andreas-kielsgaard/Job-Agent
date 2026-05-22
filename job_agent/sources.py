@@ -357,6 +357,25 @@ def _recipe_result_metadata(
         "pagination_max_pages": recipe.pagination.max_pages,
         "pagination_fetch_count": result.pagination_fetch_count,
         "pagination_fetch_attempts": list(result.pagination_fetch_attempts),
+        "listing_observed_count": result.listing_observed_count,
+        "listing_extracted_count": result.listing_extracted_count,
+        "listing_missing_url_count": result.listing_missing_url_count,
+        "listing_rejected_count": result.listing_rejected_count,
+        "listing_duplicate_count": result.listing_duplicate_count,
+        "listing_limit_skipped_count": result.listing_limit_skipped_count,
+        "listing_pages": [
+            {
+                "page_url": page.page_url,
+                "observed_cards": page.observed_cards,
+                "extracted_jobs": page.extracted_jobs,
+                "missing_url_count": page.missing_url_count,
+                "rejected_count": page.rejected_count,
+                "duplicate_count": page.duplicate_count,
+                "limit_skipped_count": page.limit_skipped_count,
+                "limit": page.limit,
+            }
+            for page in result.listing_pages
+        ],
         "detail_follow_enabled": recipe.detail.follow,
         "detail_fetch_limit": result.detail_fetch_limit,
         "detail_fetch_count": result.detail_fetch_count,

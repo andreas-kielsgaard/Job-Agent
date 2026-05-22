@@ -5,9 +5,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from job_agent.config import ROOT
-from job_agent.models import Job
+from job_agent.io.json_store import read_json
+from job_agent.models import Job, SeenJobRecord
 from job_agent.services.execution_source_service import ExecutionSourceService
 from job_agent.sources import adapter_for_source
+from job_agent.store import JobStore
 
 DryRunProgressCallback = Callable[[dict], None]
 
@@ -52,6 +54,17 @@ class SourceDryRunResult:
     pagination_max_pages: int = 1
     pagination_fetch_count: int = 0
     pagination_fetch_attempts: list[str] = field(default_factory=list)
+    listing_observed_count: int = 0
+    listing_extracted_count: int = 0
+    listing_missing_url_count: int = 0
+    listing_rejected_count: int = 0
+    listing_duplicate_count: int = 0
+    listing_limit_skipped_count: int = 0
+    listing_pages: list[dict] = field(default_factory=list)
+    seen_new_count: int = 0
+    seen_changed_count: int = 0
+    seen_previously_seen_count: int = 0
+    count_explanations: list[str] = field(default_factory=list)
     detail_follow_enabled: bool = False
     detail_fetch_limit: int | None = None
     detail_fetch_count: int = 0
@@ -116,6 +129,8 @@ class SourceDryRunService:
         warnings = [f"{warning.source}: {warning.message}" for warning in result.warnings]
         jobs = [_job_preview(job) for job in result.jobs]
         metadata = result.metadata or {}
+        seen_counts = _seen_state_counts(self.root, result.jobs)
+        count_explanations = _count_explanations(len(jobs), metadata, seen_counts)
         _emit_progress(
             progress_callback,
             "Source test extracted jobs",
@@ -143,6 +158,17 @@ class SourceDryRunService:
             pagination_max_pages=_int(metadata.get("pagination_max_pages")) or 1,
             pagination_fetch_count=_int(metadata.get("pagination_fetch_count")),
             pagination_fetch_attempts=[str(item) for item in metadata.get("pagination_fetch_attempts") or []],
+            listing_observed_count=_int(metadata.get("listing_observed_count")),
+            listing_extracted_count=_int(metadata.get("listing_extracted_count")),
+            listing_missing_url_count=_int(metadata.get("listing_missing_url_count")),
+            listing_rejected_count=_int(metadata.get("listing_rejected_count")),
+            listing_duplicate_count=_int(metadata.get("listing_duplicate_count")),
+            listing_limit_skipped_count=_int(metadata.get("listing_limit_skipped_count")),
+            listing_pages=list(metadata.get("listing_pages") or []),
+            seen_new_count=seen_counts["new"],
+            seen_changed_count=seen_counts["changed"],
+            seen_previously_seen_count=seen_counts["previously_seen"],
+            count_explanations=count_explanations,
             detail_follow_enabled=bool(metadata.get("detail_follow_enabled", False)),
             detail_fetch_limit=_optional_int(metadata.get("detail_fetch_limit")),
             detail_fetch_count=_int(metadata.get("detail_fetch_count")),
@@ -196,6 +222,85 @@ def _optional_int(value) -> int | None:
         return None
     parsed = _int(value)
     return parsed if parsed else None
+
+
+def _seen_state_counts(root: Path, jobs: list[Job]) -> dict[str, int]:
+    records = _load_seen_records(root)
+    by_stable = {record.stable_id: record for record in records}
+    by_fuzzy = {record.fuzzy_key: record for record in records}
+    counts = {"new": 0, "changed": 0, "previously_seen": 0}
+    for job in jobs:
+        stable_id = JobStore.job_id(job)
+        fuzzy_key = JobStore.fuzzy_key(job)
+        content_hash = JobStore.content_hash(job)
+        existing = by_stable.get(stable_id) or by_fuzzy.get(fuzzy_key)
+        if existing is None:
+            counts["new"] += 1
+        elif existing.content_hash != content_hash:
+            counts["changed"] += 1
+        else:
+            counts["previously_seen"] += 1
+    return counts
+
+
+def _load_seen_records(root: Path) -> list[SeenJobRecord]:
+    path = root / "jobs" / "seen_jobs.json"
+    if not path.exists():
+        return []
+    data = read_json(path, [], strict=True)
+    if data and isinstance(data[0], str):
+        return [
+            SeenJobRecord(
+                stable_id=item,
+                fuzzy_key=item,
+                title="Unknown",
+                company="Unknown",
+                source="Unknown",
+                url="",
+                first_seen_date="unknown",
+                last_seen_date="unknown",
+                content_hash="unknown",
+                status="previously_seen",
+            )
+            for item in data
+        ]
+    return [SeenJobRecord(**item) for item in data]
+
+
+def _count_explanations(job_count: int, metadata: dict, seen_counts: dict[str, int]) -> list[str]:
+    explanations: list[str] = []
+    observed = _int(metadata.get("listing_observed_count"))
+    missing_url = _int(metadata.get("listing_missing_url_count"))
+    rejected = _int(metadata.get("listing_rejected_count"))
+    duplicates = _int(metadata.get("listing_duplicate_count"))
+    limited = _int(metadata.get("listing_limit_skipped_count"))
+    if observed:
+        if observed == job_count and not any([missing_url, rejected, duplicates, limited]):
+            explanations.append(f"Observed {observed} listing card(s) and retained all {job_count} as jobs.")
+        else:
+            reasons = []
+            if missing_url:
+                reasons.append(f"{missing_url} card(s) had no recipe-readable job URL")
+            if rejected:
+                reasons.append(f"{rejected} card(s) were rejected by recipe filters")
+            if duplicates:
+                reasons.append(f"{duplicates} duplicate URL(s) were ignored")
+            if limited:
+                reasons.append(f"{limited} card(s) were outside the configured run limit")
+            reason_text = "; ".join(reasons) if reasons else "some cards did not produce retained jobs"
+            explanations.append(
+                f"Observed {observed} listing card(s) and retained {job_count} job(s): {reason_text}."
+            )
+    previously_seen = seen_counts.get("previously_seen", 0)
+    changed = seen_counts.get("changed", 0)
+    new = seen_counts.get("new", 0)
+    if job_count:
+        explanations.append(
+            "Seen-state check: "
+            f"{new} new, {changed} changed, {previously_seen} already seen in previous runs. "
+            "This source test does not skip or mark seen jobs; a normal run with Include seen off only processes new/changed jobs."
+        )
+    return explanations
 
 
 def _emit_progress(

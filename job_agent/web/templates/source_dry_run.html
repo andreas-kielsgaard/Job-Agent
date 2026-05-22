@@ -14,8 +14,17 @@
     <div class="stat"><span>Enabled</span><strong>{{ "Yes" if result.source_enabled else "No" }}</strong></div>
     <div class="stat"><span>Status</span><strong>{{ result.status }}</strong></div>
     <div class="stat"><span>Jobs extracted</span><strong>{{ result.job_count }}</strong></div>
+    <div class="stat"><span>Listing cards observed</span><strong>{{ result.listing_observed_count or "Not tracked" }}</strong></div>
     <div class="stat"><span>Warnings</span><strong>{{ result.warning_count }}</strong></div>
   </div>
+  {% if result.count_explanations %}
+  <h3>Count explanation</h3>
+  <ul>
+    {% for explanation in result.count_explanations %}
+    <li>{{ explanation }}</li>
+    {% endfor %}
+  </ul>
+  {% endif %}
   {% if result.forced_disabled %}
   <p><span class="badge medium">Tested while the daily-run entry was disabled</span></p>
   {% endif %}

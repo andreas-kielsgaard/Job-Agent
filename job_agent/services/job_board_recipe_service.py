@@ -86,6 +86,18 @@ class RecipeRunStep:
 
 
 @dataclass
+class ListingExtractionStats:
+    page_url: str
+    observed_cards: int = 0
+    extracted_jobs: int = 0
+    missing_url_count: int = 0
+    rejected_count: int = 0
+    duplicate_count: int = 0
+    limit_skipped_count: int = 0
+    limit: int = 0
+
+
+@dataclass
 class RecipeFieldCheck:
     field: str
     scope: str
@@ -196,6 +208,13 @@ class RecipeExtractionResult:
     detail_enriched_count: int = 0
     pagination_fetch_count: int = 0
     pagination_fetch_attempts: list[str] = field(default_factory=list)
+    listing_pages: list[ListingExtractionStats] = field(default_factory=list)
+    listing_observed_count: int = 0
+    listing_extracted_count: int = 0
+    listing_missing_url_count: int = 0
+    listing_rejected_count: int = 0
+    listing_duplicate_count: int = 0
+    listing_limit_skipped_count: int = 0
 
 
 def _record_recipe_step(
@@ -271,12 +290,23 @@ def extract_jobs_with_recipe(
     recipe: JobBoardRecipe,
     source_name: str = "",
 ) -> list[Job]:
+    jobs, _stats = _extract_jobs_with_recipe_with_stats(html, base_url, recipe, source_name=source_name)
+    return jobs
+
+
+def _extract_jobs_with_recipe_with_stats(
+    html: str,
+    base_url: str,
+    recipe: JobBoardRecipe,
+    source_name: str = "",
+) -> tuple[list[Job], ListingExtractionStats]:
     soup = BeautifulSoup(html, "html.parser")
     jobs: list[Job] = []
     seen_urls: set[str] = set()
     cards = soup.select(recipe.listing.card_selector)
+    stats = ListingExtractionStats(page_url=base_url, observed_cards=len(cards), limit=recipe.limits.max_cards)
 
-    for card in cards:
+    for index, card in enumerate(cards):
         title = _select_text(card, recipe.listing.title_selector)
         link = _select_href(card, recipe.listing.link_selector)
         url = urljoin(base_url, link) if link else ""
@@ -290,9 +320,14 @@ def extract_jobs_with_recipe(
         pattern_values = _extract_pattern_values(raw_text, recipe.patterns)
         title = pattern_values.get("title") or title
 
-        if not url or _should_reject(title, url, description, recipe):
+        if not url:
+            stats.missing_url_count += 1
+            continue
+        if _should_reject(title, url, description, recipe):
+            stats.rejected_count += 1
             continue
         if url in seen_urls:
+            stats.duplicate_count += 1
             continue
         seen_urls.add(url)
 
@@ -323,8 +358,10 @@ def extract_jobs_with_recipe(
         )
         jobs.append(job)
         if len(jobs) >= recipe.limits.max_cards:
+            stats.limit_skipped_count += max(0, len(cards) - index - 1)
             break
-    return jobs
+    stats.extracted_jobs = len(jobs)
+    return jobs, stats
 
 
 def extract_jobs_with_recipe_from_html(
@@ -334,7 +371,7 @@ def extract_jobs_with_recipe_from_html(
     mode_used: str = "local_fixture_html",
     warnings: list[str] | None = None,
 ) -> RecipeExtractionResult:
-    jobs = extract_jobs_with_recipe(html, base_url=base_url, recipe=recipe)
+    jobs, listing_stats = _extract_jobs_with_recipe_with_stats(html, base_url=base_url, recipe=recipe)
     pagination_links = find_pagination_links(html, base_url, recipe)
     result = RecipeExtractionResult(
         jobs=jobs,
@@ -375,7 +412,9 @@ def extract_jobs_with_recipe_from_html(
                 capability="detail",
             ),
         ],
+        listing_pages=[listing_stats],
     )
+    _attach_listing_counts(result)
     _attach_recipe_checks(result, recipe)
     return result
 
@@ -430,8 +469,11 @@ def extract_jobs_with_recipe_from_url(
             capability="listing",
         ),
     )
-    jobs = extract_jobs_with_recipe(html, base_url=final_url, recipe=recipe)
+    jobs, listing_stats = _extract_jobs_with_recipe_with_stats(html, base_url=final_url, recipe=recipe)
     jobs = _limited_jobs(jobs, job_limit)
+    if listing_stats.extracted_jobs > len(jobs):
+        listing_stats.limit_skipped_count += listing_stats.extracted_jobs - len(jobs)
+        listing_stats.extracted_jobs = len(jobs)
     pagination_links = find_pagination_links(html, final_url, recipe)
     observed_pagination_links = discover_pagination_links(html, final_url)
     application_entries = discover_application_entries(html, final_url)
@@ -447,9 +489,10 @@ def extract_jobs_with_recipe_from_url(
     )
 
     pagination_fetch_attempts: list[str] = []
+    pagination_listing_stats: list[ListingExtractionStats] = []
     if fetch_pagination:
         page_limit = pagination_page_limit if pagination_page_limit is not None else recipe.pagination.max_pages
-        page_warnings, fetched_jobs, fetched_urls = _fetch_pagination_job_pages(
+        page_warnings, fetched_jobs, fetched_urls, fetched_stats = _fetch_pagination_job_pages(
             pagination_links,
             recipe,
             use_rendered=use_rendered,
@@ -462,6 +505,7 @@ def extract_jobs_with_recipe_from_url(
         )
         warnings.extend(page_warnings)
         pagination_fetch_attempts.extend(fetched_urls)
+        pagination_listing_stats.extend(fetched_stats)
         jobs = fetched_jobs
     _record_recipe_step(
         steps,
@@ -511,7 +555,9 @@ def extract_jobs_with_recipe_from_url(
         detail_enriched_count=detail_enriched_count,
         pagination_fetch_count=len(pagination_fetch_attempts),
         pagination_fetch_attempts=pagination_fetch_attempts,
+        listing_pages=[listing_stats, *pagination_listing_stats],
     )
+    _attach_listing_counts(result)
     _attach_recipe_checks(result, recipe)
     return result
 
@@ -767,14 +813,15 @@ def _fetch_pagination_job_pages(
     job_limit: int | None,
     progress_callback: Callable[[RecipeRunStep], None] | None = None,
     step_collector: list[RecipeRunStep] | None = None,
-) -> tuple[list[str], list[Job], list[str]]:
+) -> tuple[list[str], list[Job], list[str], list[ListingExtractionStats]]:
     if not pagination_links or not max_pages or max_pages <= 1:
-        return [], existing_jobs, []
+        return [], existing_jobs, [], []
 
     warnings: list[str] = []
     jobs = list(existing_jobs)
     seen_urls = {job.url for job in jobs if job.url}
     fetched_urls: list[str] = []
+    page_stats: list[ListingExtractionStats] = []
     urls_to_fetch = _pagination_urls_to_fetch(pagination_links, max_pages=max_pages)
 
     for index, page_url in enumerate(urls_to_fetch):
@@ -821,15 +868,19 @@ def _fetch_pagination_job_pages(
             continue
         warnings.extend(fetch_warnings)
         fetched_urls.append(final_url)
-        page_jobs = extract_jobs_with_recipe(html, base_url=final_url, recipe=recipe)
+        page_jobs, stats = _extract_jobs_with_recipe_with_stats(html, base_url=final_url, recipe=recipe)
         before_count = len(jobs)
         for job in page_jobs:
             if job.url in seen_urls:
+                stats.duplicate_count += 1
                 continue
             seen_urls.add(job.url)
             jobs.append(job)
             if job_limit is not None and len(jobs) >= job_limit:
+                stats.limit_skipped_count += max(0, len(page_jobs) - (len(jobs) - before_count))
                 break
+        stats.extracted_jobs = len(jobs) - before_count
+        page_stats.append(stats)
         _record_recipe_step(
             step_collector,
             progress_callback,
@@ -840,7 +891,7 @@ def _fetch_pagination_job_pages(
                 capability="pagination",
             ),
         )
-    return warnings, jobs, fetched_urls
+    return warnings, jobs, fetched_urls, page_stats
 
 
 def _pagination_urls_to_fetch(links: list[PaginationLink], max_pages: int) -> list[str]:
@@ -894,6 +945,15 @@ def _detail_trace_detail(
 def _attach_recipe_checks(result: RecipeExtractionResult, recipe: JobBoardRecipe) -> None:
     result.field_checks = _field_checks(result.jobs, recipe)
     result.capability_checks = _capability_checks(result, recipe)
+
+
+def _attach_listing_counts(result: RecipeExtractionResult) -> None:
+    result.listing_observed_count = sum(page.observed_cards for page in result.listing_pages)
+    result.listing_extracted_count = sum(page.extracted_jobs for page in result.listing_pages)
+    result.listing_missing_url_count = sum(page.missing_url_count for page in result.listing_pages)
+    result.listing_rejected_count = sum(page.rejected_count for page in result.listing_pages)
+    result.listing_duplicate_count = sum(page.duplicate_count for page in result.listing_pages)
+    result.listing_limit_skipped_count = sum(page.limit_skipped_count for page in result.listing_pages)
 
 
 def _capability_checks(result: RecipeExtractionResult, recipe: JobBoardRecipe) -> list[RecipeCapabilityCheck]:

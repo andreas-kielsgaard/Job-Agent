@@ -153,6 +153,7 @@
     <div class="stat"><span>Input type</span><strong>{{ preview.input_type }}</strong></div>
     <div class="stat"><span>Mode used</span><strong>{{ preview.mode_used }}</strong></div>
     <div class="stat"><span>Jobs extracted</span><strong>{{ preview.extracted_job_count }}</strong></div>
+    <div class="stat"><span>Listing cards observed</span><strong>{{ preview.listing_observed_count or "Not tracked" }}</strong></div>
     <div class="stat"><span>Useful titles</span><strong>{{ preview.useful_titles }}</strong></div>
     <div class="stat"><span>Generic labels</span><strong>{{ preview.generic_labels }}</strong></div>
     <div class="stat"><span>Unique URLs</span><strong>{{ preview.unique_urls }}</strong></div>
@@ -163,6 +164,14 @@
   <ul>
     {% for note in preview.request_notes %}
     <li>{{ note }}</li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+  {% if preview.count_explanations %}
+  <h3>Count explanation</h3>
+  <ul>
+    {% for explanation in preview.count_explanations %}
+    <li>{{ explanation }}</li>
     {% endfor %}
   </ul>
   {% endif %}

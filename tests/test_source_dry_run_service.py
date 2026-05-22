@@ -3,8 +3,10 @@ from __future__ import annotations
 from pathlib import Path
 
 from job_agent.cli import dry_run_source
+from job_agent.io.json_store import write_json
 from job_agent.models import Job, SourceRunResult, SourceWarning
 from job_agent.services.source_dry_run_service import DryRunJobPreview, SourceDryRunResult, SourceDryRunService
+from job_agent.store import JobStore
 
 
 class FakeResponse:
@@ -91,6 +93,63 @@ def test_dry_run_collects_warnings(monkeypatch, project_root: Path) -> None:
     assert result.status == "warning"
     assert result.warning_count == 1
     assert result.warnings == ["Sample: Check details"]
+
+
+def test_dry_run_explains_count_mismatch_and_seen_state(monkeypatch, project_root: Path) -> None:
+    _write_execution_source(project_root, enabled=True)
+    seen_job = Job(
+        title="SAP ABAP Consultant",
+        source="Sample",
+        source_id="sample-source",
+        url="https://example.com/jobs/sap-abap",
+        description="ABAP RAP CDS contract role.",
+    )
+    new_job = Job(
+        title="SAP Basis Consultant",
+        source="Sample",
+        source_id="sample-source",
+        url="https://example.com/jobs/sap-basis",
+        description="Basis operations role.",
+    )
+    write_json(
+        project_root / "jobs" / "seen_jobs.json",
+        [
+            {
+                "stable_id": JobStore.job_id(seen_job),
+                "fuzzy_key": JobStore.fuzzy_key(seen_job),
+                "title": seen_job.title,
+                "company": seen_job.company,
+                "source": seen_job.source,
+                "url": seen_job.url,
+                "first_seen_date": "2026-05-01",
+                "last_seen_date": "2026-05-01",
+                "content_hash": JobStore.content_hash(seen_job),
+                "status": "previously_seen",
+            }
+        ],
+    )
+
+    class FakeAdapter:
+        def fetch(self):
+            return SourceRunResult(
+                jobs=[seen_job, new_job],
+                metadata={
+                    "listing_observed_count": 3,
+                    "listing_extracted_count": 2,
+                    "listing_duplicate_count": 1,
+                },
+            )
+
+    monkeypatch.setattr("job_agent.services.source_dry_run_service.adapter_for_source", lambda source, root: FakeAdapter())
+
+    result = SourceDryRunService(project_root).dry_run("sample-source")
+
+    assert result.listing_observed_count == 3
+    assert result.listing_duplicate_count == 1
+    assert result.seen_new_count == 1
+    assert result.seen_previously_seen_count == 1
+    assert any("duplicate URL" in explanation for explanation in result.count_explanations)
+    assert any("already seen in previous runs" in explanation for explanation in result.count_explanations)
 
 
 def test_dry_run_does_not_write_packages_seen_state_or_runs(monkeypatch, project_root: Path) -> None:

@@ -346,6 +346,10 @@ def _print_recipe_preview(preview: RecipePreviewResult) -> None:
     _safe_print(f"Input mode: {preview.mode_used}")
     _safe_print(f"Base URL: {preview.base_url}")
     _safe_print(f"Jobs extracted: {preview.extracted_job_count}")
+    if preview.listing_observed_count:
+        _safe_print(f"Listing cards observed: {preview.listing_observed_count}")
+    for explanation in preview.count_explanations:
+        _safe_print(f"Count note: {explanation}")
     _safe_print(f"Useful titles: {preview.useful_titles}")
     _safe_print(f"Generic labels: {preview.generic_labels}")
     _safe_print(f"Unique URLs: {preview.unique_urls}")
@@ -451,6 +455,10 @@ def dry_run_source(source_id: str, force_disabled: bool = False, save_readiness:
         _safe_print("Forced disabled source execution: true")
     _safe_print(f"Dry-run status: {result.status}")
     _safe_print(f"Jobs extracted: {result.job_count}")
+    if result.listing_observed_count:
+        _safe_print(f"Listing cards observed: {result.listing_observed_count}")
+    for explanation in result.count_explanations:
+        _safe_print(f"Count note: {explanation}")
     _safe_print(f"Warnings: {result.warning_count}")
     for warning in result.warnings:
         _safe_print(f"Warning: {warning}")

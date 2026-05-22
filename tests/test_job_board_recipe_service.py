@@ -18,6 +18,7 @@ from job_agent.services.job_board_recipe_service import (
     enrich_jobs_with_detail_pages,
     extract_job_detail_from_html,
     extract_jobs_with_recipe,
+    extract_jobs_with_recipe_from_html,
     extract_jobs_with_recipe_from_url,
     find_pagination_links,
     load_job_board_recipe,
@@ -37,6 +38,23 @@ def test_recipe_extracts_real_job_cards_and_dedupes_urls() -> None:
     assert jobs[0].source_confidence == "recipe"
     assert jobs[0].freshness_confidence == "recipe"
     assert jobs[0].extraction_notes == ["Recipe-based extraction; verify details manually."]
+
+
+def test_recipe_extraction_result_explains_listing_count_mismatch() -> None:
+    html = """
+    <article class="job-card"><h2><a class="job-link" href="/jobs/sap-abap">SAP ABAP Consultant</a></h2></article>
+    <article class="job-card"><h2><a class="job-link" href="/jobs/sap-abap">SAP ABAP Consultant duplicate</a></h2></article>
+    <article class="job-card"><h2><a class="job-link" href="/about">SAP Careers Overview</a></h2></article>
+    <article class="job-card"><h2>SAP Missing Link Consultant</h2></article>
+    """
+
+    result = extract_jobs_with_recipe_from_html(html, "https://example.com", _recipe())
+
+    assert result.listing_observed_count == 4
+    assert result.listing_extracted_count == 1
+    assert result.listing_duplicate_count == 1
+    assert result.listing_rejected_count == 1
+    assert result.listing_missing_url_count == 1
 
 
 def test_recipe_separates_title_selector_from_generic_link_selector() -> None:
