@@ -204,11 +204,13 @@ def test_load_jobs_from_sources_emits_started_and_completed_events(project_root:
     result = load_jobs_from_sources(project_root, progress_callback=events.append)
 
     assert len(result.jobs) == 1
-    assert [event.event_type for event in events] == ["source_started", "source_completed"]
+    assert events[0].event_type == "source_started"
+    assert events[-1].event_type == "source_completed"
+    assert [event.event_type for event in events[1:-1]] == ["source_activity", "source_activity"]
     assert events[0].source_index == 1
     assert events[0].source_count == 1
-    assert events[1].jobs_found == 1
-    assert events[1].warnings_count == 0
+    assert events[-1].jobs_found == 1
+    assert events[-1].warnings_count == 0
 
 
 def test_iter_source_results_yields_one_result_per_enabled_source_in_order(project_root: Path) -> None:

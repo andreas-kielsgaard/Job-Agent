@@ -84,6 +84,8 @@ def run_daily_agent(
             }
             if event.elapsed_time_seconds is not None:
                 counts["elapsed_time_seconds"] = event.elapsed_time_seconds
+            if event.event_type == "source_activity":
+                counts["activity"] = 1
             emit(
                 event.event_type,
                 event.message,
@@ -429,6 +431,12 @@ def _new_source_counts(source_fetch: SourceFetchResult) -> dict:
         "source_count": source_fetch.source_count,
         "jobs_found": len(source_fetch.result.jobs),
         "warnings_count": len(source_fetch.result.warnings),
+        "listing_observed_count": int(source_fetch.result.metadata.get("listing_observed_count") or 0),
+        "listing_extracted_count": int(source_fetch.result.metadata.get("listing_extracted_count") or 0),
+        "listing_limit_skipped_count": int(source_fetch.result.metadata.get("listing_limit_skipped_count") or 0),
+        "pagination_fetch_count": int(source_fetch.result.metadata.get("pagination_fetch_count") or 0),
+        "detail_fetch_count": int(source_fetch.result.metadata.get("detail_fetch_count") or 0),
+        "detail_enriched_count": int(source_fetch.result.metadata.get("detail_enriched_count") or 0),
         "new_roles": 0,
         "changed_roles": 0,
         "candidates_processed": 0,

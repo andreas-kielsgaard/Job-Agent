@@ -176,7 +176,7 @@ def test_run_daily_agent_records_source_progress_events(local_yaml_source_projec
     assert source_completed["counts"]["jobs_found"] == 1
 
 
-def test_run_daily_agent_scores_each_source_before_next_source_starts(template_project: Path) -> None:
+def test_run_daily_agent_can_fetch_sources_before_scoring_completes(template_project: Path) -> None:
     _write_two_source_project(template_project)
 
     result = run_daily_agent(RunOptions(include_seen=True, generate_materials=False), root=template_project)
@@ -184,23 +184,21 @@ def test_run_daily_agent_scores_each_source_before_next_source_starts(template_p
     events = RunStore(template_project).read_events(result.record.run_id)
     event_types = [event["event_type"] for event in events]
     first_score_index = event_types.index("job_scored")
-    second_source_started_index = next(
-        index
-        for index, event in enumerate(events)
-        if event["event_type"] == "source_started" and event["current_source"] == "Second Source"
-    )
+    source_started_indexes = [index for index, event in enumerate(events) if event["event_type"] == "source_started"]
     source_processed = [event for event in events if event["event_type"] == "source_processed"]
     highlights = [event for event in events if event["event_type"] == "match_highlight"]
 
-    assert first_score_index < second_source_started_index
+    assert len(source_started_indexes) == 2
+    assert max(source_started_indexes) < first_score_index
     assert len(source_processed) == 2
-    assert source_processed[0]["counts"]["jobs_found"] == 1
-    assert source_processed[0]["counts"]["candidates_processed"] == 1
-    assert source_processed[0]["counts"]["highlighted_matches"] == 1
+    assert {event["current_source"] for event in source_processed} == {"First Source", "Second Source"}
+    assert all(event["counts"]["jobs_found"] == 1 for event in source_processed)
+    assert sum(event["counts"]["candidates_processed"] for event in source_processed) == 1
+    assert sum(event["counts"]["duplicates_skipped"] for event in source_processed) == 1
+    assert sum(event["counts"]["highlighted_matches"] for event in source_processed) == 1
     assert highlights
-    assert highlights[0]["counts"]["score"] == 70
-    assert "strong match category" in highlights[0]["message"]
-    assert highlights[0]["current_source"] == "First Source"
+    assert all(highlight["counts"]["score"] == 70 for highlight in highlights)
+    assert all("strong match category" in highlight["message"] for highlight in highlights)
     assert result.record.total_loaded == 2
 
 

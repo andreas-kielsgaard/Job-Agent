@@ -42,7 +42,8 @@ def build_run_detail_view(
     record = store.get(run_id)
     if not record:
         raise KeyError(run_id)
-    packages = PackageIndexService(root).list_packages(run_id)
+    all_packages = PackageIndexService(root).list_packages(run_id)
+    packages = list(all_packages)
     if category:
         packages = [pkg for pkg in packages if pkg.get("match_category") == category]
     if match_group == "strong_exploratory":
@@ -69,10 +70,14 @@ def build_run_detail_view(
     match_highlights = [event for event in all_events if event.get("event_type") == "match_highlight"]
     ai_evaluation_events = [event for event in all_events if event.get("event_type", "").startswith("ai_evaluation_")]
     source_progress = build_source_progress(all_events)
+    run_overview = build_run_overview(record, all_packages, all_events, match_highlights)
+    activity = build_activity_view(all_events)
     return {
         "run": record,
+        "run_overview": run_overview,
         "packages": packages,
-        "events": all_events[-12:],
+        "events": activity["recent"],
+        "activity": activity,
         "source_warnings": source_warnings,
         "match_highlights": match_highlights,
         "ai_evaluation_events": ai_evaluation_events,
@@ -88,6 +93,110 @@ def build_run_detail_view(
             "materials_missing": materials_missing,
             "match_group": match_group,
         },
+    }
+
+
+def build_run_overview(
+    record,
+    packages: list[dict[str, Any]],
+    events: list[dict[str, Any]],
+    match_highlights: list[dict[str, Any]],
+) -> dict[str, Any]:
+    material_generated = sum(1 for package in packages if _material_status(package) == "generated")
+    material_missing = sum(1 for package in packages if _material_status(package) == "missing")
+    source_processed = [event for event in events if event.get("event_type") == "source_processed"]
+    previously_seen_skipped = sum(int((event.get("counts") or {}).get("previously_seen_skipped") or 0) for event in source_processed)
+    new_changed = sum(
+        int((event.get("counts") or {}).get("new_roles") or 0) + int((event.get("counts") or {}).get("changed_roles") or 0)
+        for event in source_processed
+    )
+    limit_hit_sources = [
+        event.get("current_source") or "Unknown source"
+        for event in source_processed
+        if int((event.get("counts") or {}).get("listing_limit_skipped_count") or 0) > 0
+    ]
+    return {
+        "proposed_jobs": len(packages),
+        "materials_generated": material_generated,
+        "materials_missing": material_missing,
+        "interesting_signals": len(match_highlights),
+        "new_changed": new_changed or record.new_roles + record.changed_roles,
+        "previously_seen_skipped": previously_seen_skipped,
+        "limit_hit_sources": limit_hit_sources,
+        "is_running": record.status in {"pending", "running"},
+        "option_summary": build_option_summary(record.options),
+    }
+
+
+def build_option_summary(options: dict[str, Any]) -> list[str]:
+    labels = []
+    if options.get("is_test"):
+        labels.append("Test run")
+    if options.get("include_seen"):
+        labels.append("Includes jobs seen before")
+    else:
+        labels.append("Skips jobs seen before")
+    if options.get("include_weak"):
+        labels.append("Includes weak matches")
+    else:
+        labels.append("Strong and exploratory matches only")
+    if options.get("generate_materials"):
+        labels.append("Generates materials during the run")
+    else:
+        labels.append("Materials generated after review")
+    if options.get("use_llm"):
+        labels.append("Claude writing enabled")
+    if options.get("ai_enhanced_search"):
+        labels.append("AI-assisted scoring enabled")
+    if options.get("mark_seen"):
+        labels.append("Marks scanned jobs as seen")
+    return labels
+
+
+def build_activity_view(events: list[dict[str, Any]]) -> dict[str, Any]:
+    groups = {
+        "milestones": [],
+        "source": [],
+        "scoring": [],
+        "generation": [],
+        "warnings": [],
+        "all": list(events),
+    }
+    for event in events:
+        event_type = str(event.get("event_type") or "")
+        phase = str(event.get("phase") or "")
+        if "warning" in event_type or event.get("status") == "failed":
+            groups["warnings"].append(event)
+        if event_type in {
+            "run_started",
+            "profile_loaded",
+            "source_started",
+            "source_completed",
+            "source_processed",
+            "jobs_loaded",
+            "seen_marked",
+            "seen_mark_skipped",
+            "run_completed",
+            "run_failed",
+        }:
+            groups["milestones"].append(event)
+        if phase in {"source_ingestion", "source_processing"} or event_type.startswith("source_"):
+            groups["source"].append(event)
+        if phase in {"classification", "scoring"} or event_type in {"job_classified", "job_scored", "match_highlight"}:
+            groups["scoring"].append(event)
+        if phase == "generation" or event_type.startswith("package_"):
+            groups["generation"].append(event)
+    return {
+        "recent": groups["milestones"][-8:] or events[-8:],
+        "groups": groups,
+        "counts": {name: len(items) for name, items in groups.items()},
+        "sections": [
+            {"key": "warnings", "label": "Warnings", "events": groups["warnings"]},
+            {"key": "source", "label": "Source activity", "events": groups["source"]},
+            {"key": "scoring", "label": "Scoring", "events": groups["scoring"]},
+            {"key": "generation", "label": "Generation", "events": groups["generation"]},
+            {"key": "all", "label": "All events", "events": groups["all"]},
+        ],
     }
 
 
@@ -233,7 +342,9 @@ def build_source_progress(events: list[dict[str, Any]]) -> dict[str, Any]:
     source_count = 0
 
     for event in events:
-        if event.get("phase") != "source_ingestion" or not str(event.get("event_type", "")).startswith("source_"):
+        if event.get("phase") not in {"source_ingestion", "source_processing"} or not str(
+            event.get("event_type", "")
+        ).startswith("source_"):
             continue
         counts = event.get("counts") or {}
         source_index = int(counts.get("source_index") or 0)
@@ -258,17 +369,43 @@ def build_source_progress(events: list[dict[str, Any]]) -> dict[str, Any]:
         if event_type == "source_started":
             item["status"] = "running"
             item["started_at"] = event.get("timestamp", "")
+            item["stage"] = "Starting"
         elif event_type == "source_warning":
             item["warnings_count"] = max(item["warnings_count"], 0) + int(counts.get("warnings_count") or 1)
+        elif event_type == "source_activity":
+            item["status"] = "running"
+            item["activity_count"] += 1
+            item["stage"] = _source_stage(event.get("message", ""))
+            item["recent_activity"].append(
+                {
+                    "timestamp": event.get("timestamp", ""),
+                    "message": event.get("message", ""),
+                    "stage": item["stage"],
+                }
+            )
+            item["recent_activity"] = item["recent_activity"][-8:]
         elif event_type == "source_completed":
             item["jobs_found"] = int(counts.get("jobs_found") or 0)
             item["warnings_count"] = max(item["warnings_count"], int(counts.get("warnings_count") or 0))
             item["status"] = "warning" if item["warnings_count"] > 0 else "completed"
             item["finished_at"] = event.get("timestamp", "")
+            item["stage"] = "Completed"
         elif event_type == "source_failed":
             item["warnings_count"] = max(item["warnings_count"], int(counts.get("warnings_count") or 1))
             item["status"] = "failed"
             item["finished_at"] = event.get("timestamp", "")
+            item["stage"] = "Failed"
+        elif event_type == "source_processed":
+            item["new_changed"] = int(counts.get("new_roles") or 0) + int(counts.get("changed_roles") or 0)
+            item["previously_seen_skipped"] = int(counts.get("previously_seen_skipped") or 0)
+            item["strong_matches"] = int(counts.get("strong_matches") or 0)
+            item["exploratory_matches"] = int(counts.get("exploratory_matches") or 0)
+            item["included_roles"] = int(counts.get("included_roles") or 0)
+            item["listing_observed_count"] = int(counts.get("listing_observed_count") or 0)
+            item["listing_limit_skipped_count"] = int(counts.get("listing_limit_skipped_count") or 0)
+            item["pagination_fetch_count"] = int(counts.get("pagination_fetch_count") or 0)
+            item["detail_fetch_count"] = int(counts.get("detail_fetch_count") or 0)
+            item["detail_enriched_count"] = int(counts.get("detail_enriched_count") or 0)
 
     for source_index in range(1, source_count + 1):
         items_by_index.setdefault(source_index, _waiting_source_item(source_index, source_count))
@@ -301,4 +438,30 @@ def _waiting_source_item(source_index: int, source_count: int) -> dict[str, Any]
         "latest_message": "",
         "started_at": "",
         "finished_at": "",
+        "stage": "Waiting",
+        "activity_count": 0,
+        "recent_activity": [],
+        "new_changed": 0,
+        "previously_seen_skipped": 0,
+        "strong_matches": 0,
+        "exploratory_matches": 0,
+        "included_roles": 0,
+        "listing_observed_count": 0,
+        "listing_limit_skipped_count": 0,
+        "pagination_fetch_count": 0,
+        "detail_fetch_count": 0,
+        "detail_enriched_count": 0,
     }
+
+
+def _source_stage(message: str) -> str:
+    lowered = message.lower()
+    if "detail" in lowered:
+        return "Reading detail pages"
+    if "pagination" in lowered:
+        return "Reading pagination"
+    if "listing" in lowered or "recipe selected" in lowered:
+        return "Reading listings"
+    if "scored" in lowered or "classified" in lowered:
+        return "Scoring jobs"
+    return "Working"

@@ -2,12 +2,16 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import date
+from inspect import Parameter, signature
 from pathlib import Path
+from queue import Queue
+from threading import Lock
 from time import perf_counter
 from typing import Any
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 import requests
 import yaml
@@ -34,6 +38,9 @@ class SourceProgressEvent:
 SourceProgressCallback = Callable[[SourceProgressEvent], None]
 SourceFetchProgressCallback = Callable[[dict[str, Any]], None]
 
+_HOST_LOCKS: dict[str, Lock] = {}
+_HOST_LOCKS_GUARD = Lock()
+
 
 @dataclass
 class SourceFetchResult:
@@ -43,6 +50,23 @@ class SourceFetchResult:
     source_count: int
     result: SourceRunResult
     elapsed_time_seconds: float | None = None
+
+
+@dataclass
+class _SourceWorkItem:
+    source: dict
+    source_name: str
+    source_index: int
+    source_count: int
+    source_type: str
+    source_url: str
+
+
+@dataclass
+class _SourceQueueItem:
+    kind: str
+    event: SourceProgressEvent | None = None
+    result: SourceFetchResult | None = None
 
 
 class SourceAdapter(ABC):
@@ -215,95 +239,193 @@ def iter_source_results(
     if source_id:
         sources = [source for source in sources if str(source.get("source_id") or "") == source_id]
     source_count = len(sources)
-    for source_index, source in enumerate(sources, start=1):
-        source_name = source.get("name", "Unknown")
-        source_type = source.get("type", "")
-        source_url = source.get("url") or source.get("path", "")
-        started_at = perf_counter()
-        _emit_source_progress(
-            progress_callback,
-            SourceProgressEvent(
-                event_type="source_started",
-                source_name=source_name,
-                source_index=source_index,
-                source_count=source_count,
-                source_type=source_type,
-                source_url=source_url,
-                message=f"Checking source {source_index}/{source_count}: {source_name}",
-            ),
-        )
-        adapter = adapter_for_source(source, root)
-        try:
-            source_result = adapter.fetch()
-        except Exception as exc:
-            elapsed = round(perf_counter() - started_at, 3)
-            warning = SourceWarning(source_name, f"Source failed unexpectedly: {exc}", source_url)
-            source_result = SourceRunResult(warnings=[warning])
-            _emit_source_progress(
-                progress_callback,
-                SourceProgressEvent(
-                    event_type="source_failed",
-                    source_name=source_name,
-                    source_index=source_index,
-                    source_count=source_count,
-                    source_type=source_type,
-                    source_url=source_url,
-                    warnings_count=1,
-                    elapsed_time_seconds=elapsed,
-                    message=f"Source failed: {source_name} - {exc}",
-                ),
-            )
-            yield SourceFetchResult(
-                source=source,
-                source_name=source_name,
-                source_index=source_index,
-                source_count=source_count,
-                result=source_result,
-                elapsed_time_seconds=elapsed,
-            )
-            continue
-        elapsed = round(perf_counter() - started_at, 3)
-        for warning in source_result.warnings:
-            _emit_source_progress(
-                progress_callback,
-                SourceProgressEvent(
-                    event_type="source_warning",
-                    source_name=warning.source,
-                    source_index=source_index,
-                    source_count=source_count,
-                    source_type=source_type,
-                    source_url=warning.url or source_url,
-                    warnings_count=1,
-                    elapsed_time_seconds=elapsed,
-                    message=f"Source warning from {warning.source}: {warning.message}",
-                ),
-            )
-        _emit_source_progress(
-            progress_callback,
-            SourceProgressEvent(
-                event_type="source_completed",
-                source_name=source_name,
-                source_index=source_index,
-                source_count=source_count,
-                source_type=source_type,
-                source_url=source_url,
-                jobs_found=len(source_result.jobs),
-                warnings_count=len(source_result.warnings),
-                elapsed_time_seconds=elapsed,
-                message=(
-                    f"Completed source {source_index}/{source_count}: {source_name} - "
-                    f"{len(source_result.jobs)} jobs found, {len(source_result.warnings)} warnings"
-                ),
-            ),
-        )
-        yield SourceFetchResult(
+    items = [
+        _SourceWorkItem(
             source=source,
-            source_name=source_name,
+            source_name=source.get("name", "Unknown"),
             source_index=source_index,
             source_count=source_count,
+            source_type=source.get("type", ""),
+            source_url=source.get("url") or source.get("path", ""),
+        )
+        for source_index, source in enumerate(sources, start=1)
+    ]
+    if not items:
+        return
+    if len(items) == 1:
+        yield _run_source_item(items[0], root, progress_callback)
+        return
+
+    yield from _iter_source_results_parallel(items, root, progress_callback)
+
+
+def _iter_source_results_parallel(
+    items: list[_SourceWorkItem],
+    root: Path,
+    progress_callback: SourceProgressCallback | None,
+):
+    queue: Queue[_SourceQueueItem] = Queue()
+    completed = 0
+    max_workers = min(3, len(items))
+
+    def worker(item: _SourceWorkItem) -> None:
+        result = _run_source_item(item, root, lambda event: queue.put(_SourceQueueItem("event", event=event)))
+        queue.put(_SourceQueueItem("result", result=result))
+
+    with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="source-fetch") as executor:
+        for item in items:
+            executor.submit(worker, item)
+        while completed < len(items):
+            item = queue.get()
+            if item.kind == "event" and item.event:
+                _emit_source_progress(progress_callback, item.event)
+            elif item.kind == "result" and item.result:
+                completed += 1
+                yield item.result
+
+
+def _run_source_item(
+    item: _SourceWorkItem,
+    root: Path,
+    progress_callback: SourceProgressCallback | None,
+) -> SourceFetchResult:
+    started_at = perf_counter()
+    _emit_source_progress(
+        progress_callback,
+        SourceProgressEvent(
+            event_type="source_started",
+            source_name=item.source_name,
+            source_index=item.source_index,
+            source_count=item.source_count,
+            source_type=item.source_type,
+            source_url=item.source_url,
+            message=f"Checking source {item.source_index}/{item.source_count}: {item.source_name}",
+        ),
+    )
+    adapter = adapter_for_source(item.source, root)
+    try:
+        host_lock = _host_lock(item.source_url)
+        with host_lock:
+            source_result = _fetch_adapter(
+                adapter,
+                lambda progress: _emit_adapter_progress(progress_callback, item, progress),
+            )
+    except Exception as exc:
+        elapsed = round(perf_counter() - started_at, 3)
+        warning = SourceWarning(item.source_name, f"Source failed unexpectedly: {exc}", item.source_url)
+        source_result = SourceRunResult(warnings=[warning])
+        _emit_source_progress(
+            progress_callback,
+            SourceProgressEvent(
+                event_type="source_failed",
+                source_name=item.source_name,
+                source_index=item.source_index,
+                source_count=item.source_count,
+                source_type=item.source_type,
+                source_url=item.source_url,
+                warnings_count=1,
+                elapsed_time_seconds=elapsed,
+                message=f"Source failed: {item.source_name} - {exc}",
+            ),
+        )
+        return SourceFetchResult(
+            source=item.source,
+            source_name=item.source_name,
+            source_index=item.source_index,
+            source_count=item.source_count,
             result=source_result,
             elapsed_time_seconds=elapsed,
         )
+    elapsed = round(perf_counter() - started_at, 3)
+    for warning in source_result.warnings:
+        _emit_source_progress(
+            progress_callback,
+            SourceProgressEvent(
+                event_type="source_warning",
+                source_name=warning.source,
+                source_index=item.source_index,
+                source_count=item.source_count,
+                source_type=item.source_type,
+                source_url=warning.url or item.source_url,
+                warnings_count=1,
+                elapsed_time_seconds=elapsed,
+                message=f"Source warning from {warning.source}: {warning.message}",
+            ),
+        )
+    _emit_source_progress(
+        progress_callback,
+        SourceProgressEvent(
+            event_type="source_completed",
+            source_name=item.source_name,
+            source_index=item.source_index,
+            source_count=item.source_count,
+            source_type=item.source_type,
+            source_url=item.source_url,
+            jobs_found=len(source_result.jobs),
+            warnings_count=len(source_result.warnings),
+            elapsed_time_seconds=elapsed,
+            message=(
+                f"Completed source {item.source_index}/{item.source_count}: {item.source_name} - "
+                f"{len(source_result.jobs)} jobs found, {len(source_result.warnings)} warnings"
+            ),
+        ),
+    )
+    return SourceFetchResult(
+        source=item.source,
+        source_name=item.source_name,
+        source_index=item.source_index,
+        source_count=item.source_count,
+        result=source_result,
+        elapsed_time_seconds=elapsed,
+    )
+
+
+def _emit_adapter_progress(
+    callback: SourceProgressCallback | None,
+    item: _SourceWorkItem,
+    progress: dict[str, Any],
+) -> None:
+    phase = str(progress.get("phase") or "Source activity")
+    detail = str(progress.get("detail") or "")
+    _emit_source_progress(
+        callback,
+        SourceProgressEvent(
+            event_type="source_activity",
+            source_name=item.source_name,
+            source_index=item.source_index,
+            source_count=item.source_count,
+            source_type=item.source_type,
+            source_url=item.source_url,
+            message=f"{phase}: {detail}" if detail else phase,
+        ),
+    )
+
+
+def _host_lock(url: str) -> Lock:
+    host = urlparse(url if "://" in url else f"https://{url}").netloc.lower()
+    if not host:
+        return Lock()
+    with _HOST_LOCKS_GUARD:
+        if host not in _HOST_LOCKS:
+            _HOST_LOCKS[host] = Lock()
+        return _HOST_LOCKS[host]
+
+
+def _fetch_adapter(adapter: SourceAdapter, progress_callback: SourceFetchProgressCallback) -> SourceRunResult:
+    if _adapter_accepts_progress_callback(adapter):
+        return adapter.fetch(progress_callback=progress_callback)
+    return adapter.fetch()
+
+
+def _adapter_accepts_progress_callback(adapter: SourceAdapter) -> bool:
+    try:
+        parameters = signature(adapter.fetch).parameters.values()
+    except (TypeError, ValueError):
+        return True
+    return any(
+        parameter.kind == Parameter.VAR_KEYWORD or parameter.name == "progress_callback"
+        for parameter in parameters
+    )
 
 
 def _emit_source_progress(callback: SourceProgressCallback | None, event: SourceProgressEvent) -> None:

@@ -106,8 +106,8 @@ def test_run_detail_renders_source_progress(client: TestClient, project_root: Pa
     response = client.get(f"/runs/{run.run_id}")
 
     assert response.status_code == 200
-    assert "Source Progress" in response.text
-    assert "Interesting Finds" in response.text
+    assert "Source Results" in response.text
+    assert "Interesting Signals" in response.text
     assert "Local" in response.text
     assert "Checking source 1/1: Local" in response.text
     assert "Highlighted match" in response.text

@@ -1,83 +1,159 @@
 {% extends "base.html" %}
 {% block content %}
-<div class="panel" id="run-panel">
-  <h1>Run {{ run.run_id }}</h1>
+<div class="panel run-summary-panel" id="run-panel">
+  <div class="section-heading-row">
+    <div>
+      <p class="eyebrow">Run result</p>
+      <h1>Run {{ run.run_id }}</h1>
+      <div class="run-option-list">
+        {% for option in run_overview.option_summary %}
+        <span class="badge">{{ option }}</span>
+        {% endfor %}
+      </div>
+    </div>
+    <span class="badge {{ run.status }}">{{ run.status }}</span>
+  </div>
   <div class="grid">
-    <div class="stat"><span>Status</span><strong>{{ run.status }}</strong></div>
-    <div class="stat"><span>Loaded</span><strong>{{ run.total_loaded }}</strong></div>
-    <div class="stat"><span>Generated</span><strong>{{ run.generated_job_count }}</strong></div>
+    <div class="stat"><span>Loaded jobs</span><strong>{{ run.total_loaded }}</strong></div>
+    <div class="stat"><span>New or changed</span><strong>{{ run_overview.new_changed }}</strong></div>
+    <div class="stat"><span>Already seen skipped</span><strong>{{ run_overview.previously_seen_skipped }}</strong></div>
+    <div class="stat"><span>Proposed jobs</span><strong>{{ run_overview.proposed_jobs }}</strong></div>
+    <div class="stat"><span>Materials generated</span><strong>{{ run_overview.materials_generated }}</strong></div>
+    <div class="stat"><span>Materials missing</span><strong>{{ run_overview.materials_missing }}</strong></div>
     <div class="stat"><span>Warnings</span><strong>{{ run.source_warnings }}</strong></div>
   </div>
-  <p class="muted">Options: {{ run.options }}</p>
   {% if run.is_test %}<p><span class="badge">Test run</span> This run is excluded from normal run views and does not mark jobs as seen.</p>{% endif %}
-  <p class="muted">Visibility: {{ run.visibility }}</p>
-  <div class="row">
+  {% if run_overview.limit_hit_sources %}
+  <p><span class="badge warning">Limit reached</span> {{ run_overview.limit_hit_sources|join(", ") }} stopped at a configured extraction limit. Use a source backfill/extended source run before relying on this as a full historical import.</p>
+  {% endif %}
+  <div class="action-row run-actions">
+    <a class="button" href="#proposed-jobs">Review proposed jobs</a>
     {% if run.digest_path %}<a class="button light" href="/runs/{{ run.run_id }}/log">Open log</a>{% endif %}
+    {% if run_overview.materials_missing %}<a class="button light" href="#proposed-jobs">Review missing materials</a>{% endif %}
+    <a class="button light" href="#activity-log" onclick="document.getElementById('activity-log').open = true">Show activity log</a>
     {% if run.digest_path %}<span class="muted">Digest: {{ run.digest_path }}</span>{% endif %}
   </div>
 </div>
 
 {% if run.status in ["pending", "running"] %}
 <script>
-  setTimeout(() => location.reload(), 2000);
+  setTimeout(() => location.reload(), 2500);
 </script>
 {% endif %}
 
 <div class="panel">
-  <h2>Interesting Finds</h2>
+  <h2>Source Results</h2>
+  {% if source_progress %}
+  {% if run.status in ["pending", "running"] %}
+  <div class="grid">
+    <div class="stat"><span>Sources completed</span><strong>{{ source_progress_summary.sources_completed }}/{{ source_progress_summary.total_sources }}</strong></div>
+    <div class="stat"><span>Current source</span><strong>{{ source_progress_summary.current_source or "None" }}</strong></div>
+    <div class="stat"><span>Jobs found so far</span><strong>{{ source_progress_summary.jobs_found_so_far }}</strong></div>
+    <div class="stat"><span>Warnings so far</span><strong>{{ source_progress_summary.warnings_so_far }}</strong></div>
+  </div>
+  {% endif %}
+  <div class="source-run-list">
+    {% for source in source_progress %}
+    <section class="source-run-card">
+      <div class="source-run-header">
+        <div>
+          <h3>{{ source.source_name }}</h3>
+          <p class="muted">{{ source.source_index }}/{{ source.source_count }} · {{ source.stage }}</p>
+        </div>
+        <span class="badge {{ source.status }}">{{ source.status }}</span>
+      </div>
+      <div class="source-run-stats">
+        <div><span>Jobs</span><strong>{{ source.jobs_found }}</strong></div>
+        <div><span>New/changed</span><strong>{{ source.new_changed }}</strong></div>
+        <div><span>Proposed</span><strong>{{ source.included_roles }}</strong></div>
+        <div><span>Seen skipped</span><strong>{{ source.previously_seen_skipped }}</strong></div>
+        <div><span>Pagination</span><strong>{{ source.pagination_fetch_count }}</strong></div>
+        <div><span>Detail pages</span><strong>{{ source.detail_fetch_count }}</strong></div>
+        <div><span>Time</span><strong>{% if source.elapsed_time_seconds is not none %}{{ source.elapsed_time_seconds }}s{% else %}running{% endif %}</strong></div>
+      </div>
+      <p class="muted">{{ source.latest_message or "Waiting to start." }}</p>
+      {% if source.listing_limit_skipped_count %}
+      <p><span class="badge warning">Limit hit</span> {{ source.listing_limit_skipped_count }} listing card(s) were outside the configured limit.</p>
+      {% endif %}
+      {% if source.recent_activity %}
+      <details class="diagnostic-panel">
+        <summary>Recent source activity ({{ source.activity_count }})</summary>
+        <ol class="activity-list compact">
+          {% for event in source.recent_activity %}
+          <li><span class="muted">{{ event.timestamp }}</span> {{ event.message }}</li>
+          {% endfor %}
+        </ol>
+      </details>
+      {% endif %}
+    </section>
+    {% endfor %}
+  </div>
+  {% else %}
+  <p>No source progress events recorded for this run.</p>
+  {% endif %}
+</div>
+
+<div class="panel">
+  <h2>Interesting Signals</h2>
   {% if match_highlights %}
-    {% for highlight in match_highlights %}
+  <p class="muted">{{ run_overview.interesting_signals }} scoring signal(s) were recorded; {{ run_overview.proposed_jobs }} job(s) passed into the review list below.</p>
+  <div class="signal-list">
+    {% for highlight in match_highlights[:8] %}
     <p>
       <span class="badge strong">{{ highlight.counts.score }}%</span>
       <strong>{{ highlight.current_job }}</strong>
-      <span class="muted">{{ highlight.timestamp }}{% if highlight.current_source %} - {{ highlight.current_source }}{% endif %}</span><br>
+      <span class="muted">{{ highlight.timestamp }}{% if highlight.current_source %} · {{ highlight.current_source }}{% endif %}</span><br>
       {{ highlight.message }}
     </p>
     {% endfor %}
+  </div>
+  {% if match_highlights|length > 8 %}
+  <details class="diagnostic-panel">
+    <summary>Show all {{ match_highlights|length }} signals</summary>
+    {% for highlight in match_highlights[8:] %}
+    <p><span class="badge strong">{{ highlight.counts.score }}%</span> <strong>{{ highlight.current_job }}</strong><br>{{ highlight.message }}</p>
+    {% endfor %}
+  </details>
+  {% endif %}
   {% else %}
-    <p>No highlighted matches yet.</p>
+  <p>No highlighted matches yet.</p>
   {% endif %}
 </div>
 
-<div class="panel">
-  <h2>Source Progress</h2>
-  {% if source_progress %}
-    {% if run.status in ["pending", "running"] %}
-    <div class="grid">
-      <div class="stat"><span>Progress</span><strong>{{ source_progress_summary.sources_completed }}/{{ source_progress_summary.total_sources }}</strong></div>
-      <div class="stat"><span>Current source</span><strong>{{ source_progress_summary.current_source or "None" }}</strong></div>
-      <div class="stat"><span>Jobs found so far</span><strong>{{ source_progress_summary.jobs_found_so_far }}</strong></div>
-      <div class="stat"><span>Warnings so far</span><strong>{{ source_progress_summary.warnings_so_far }}</strong></div>
-    </div>
-    {% endif %}
-    <table>
-      <thead><tr><th>Source</th><th>Status</th><th>Jobs found</th><th>Warnings</th><th>Time</th><th>Latest message</th></tr></thead>
-      <tbody>
-        {% for source in source_progress %}
-        <tr>
-          <td><strong>{{ source.source_name }}</strong><br><span class="muted">{{ source.source_index }}/{{ source.source_count }}</span></td>
-          <td><span class="badge {{ source.status }}">{{ source.status }}</span></td>
-          <td>{{ source.jobs_found }}</td>
-          <td>{{ source.warnings_count }}</td>
-          <td>{% if source.elapsed_time_seconds is not none %}{{ source.elapsed_time_seconds }}s{% else %}<span class="muted">Not finished</span>{% endif %}</td>
-          <td>{{ source.latest_message or "Waiting to start." }}</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  {% else %}
-    <p>No source progress events recorded for this run.</p>
-  {% endif %}
-</div>
-
-<div class="panel">
-  <h2>Recent Events</h2>
-  {% for event in events %}
-  <p><span class="badge">{{ event.event_type }}</span> {{ event.timestamp }} {{ event.message }}</p>
-  {% else %}
-  <p>No events yet.</p>
+<details class="panel diagnostic-panel" id="activity-log">
+  <summary>Activity Log</summary>
+  <p class="muted">Milestones are shown by default. Open a category when you need the detailed audit trail.</p>
+  <div class="activity-summary">
+    <span class="badge">Milestones {{ activity.counts.milestones }}</span>
+    <span class="badge">Source {{ activity.counts.source }}</span>
+    <span class="badge">Scoring {{ activity.counts.scoring }}</span>
+    <span class="badge">Generation {{ activity.counts.generation }}</span>
+    <span class="badge warning">Warnings {{ activity.counts.warnings }}</span>
+    <span class="badge">All {{ activity.counts.all }}</span>
+  </div>
+  <details open>
+    <summary>Milestones</summary>
+    <ol class="activity-list">
+      {% for event in activity.groups.milestones %}
+      <li><span class="badge">{{ event.event_type }}</span> <span class="muted">{{ event.timestamp }}</span> {{ event.message }}</li>
+      {% else %}
+      <li>No milestone events recorded.</li>
+      {% endfor %}
+    </ol>
+  </details>
+  {% for section in activity.sections %}
+  <details>
+    <summary>{{ section.label }} ({{ activity.counts[section.key] }})</summary>
+    <ol class="activity-list">
+      {% for event in section.events %}
+      <li><span class="badge">{{ event.event_type }}</span> <span class="muted">{{ event.timestamp }}</span> {{ event.message }}</li>
+      {% else %}
+      <li>No events in this category.</li>
+      {% endfor %}
+    </ol>
+  </details>
   {% endfor %}
-</div>
+</details>
 
 <div class="panel">
   <h2>Filters</h2>
@@ -93,7 +169,7 @@
   </form>
 </div>
 
-<div class="panel">
+<div class="panel" id="proposed-jobs">
   <h2>Proposed Jobs</h2>
   {% if batch_result.generated or batch_result.failed %}
   <p><span class="badge generated">Generated materials for {{ batch_result.generated }} jobs.</span> {% if batch_result.failed %}<span class="badge failed">{{ batch_result.failed }} failed.</span>{% endif %}</p>
