@@ -7,6 +7,7 @@ import pytest
 from job_agent.services.job_board_recipe_service import extract_jobs_with_recipe, job_board_recipe_from_mapping
 from job_agent.services.recipe_calibration_service import (
     audit_recipe_selectors,
+    build_recipe_blueprint,
     capture_recipe_calibration,
     discover_candidate_elements,
 )
@@ -169,6 +170,54 @@ def test_calibration_writes_expected_artifacts(tmp_path: Path, monkeypatch: pyte
         assert (result.artifact_dir / filename).exists()
 
 
+def test_blueprint_detects_whitehall_style_listing_pagination_and_detail() -> None:
+    blueprint = build_recipe_blueprint(
+        WHITEHALL_LIST_HTML,
+        "https://www.whitehallresources.com/sap-jobs/",
+        detail_html=WHITEHALL_DETAIL_HTML,
+        detail_url="https://www.whitehallresources.com/job/sap-eam/",
+    )
+
+    recipe = blueprint["recipe"]
+
+    assert recipe["listing"]["card_selector"] == "div.job-item"
+    assert recipe["listing"]["title_selector"] == "h3 a"
+    assert recipe["pagination"]["page_link_selector"] == "a.page-numbers"
+    assert recipe["pagination"]["next_selector"] == "a.next.page-numbers"
+    assert recipe["pagination"]["max_pages"] == 4
+    assert recipe["detail"]["follow"] is True
+    assert recipe["detail"]["use_json_ld"] is True
+    assert ".job-single h1" in recipe["detail"]["title_selector"]
+
+
+def test_calibration_captures_one_detail_sample_and_blueprint(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = []
+
+    def fake_static(url: str, timeout_seconds: int):
+        calls.append(url)
+        if "/job/" in url:
+            return WHITEHALL_DETAIL_HTML, url, []
+        return WHITEHALL_LIST_HTML, url, []
+
+    monkeypatch.setattr("job_agent.services.recipe_calibration_service._fetch_static_html", fake_static)
+
+    result = capture_recipe_calibration(
+        "https://www.whitehallresources.com/sap-jobs/",
+        root=tmp_path,
+        max_candidates=10,
+    )
+
+    report = (result.artifact_dir / "selector-report.json").read_text(encoding="utf-8")
+
+    assert calls == [
+        "https://www.whitehallresources.com/sap-jobs/",
+        "https://www.whitehallresources.com/job/junior-project-manager-pmo-analyst-32475/",
+    ]
+    assert result.detail_sample_url.endswith("/job/junior-project-manager-pmo-analyst-32475/")
+    assert (result.artifact_dir / "detail-sample.html").exists()
+    assert '"recipe_blueprint"' in report
+
+
 def test_calibration_uses_recipe_rendered_mode_without_playwright_in_unit_test(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -190,7 +239,62 @@ def test_calibration_uses_recipe_rendered_mode_without_playwright_in_unit_test(
 
     monkeypatch.setattr("job_agent.services.recipe_calibration_service._fetch_rendered_html", fake_rendered)
 
-    result = capture_recipe_calibration("https://example.com/jobs", recipe_path=str(recipe_path), root=tmp_path)
+    result = capture_recipe_calibration(
+        "https://example.com/jobs",
+        recipe_path=str(recipe_path),
+        root=tmp_path,
+        capture_detail=False,
+    )
 
     assert calls == {"rendered": "https://example.com/jobs"}
     assert result.capture_mode == "rendered_html"
+
+
+WHITEHALL_LIST_HTML = """
+<!doctype html>
+<html><body>
+  <main>
+    <h1>Available SAP Jobs</h1>
+    <div class="job-item">
+      <span>Job ID: BBBH66915_1779369758</span>
+      <span class="job-type">Contract</span>
+      <h3><a href="https://www.whitehallresources.com/job/junior-project-manager-pmo-analyst-32475/">Junior Project Manager / PMO Analyst</a></h3>
+      <span class="job-location">Bonn, Nordrhein-Westfalen</span>
+      <a class="button view" href="https://www.whitehallresources.com/job/junior-project-manager-pmo-analyst-32475/">View Job</a>
+    </div>
+    <div class="job-item">
+      <span>Job ID: BBBH66903_1779291344</span>
+      <span class="job-type">Contract</span>
+      <h3><a href="https://www.whitehallresources.com/job/sap-wms-abap-technical-consultant-32335/">SAP WMS ABAP Technical Consultant</a></h3>
+      <span class="job-location">United Arab Emirates</span>
+      <a class="button view" href="https://www.whitehallresources.com/job/sap-wms-abap-technical-consultant-32335/">View Job</a>
+    </div>
+    <a class="page-numbers" href="https://www.whitehallresources.com/sap-jobs/page/2/">2</a>
+    <a class="page-numbers" href="https://www.whitehallresources.com/sap-jobs/page/3/">3</a>
+    <a class="page-numbers" href="https://www.whitehallresources.com/sap-jobs/page/4/">4</a>
+    <a class="next page-numbers" href="https://www.whitehallresources.com/sap-jobs/page/2/">Next</a>
+  </main>
+</body></html>
+"""
+
+
+WHITEHALL_DETAIL_HTML = """
+<!doctype html>
+<html><body>
+  <main>
+    <section class="job-single">
+      <h1>SAP EAM / PM Migration Consultant</h1>
+      <div class="left-col">
+        <div class="job-details">
+          <span class="job-location">Sverige</span>
+          <span class="job-type">Contract</span>
+        </div>
+      </div>
+      <p>Whitehall Resources are currently looking for a SAP EAM / PM Migration Consultant on a remote basis.</p>
+    </section>
+    <script type="application/ld+json">
+      {"@context":"https://schema.org","@type":"JobPosting","title":"SAP EAM / PM Migration Consultant","description":"Whitehall Resources are currently looking for a SAP EAM / PM Migration Consultant with SAP PM and migration experience.","employmentType":"CONTRACT"}
+    </script>
+  </main>
+</body></html>
+"""

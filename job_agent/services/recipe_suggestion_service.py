@@ -8,7 +8,11 @@ from typing import Protocol
 import yaml
 
 from job_agent.config import ROOT
-from job_agent.services.job_board_recipe_service import check_recipe_against_html, job_board_recipe_from_mapping
+from job_agent.services.job_board_recipe_service import (
+    check_recipe_against_html,
+    extract_job_detail_from_html,
+    job_board_recipe_from_mapping,
+)
 from job_agent.services.llm_service import LlmService
 
 EXPECTED_ARTIFACT_FILES = [
@@ -107,9 +111,16 @@ def suggest_recipe_from_artifact(
         start_url=start_url,
         existing_recipe_path=existing_recipe_path,
     )
+    deterministic = _deterministic_suggestion_result(evidence)
     client = llm_client or LlmServiceRecipeSuggestionClient(root)
     prompt = build_recipe_suggestion_prompt(evidence)
-    raw_response = client.suggest(prompt)
+    try:
+        raw_response = client.suggest(prompt)
+    except RuntimeError as exc:
+        if deterministic and deterministic.schema_valid:
+            deterministic.warnings.append(f"LLM refinement unavailable; saved deterministic draft instead: {exc}")
+            return deterministic
+        raise
     return _suggestion_result_from_response(evidence, raw_response)
 
 
@@ -135,9 +146,23 @@ def suggest_recipe_with_refinement(
     attempts: list[RecipeRefinementAttempt] = []
     final_result: RecipeSuggestionResult | None = None
 
+    deterministic = _deterministic_suggestion_result(evidence)
+    if deterministic and deterministic.schema_valid:
+        final_result = deterministic
+        attempt = evaluate_suggestion_against_artifact(deterministic)
+        attempt.attempt_number = 1
+        attempts.append(attempt)
+        if _attempt_is_acceptable(attempt):
+            return RecipeRefinementResult(final_result=deterministic, attempts=attempts, accepted=True)
+
     prompt = build_recipe_suggestion_prompt(evidence)
-    for attempt_number in range(1, max_attempts + 1):
-        raw_response = client.suggest(prompt)
+    for attempt_number in range(len(attempts) + 1, max_attempts + 1):
+        try:
+            raw_response = client.suggest(prompt)
+        except RuntimeError:
+            if final_result is not None:
+                return RecipeRefinementResult(final_result=final_result, attempts=attempts, accepted=False)
+            raise
         result = _suggestion_result_from_response(evidence, raw_response)
         final_result = result
         attempt = evaluate_suggestion_against_artifact(result)
@@ -198,6 +223,7 @@ def evaluate_suggestion_against_artifact(result: RecipeSuggestionResult) -> Reci
     warnings.extend(quality.warnings)
     quality_status = "good"
     revision_reason = ""
+    detail_path = result.artifact_dir / "detail-sample.html"
     if quality.candidate_count == 0:
         quality_status = "poor"
         warnings.append("No jobs were extracted from local page.html.")
@@ -214,9 +240,28 @@ def evaluate_suggestion_against_artifact(result: RecipeSuggestionResult) -> Reci
         quality_status = "poor"
         warnings.append("All extracted titles look generic.")
         revision_reason = "Recipe extracted only generic titles."
-    elif quality.average_description_length < 40:
+    elif quality.average_description_length < 40 and not detail_path.exists():
         quality_status = "warning"
         warnings.append("Average description length is low; verify the card selector captures enough text.")
+
+    if detail_path.exists():
+        detail_report = _read_json(result.artifact_dir / "selector-report.json")
+        detail_url = str(detail_report.get("detail_sample_url") or result.start_url or recipe.start_url)
+        if not recipe.detail.follow:
+            quality_status = "poor"
+            warnings.append("A detail-page sample is available, but the recipe does not follow job detail pages.")
+            revision_reason = revision_reason or "Recipe omitted detail-page navigation."
+        else:
+            detail_html = detail_path.read_text(encoding="utf-8", errors="replace")
+            detail_job = extract_job_detail_from_html(detail_html, detail_url, recipe)
+            found_detail_fields = _present_detail_fields(detail_job)
+            if not found_detail_fields:
+                quality_status = "poor"
+                warnings.append("Detail-page sample did not produce reportable fields.")
+                revision_reason = revision_reason or "Recipe detail selectors did not extract useful detail fields."
+            elif len(detail_job.description.strip()) < 120:
+                quality_status = "warning" if quality_status == "good" else quality_status
+                warnings.append("Detail-page sample produced a short description; verify detail selectors.")
 
     return RecipeRefinementAttempt(
         attempt_number=0,
@@ -250,10 +295,11 @@ def load_recipe_suggestion_evidence(
         else:
             warnings.append(f"Missing artifact file: {name}")
 
-    summary = _read_text(artifact_dir / "summary.md", 5000)
+    summary = _read_text(artifact_dir / "summary.md", 3500)
     selector_report = _read_json(artifact_dir / "selector-report.json")
-    visible_text = _read_text(artifact_dir / "visible-text.txt", 5000)
-    candidate_html = _read_text(artifact_dir / "candidate-elements.html", 5000)
+    visible_text = _read_text(artifact_dir / "visible-text.txt", 2200)
+    candidate_html = _read_text(artifact_dir / "candidate-elements.html", 1200)
+    detail_visible_text = _read_text(artifact_dir / "detail-visible-text.txt", 2200)
     existing_recipe = _read_text(existing_recipe_path, 5000) if existing_recipe_path else ""
     if existing_recipe_path:
         if existing_recipe_path.exists():
@@ -276,6 +322,10 @@ def load_recipe_suggestion_evidence(
         "observed_application_entries": selector_report.get("observed_application_entries", [])[:10]
         if isinstance(selector_report, dict)
         else [],
+        "detail_sample_url": str(selector_report.get("detail_sample_url") or "") if isinstance(selector_report, dict) else "",
+        "detail_sample_captured": bool(selector_report.get("detail_sample_captured")) if isinstance(selector_report, dict) else False,
+        "detail_visible_text_sample": detail_visible_text,
+        "recipe_blueprint": selector_report.get("recipe_blueprint", {}) if isinstance(selector_report, dict) else {},
         "visible_text_sample": visible_text,
         "candidate_elements_sample": candidate_html,
         "summary": summary,
@@ -302,8 +352,10 @@ def build_recipe_suggestion_prompt(evidence: RecipeSuggestionEvidence) -> str:
         "The YAML may use only this schema: source_name, start_url, mode, listing, pagination, accept, reject, "
         "patterns, limits, detail. Do not include Python code, browser scripts, arbitrary adapters, "
         "login/session/cookie handling, hidden endpoint assumptions, or network/API discovery.\n"
+        "A deterministic recipe_blueprint may be included. Prefer preserving selectors from that blueprint when "
+        "the local evidence supports them; revise only when the evidence contradicts it.\n"
         "Include pagination selectors when visible evidence shows page/next links. Use detail.follow only when "
-        "the evidence clearly justifies job-detail enrichment.\n"
+        "a detail sample URL or detail sample text justifies job-detail enrichment.\n"
         "Prefer selectors and regex patterns visible in the local evidence. If automation is not recommended, "
         "choose selected_strategy not_recommended and explain why.\n\n"
         f"Evidence JSON:\n{json.dumps(evidence.prompt_payload, ensure_ascii=False, indent=2)}"
@@ -336,6 +388,51 @@ def build_recipe_refinement_prompt(evidence: RecipeSuggestionEvidence, attempt: 
         f"Evidence JSON:\n{json.dumps(evidence.prompt_payload, ensure_ascii=False, indent=2)}\n\n"
         f"Previous suggested YAML:\n{attempt.suggested_recipe_yaml}\n\n"
         f"Validation and local extraction report:\n{json.dumps(report, ensure_ascii=False, indent=2)}"
+    )
+
+
+def _deterministic_suggestion_result(evidence: RecipeSuggestionEvidence) -> RecipeSuggestionResult | None:
+    blueprint = evidence.prompt_payload.get("recipe_blueprint")
+    if not isinstance(blueprint, dict):
+        return None
+    recipe_data = blueprint.get("recipe")
+    if not isinstance(recipe_data, dict) or not recipe_data:
+        return None
+    recipe_data = dict(recipe_data)
+    recipe_data["source_name"] = evidence.source_name
+    recipe_data["start_url"] = evidence.start_url or str(recipe_data.get("start_url") or "")
+    recipe_yaml = yaml.safe_dump(recipe_data, sort_keys=False, allow_unicode=True).strip()
+    validation_errors = validate_suggested_recipe_yaml(recipe_yaml)
+    warnings = list(evidence.warnings) + _list_value(blueprint.get("warnings"))
+    if validation_errors:
+        warnings.extend(validation_errors)
+    listing = recipe_data.get("listing") or {}
+    detail = recipe_data.get("detail") or {}
+    pagination = recipe_data.get("pagination") or {}
+    explanation_parts = [
+        f"Deterministic draft selected listing cards with `{listing.get('card_selector', '')}`.",
+    ]
+    if detail.get("follow"):
+        explanation_parts.append("It includes one-detail-page enrichment because the calibration artifact captured a detail sample.")
+    if pagination.get("page_link_selector") or pagination.get("next_selector"):
+        explanation_parts.append("It includes pagination selectors observed in the listing page.")
+    return RecipeSuggestionResult(
+        source_name=evidence.source_name,
+        start_url=evidence.start_url,
+        artifact_dir=evidence.artifact_dir,
+        suggested_recipe_yaml=recipe_yaml,
+        explanation=" ".join(explanation_parts),
+        confidence=_choice(str(blueprint.get("confidence") or "medium"), CONFIDENCE_VALUES, "medium"),
+        assumptions=[
+            "Generated from deterministic selector evidence before optional LLM refinement.",
+            "Review against a live compatibility check before enabling daily runs.",
+        ],
+        warnings=warnings,
+        evidence_summary=evidence.evidence_summary,
+        selected_strategy="selector_based",
+        referenced_artifact_files=evidence.referenced_artifact_files,
+        validation_errors=validation_errors,
+        schema_valid=not validation_errors,
     )
 
 
@@ -398,6 +495,20 @@ def _candidate_summaries(selector_report: dict) -> list[dict]:
             }
         )
     return result
+
+
+def _present_detail_fields(job) -> list[str]:
+    fields = []
+    for field_name in ["title", "location", "remote", "rate", "workload", "posted_date", "start_date", "description"]:
+        value = getattr(job, field_name)
+        if field_name == "description":
+            if len(str(value).strip()) >= 120:
+                fields.append(field_name)
+        elif str(value).strip() and str(value).strip() != "Not listed":
+            fields.append(field_name)
+    if getattr(job, "languages", []):
+        fields.append("languages")
+    return fields
 
 
 def _evidence_summary(url: str, mode: str, candidates: list[dict], visible_text: str) -> str:

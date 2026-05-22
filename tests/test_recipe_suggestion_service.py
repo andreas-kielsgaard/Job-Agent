@@ -171,6 +171,21 @@ def test_refinement_handles_missing_page_html_as_local_quality_failure(project_r
     assert any("page.html" in warning for warning in result.attempts[0].quality_warnings)
 
 
+def test_refinement_accepts_deterministic_whitehall_blueprint_without_llm(project_root: Path) -> None:
+    artifact = _write_whitehall_blueprint_artifact(project_root)
+    client = FakeRecipeSuggestionClient("{}")
+
+    result = suggest_recipe_with_refinement(artifact, llm_client=client, max_attempts=3)
+
+    assert result.accepted is True
+    assert client.prompts == []
+    assert result.final_result.schema_valid is True
+    assert "div.job-item" in result.final_result.suggested_recipe_yaml
+    assert "a.page-numbers" in result.final_result.suggested_recipe_yaml
+    assert "follow: true" in result.final_result.suggested_recipe_yaml
+    assert result.attempts[0].quality_status == "good"
+
+
 def test_refinement_rejects_non_positive_max_attempts(project_root: Path) -> None:
     artifact = _write_artifact(project_root)
     client = FakeRecipeSuggestionClient(_llm_response(VALID_RECIPE_YAML))
@@ -315,6 +330,90 @@ def test_cli_reports_unavailable_llm(monkeypatch, capsys, project_root: Path) ->
     suggest_recipe(str(artifact))
 
     assert "Recipe suggestion unavailable" in capsys.readouterr().out
+
+
+def _write_whitehall_blueprint_artifact(project_root: Path) -> Path:
+    artifact = project_root / "output" / "recipe-calibration" / "whitehall"
+    artifact.mkdir(parents=True, exist_ok=True)
+    page_html = """
+    <html><body>
+      <div class="job-item">
+        <span class="job-type">Contract</span>
+        <h3><a href="/job/sap-eam/">SAP EAM Consultant</a></h3>
+        <span class="job-location">Sweden</span>
+      </div>
+      <div class="job-item">
+        <span class="job-type">Contract</span>
+        <h3><a href="/job/sap-abap/">SAP ABAP Consultant</a></h3>
+        <span class="job-location">Remote</span>
+      </div>
+      <a class="page-numbers" href="/sap-jobs/page/2/">2</a>
+      <a class="next page-numbers" href="/sap-jobs/page/2/">Next</a>
+    </body></html>
+    """
+    detail_html = """
+    <html><body>
+      <section class="job-single">
+        <h1>SAP EAM Consultant</h1>
+        <span class="job-location">Sweden</span>
+        <span class="job-type">Contract</span>
+      </section>
+      <script type="application/ld+json">
+        {"@type":"JobPosting","title":"SAP EAM Consultant","description":"Long SAP EAM detail description with migration, PM, integration and stakeholder delivery responsibilities across an enterprise programme."}
+      </script>
+    </body></html>
+    """
+    (artifact / "summary.md").write_text("# Whitehall\n", encoding="utf-8")
+    (artifact / "visible-text.txt").write_text("SAP EAM Consultant Contract Sweden", encoding="utf-8")
+    (artifact / "candidate-elements.html").write_text("", encoding="utf-8")
+    (artifact / "page.html").write_text(page_html, encoding="utf-8")
+    (artifact / "detail-sample.html").write_text(detail_html, encoding="utf-8")
+    (artifact / "detail-visible-text.txt").write_text("SAP EAM Consultant Sweden Contract", encoding="utf-8")
+    (artifact / "selector-report.json").write_text(
+        json.dumps(
+            {
+                "url": "https://www.whitehallresources.com/sap-jobs/",
+                "capture_mode": "static_html",
+                "detail_sample_url": "https://www.whitehallresources.com/job/sap-eam/",
+                "detail_sample_captured": True,
+                "candidates": [],
+                "recipe_blueprint": {
+                    "confidence": "high",
+                    "recipe": {
+                        "source_name": "Recipe source",
+                        "start_url": "https://www.whitehallresources.com/sap-jobs/",
+                        "mode": "static_html",
+                        "listing": {
+                            "card_selector": "div.job-item",
+                            "title_selector": "h3 a",
+                            "link_selector": "h3 a",
+                            "location_selector": ".job-location",
+                            "workload_selector": ".job-type",
+                        },
+                        "accept": {"url_contains": ["/job/"]},
+                        "detail": {
+                            "follow": True,
+                            "use_json_ld": True,
+                            "title_selector": [".job-single h1", "h1"],
+                            "location_selector": ".job-single .job-location",
+                            "workload_selector": ".job-single .job-type",
+                            "max_detail_pages": 5,
+                            "request_delay_seconds": 1.0,
+                        },
+                        "pagination": {
+                            "page_link_selector": "a.page-numbers",
+                            "next_selector": "a.next.page-numbers",
+                            "max_pages": 2,
+                            "request_delay_seconds": 1.0,
+                        },
+                        "limits": {"max_cards": 25, "min_title_length": 8, "min_description_length": 0},
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    return artifact
 
 
 def _write_artifact(project_root: Path, page_html: str = "<html><body>large page</body></html>") -> Path:

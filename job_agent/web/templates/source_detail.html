@@ -185,10 +185,11 @@
       <div class="row">
         <label>Page regions <input type="number" name="max_candidates" value="30" min="5" max="50" style="max-width:7rem;"></label>
         <label class="check"><input type="checkbox" name="rendered" value="1"> Render with browser</label>
+        <label class="check"><input type="checkbox" name="capture_detail" value="1" checked> Capture one detail page</label>
         <button type="submit" class="button light">Capture one page</button>
       </div>
     </form>
-    <p class="muted">This fetches only the saved source URL once. It does not follow every listing or include the source in the daily run.</p>
+    <p class="muted">This fetches the saved source URL once and, when enabled, one representative job-detail page. It does not follow every listing or include the source in the daily run.</p>
     {% else %}
     <p class="muted">Save a source URL before capturing calibration evidence.</p>
     {% endif %}

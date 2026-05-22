@@ -152,6 +152,7 @@ def restore_registry_source(source_id: str) -> RedirectResponse:
 def capture_recipe_calibration_artifact(
     source_id: str,
     rendered: str = Form(""),
+    capture_detail: str = Form(""),
     max_candidates: int = Form(30),
 ) -> RedirectResponse:
     source = _registry_source_or_404(source_id)
@@ -166,6 +167,7 @@ def capture_recipe_calibration_artifact(
             rendered=True if rendered else None,
             root=root,
             max_candidates=bounded_candidates,
+            capture_detail=bool(capture_detail),
         )
     except (RuntimeError, ValueError) as exc:
         return _redirect_to_source(source_id, warning=f"Calibration capture failed: {exc}")
@@ -178,6 +180,8 @@ def capture_recipe_calibration_artifact(
         f"Calibration artifact captured: {artifact_label}. "
         f"{result.candidate_count} candidate regions; recipe extracted {result.recipe_extracted_count} jobs."
     )
+    if result.detail_sample_url:
+        message += " One detail page sample was captured."
     return _redirect_to_source(source_id, message=message)
 
 

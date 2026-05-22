@@ -7,6 +7,7 @@ from datetime import datetime
 from html import escape
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qs, urljoin, urlparse
 
 from bs4 import BeautifulSoup, Tag
 
@@ -23,6 +24,7 @@ from job_agent.services.job_board_recipe_service import (
     discover_application_entries,
     discover_pagination_links,
     extract_jobs_with_recipe,
+    job_board_recipe_from_mapping,
     load_job_board_recipe,
 )
 
@@ -105,6 +107,7 @@ class RecipeCalibrationResult:
     selector_report_path: Path
     recipe_extracted_count: int = 0
     card_selector_match_count: int = 0
+    detail_sample_url: str = ""
     warnings: list[str] = field(default_factory=list)
 
 
@@ -114,6 +117,7 @@ def capture_recipe_calibration(
     rendered: bool | None = None,
     root: Path = ROOT,
     max_candidates: int = 30,
+    capture_detail: bool = True,
 ) -> RecipeCalibrationResult:
     normalized_url = validate_public_url(url)
     recipe = load_job_board_recipe(Path(recipe_path)) if recipe_path else None
@@ -130,12 +134,31 @@ def capture_recipe_calibration(
     audit = audit_recipe_selectors(html, final_url, recipe) if recipe else None
     quality = check_recipe_against_html(html, final_url, recipe) if recipe else None
     jobs = extract_jobs_with_recipe(html, final_url, recipe) if recipe else []
+    detail_sample_url, detail_html, detail_final_url, detail_warnings = _capture_detail_sample(
+        html,
+        final_url,
+        recipe=recipe,
+        use_rendered=use_rendered,
+        timeout_seconds=15,
+        enabled=capture_detail,
+    )
+    recipe_blueprint = build_recipe_blueprint(
+        html,
+        final_url,
+        capture_mode=capture_mode,
+        detail_html=detail_html,
+        detail_url=detail_final_url or detail_sample_url,
+    )
 
     artifact_dir = _artifact_dir(root, final_url)
     artifact_dir.mkdir(parents=True, exist_ok=True)
     (artifact_dir / "page.html").write_text(html, encoding="utf-8")
     (artifact_dir / "visible-text.txt").write_text(visible_text, encoding="utf-8")
     (artifact_dir / "candidate-elements.html").write_text(_candidate_html(candidates), encoding="utf-8")
+    if detail_html:
+        (artifact_dir / "detail-sample.html").write_text(detail_html, encoding="utf-8")
+        detail_text = BeautifulSoup(detail_html, "html.parser").get_text("\n", strip=True)
+        (artifact_dir / "detail-visible-text.txt").write_text(detail_text, encoding="utf-8")
     selector_report = {
         "url": final_url,
         "capture_mode": capture_mode,
@@ -143,6 +166,9 @@ def capture_recipe_calibration(
         "candidates": [asdict(candidate) for candidate in candidates],
         "observed_pagination_links": [asdict(link) for link in pagination_observations],
         "observed_application_entries": [asdict(entry) for entry in application_entries],
+        "detail_sample_url": detail_final_url or detail_sample_url,
+        "detail_sample_captured": bool(detail_html),
+        "recipe_blueprint": recipe_blueprint,
         "selector_audit": asdict(audit) if audit else None,
         "quality": quality_as_dict(quality) if quality else None,
     }
@@ -150,7 +176,18 @@ def capture_recipe_calibration(
     selector_report_path.write_text(json.dumps(selector_report, indent=2), encoding="utf-8")
     summary_path = artifact_dir / "summary.md"
     summary_path.write_text(
-        _summary_markdown(final_url, capture_mode, candidates, audit, jobs, fetch_warnings, pagination_observations, application_entries),
+        _summary_markdown(
+            final_url,
+            capture_mode,
+            candidates,
+            audit,
+            jobs,
+            fetch_warnings + detail_warnings,
+            pagination_observations,
+            application_entries,
+            detail_final_url or detail_sample_url,
+            recipe_blueprint,
+        ),
         encoding="utf-8",
     )
     return RecipeCalibrationResult(
@@ -162,8 +199,65 @@ def capture_recipe_calibration(
         selector_report_path=selector_report_path,
         recipe_extracted_count=len(jobs),
         card_selector_match_count=audit.card_match_count if audit else 0,
-        warnings=fetch_warnings + (audit.warnings if audit else []),
+        detail_sample_url=detail_final_url or detail_sample_url,
+        warnings=fetch_warnings + detail_warnings + (audit.warnings if audit else []),
     )
+
+
+def build_recipe_blueprint(
+    html: str,
+    base_url: str,
+    *,
+    capture_mode: str = "static_html",
+    detail_html: str = "",
+    detail_url: str = "",
+) -> dict[str, Any]:
+    soup = BeautifulSoup(html, "html.parser")
+    card = _best_listing_card(soup, base_url)
+    if not card:
+        return {
+            "status": "not_recommended",
+            "warnings": ["No stable repeated listing card selector was found."],
+            "recipe": {},
+        }
+
+    token = card["url_token"]
+    recipe: dict[str, Any] = {
+        "source_name": "Recipe source",
+        "start_url": base_url,
+        "mode": capture_mode if capture_mode in {"static_html", "rendered_html"} else "static_html",
+        "listing": _listing_recipe_from_card(card),
+        "accept": {"url_contains": [token]} if token else {},
+        "reject": _default_reject_rules(),
+        "patterns": _default_patterns(),
+        "limits": {
+            "max_cards": max(25, min(int(card["match_count"] or 0), 100)),
+            "min_title_length": 8,
+            "min_description_length": 0,
+        },
+    }
+    pagination = _pagination_recipe(soup)
+    if pagination:
+        recipe["pagination"] = pagination
+    detail = _detail_recipe(detail_html)
+    if detail:
+        recipe["detail"] = detail
+
+    validation_errors: list[str] = []
+    try:
+        job_board_recipe_from_mapping(recipe, label="recipe_blueprint")
+    except ValueError as exc:
+        validation_errors.append(str(exc))
+    return {
+        "status": "draft",
+        "confidence": "high" if not validation_errors and int(card["match_count"] or 0) >= 3 else "medium",
+        "recipe": recipe,
+        "listing_selector_evidence": card,
+        "detail_sample_url": detail_url,
+        "detail_sample_captured": bool(detail_html),
+        "validation_errors": validation_errors,
+        "warnings": validation_errors,
+    }
 
 
 def discover_candidate_elements(html: str, max_candidates: int = 30) -> list[CandidateElement]:
@@ -224,6 +318,293 @@ def audit_recipe_selectors(html: str, base_url: str, recipe: JobBoardRecipe | No
     if not jobs:
         audit.warnings.append("Recipe extracted 0 jobs from captured HTML.")
     return audit
+
+
+def _capture_detail_sample(
+    html: str,
+    base_url: str,
+    *,
+    recipe: JobBoardRecipe | None,
+    use_rendered: bool,
+    timeout_seconds: int,
+    enabled: bool,
+) -> tuple[str, str, str, list[str]]:
+    if not enabled:
+        return "", "", "", []
+    sample_url = _detail_sample_url(html, base_url, recipe)
+    if not sample_url:
+        return "", "", "", ["No job-detail link was found for detail-sample capture."]
+    try:
+        detail_html, final_url, warnings = (
+            _fetch_rendered_html(sample_url, timeout_seconds)
+            if use_rendered
+            else _fetch_static_html(sample_url, timeout_seconds)
+        )
+    except ValueError as exc:
+        return sample_url, "", "", [f"Detail sample capture failed for {sample_url}: {exc}"]
+    return sample_url, detail_html, final_url, warnings
+
+
+def _detail_sample_url(html: str, base_url: str, recipe: JobBoardRecipe | None) -> str:
+    if recipe:
+        jobs = extract_jobs_with_recipe(html, base_url, recipe)
+        if jobs and jobs[0].url:
+            return jobs[0].url
+    soup = BeautifulSoup(html, "html.parser")
+    links = _job_detail_links(soup, base_url)
+    return links[0][1] if links else ""
+
+
+def _best_listing_card(soup: BeautifulSoup, base_url: str) -> dict[str, Any] | None:
+    scored: dict[str, dict[str, Any]] = {}
+    for link, absolute_url, token in _job_detail_links(soup, base_url):
+        for ancestor in _candidate_ancestors_for_link(link):
+            selector = _card_selector_for_tag(ancestor, soup)
+            if not selector:
+                continue
+            cards = soup.select(selector)
+            if not cards or len(cards) > 150:
+                continue
+            matching_cards = [card for card in cards if _job_detail_links(card, base_url)]
+            if not matching_cards:
+                continue
+            average_links = sum(len(card.find_all("a", href=True)) for card in cards) / len(cards)
+            average_text = sum(len(card.get_text(" ", strip=True)) for card in matching_cards) / len(matching_cards)
+            score = len(matching_cards) * 8 + min(average_text, 250) / 20
+            selector_lower = selector.lower()
+            if any(term in selector_lower for term in ["job", "project", "card", "item", "row"]):
+                score += 18
+            if ancestor.name in {"article", "tr", "li"}:
+                score += 8
+            if len(cards) == 1:
+                score -= 20
+            if average_links > 8:
+                score -= min(average_links, 30)
+            if ancestor.find(["nav", "form", "select"]):
+                score -= 30
+            existing = scored.get(selector)
+            if existing is None or score > existing["score"]:
+                scored[selector] = {
+                    "selector": selector,
+                    "score": round(score, 2),
+                    "match_count": len(matching_cards),
+                    "card_count": len(cards),
+                    "url_token": token,
+                    "sample_url": absolute_url,
+                    "sample_text": _preview(matching_cards[0].get_text(" ", strip=True), 260),
+                    "tag": ancestor.name or "",
+                }
+    if not scored:
+        return None
+    best = max(scored.values(), key=lambda item: item["score"])
+    best_cards = soup.select(best["selector"])[:5]
+    best["title_selector"] = _link_selector_for_card(best_cards[0], best["url_token"])
+    best["field_selectors"] = _available_listing_field_selectors(best_cards)
+    return best
+
+
+def _candidate_ancestors_for_link(link: Tag) -> list[Tag]:
+    ancestors: list[Tag] = []
+    current: Tag | None = link
+    while current and getattr(current, "name", None) and current.name != "[document]":
+        if current.name in {"article", "li", "tr", "section", "div"}:
+            ancestors.append(current)
+        if len(ancestors) >= 6:
+            break
+        parent = current.parent
+        current = parent if isinstance(parent, Tag) else None
+    return ancestors
+
+
+def _card_selector_for_tag(tag: Tag, soup: BeautifulSoup) -> str:
+    if tag.name == "tr":
+        tbody_rows = soup.select("tbody tr")
+        return "tbody tr" if tbody_rows else "tr"
+    classes = [str(item) for item in tag.get("class", []) if _class_is_stable(str(item))]
+    if classes:
+        return f"{tag.name}." + ".".join(classes[:2])
+    if tag.get("id"):
+        return f"#{tag['id']}"
+    return ""
+
+
+def _class_is_stable(value: str) -> bool:
+    return bool(value) and not re.search(r"^[0-9]|reactrenderer|^css-|^js-|ng-|hydrated", value, re.I)
+
+
+def _job_detail_links(root: Tag | BeautifulSoup, base_url: str) -> list[tuple[Tag, str, str]]:
+    result: list[tuple[Tag, str, str]] = []
+    seen: set[str] = set()
+    for link in root.find_all("a", href=True):
+        href = str(link.get("href") or "").strip()
+        absolute_url = urljoin(base_url, href)
+        token = _detail_url_token(absolute_url)
+        if not token or absolute_url in seen:
+            continue
+        if _link_text_is_noise(link.get_text(" ", strip=True), href):
+            continue
+        seen.add(absolute_url)
+        result.append((link, absolute_url, token))
+    return result
+
+
+def _detail_url_token(url: str) -> str:
+    path = urlparse(url).path.lower()
+    for token in ["/job/", "/project/", "/freelance_projects/", "/jobs/"]:
+        if token in path:
+            return token
+    return ""
+
+
+def _link_text_is_noise(text: str, href: str) -> bool:
+    normalized = f"{text} {href}".lower()
+    return any(term in normalized for term in ["apply now", "#job-application", "login", "sign up"])
+
+
+def _link_selector_for_card(card: Tag, token: str) -> str:
+    links = [link for link, _url, link_token in _job_detail_links(card, "https://example.com") if link_token == token]
+    if not links:
+        return f'a[href*="{token}"]' if token else "a"
+    link = links[0]
+    if card.name == "tr":
+        cell = link.find_parent("td")
+        if cell and cell.parent:
+            cells = [child for child in cell.parent.find_all("td", recursive=False)]
+            if cell in cells:
+                return f'td:nth-of-type({cells.index(cell) + 1}) a[href*="{token}"]'
+    parent = link.parent if isinstance(link.parent, Tag) else None
+    if parent and parent.name in {"h2", "h3", "h4"}:
+        return f"{parent.name} a"
+    classes = [str(item) for item in link.get("class", []) if _class_is_stable(str(item))]
+    if classes:
+        return f'a.{".".join(classes[:2])}[href*="{token}"]'
+    return f'a[href*="{token}"]' if token else "a"
+
+
+def _listing_recipe_from_card(card: dict[str, Any]) -> dict[str, Any]:
+    card_selector = str(card["selector"])
+    title_selector = str(card.get("title_selector") or "a")
+    listing: dict[str, Any] = {
+        "card_selector": card_selector,
+        "title_selector": title_selector,
+        "link_selector": title_selector,
+    }
+    if card_selector.startswith("tbody tr") or card_selector == "tr":
+        listing.update(
+            {
+                "location_selector": "td:nth-of-type(3)",
+                "workload_selector": "td:nth-of-type(2)",
+                "posted_date_selector": "td:nth-of-type(4)",
+            }
+        )
+        return listing
+    listing.update(card.get("field_selectors") or {})
+    return {key: value for key, value in listing.items() if value}
+
+
+def _available_listing_field_selectors(cards: list[Tag]) -> dict[str, str]:
+    selector_fields = {
+        "location_selector": [".job-location", ".location", ".city"],
+        "remote_selector": [".job-arrangement", ".remote"],
+        "workload_selector": [".job-type", ".type"],
+        "posted_date_selector": ["time", ".posted-date", ".date"],
+        "description_selector": [".job-summary", ".summary", ".description"],
+        "company_selector": [".company", ".client", ".recruiter"],
+    }
+    result: dict[str, str] = {}
+    for field_name, selectors in selector_fields.items():
+        for selector in selectors:
+            if any(card.select(selector) for card in cards):
+                result[field_name] = selector
+                break
+    return result
+
+
+def _pagination_recipe(soup: BeautifulSoup) -> dict[str, Any]:
+    if soup.select("a.page-numbers"):
+        return {
+            "page_link_selector": "a.page-numbers",
+            "next_selector": "a.next.page-numbers" if soup.select("a.next.page-numbers") else "",
+            "max_pages": _observed_max_page(soup, default=2),
+            "request_delay_seconds": 1.0,
+        }
+    if soup.select('a[href*="pagenr="]'):
+        return {
+            "page_link_selector": 'a[href*="pagenr="]',
+            "max_pages": _observed_max_page(soup, default=2),
+            "request_delay_seconds": 1.0,
+        }
+    return {}
+
+
+def _observed_max_page(soup: BeautifulSoup, default: int) -> int:
+    numbers = []
+    for link in soup.find_all("a", href=True):
+        label = link.get_text(" ", strip=True)
+        if label.isdigit():
+            numbers.append(int(label))
+        query_pages = parse_qs(urlparse(str(link.get("href") or "")).query).get("pagenr", [])
+        for value in query_pages:
+            if str(value).isdigit():
+                numbers.append(int(value))
+    return max(default, min(max(numbers or [default]), 50))
+
+
+def _detail_recipe(detail_html: str) -> dict[str, Any]:
+    if not detail_html:
+        return {}
+    soup = BeautifulSoup(detail_html, "html.parser")
+    detail: dict[str, Any] = {
+        "follow": True,
+        "max_detail_pages": 5,
+        "request_delay_seconds": 1.0,
+    }
+    if _has_jobposting_json_ld(soup):
+        detail["use_json_ld"] = True
+    title_selectors = []
+    for selector in [".job-single h1", ".project-show-single-page h1", "main h1", "h1"]:
+        if soup.select(selector):
+            title_selectors.append(selector)
+    if title_selectors:
+        detail["title_selector"] = title_selectors[:3]
+    for field_name, selectors in {
+        "description_selector": [".job_txt_wrapp .des_wrapp", ".project-body", ".job-single .job-description"],
+        "location_selector": [".job-single .job-location", ".badge-content-city", ".dato_wrapp"],
+        "workload_selector": [".job-single .job-type", ".project-header-info-list"],
+        "posted_date_selector": [".posted-date"],
+        "start_date_selector": [".start-date"],
+    }.items():
+        for selector in selectors:
+            if soup.select(selector):
+                detail[field_name] = selector
+                break
+    return detail
+
+
+def _has_jobposting_json_ld(soup: BeautifulSoup) -> bool:
+    for script in soup.select('script[type="application/ld+json"]'):
+        text = script.string or script.get_text("", strip=True)
+        if "JobPosting" in text or '"description"' in text:
+            return True
+    return False
+
+
+def _default_reject_rules() -> dict[str, list[str]]:
+    return {
+        "title_exact": ["Apply", "Apply now", "More info", "View Job", "Services", "Job Search"],
+        "title_contains": ["Upload SAP Job", "Improve my CV"],
+        "url_contains": ["/services", "/about", "/contact", "/candidates", "/clients", "/category", "/blog", "#"],
+    }
+
+
+def _default_patterns() -> dict[str, str]:
+    return {
+        "job_id_regex": r"(?:Job ID|Ref):\s*(?P<job_id>[A-Za-z0-9_/-]+)",
+        "remote_regex": r"\b(?P<remote>Remote|Hybrid|Hybrid-remote|Office based|On-site|\d+%\s*remote)\b",
+        "work_type_regex": r"\b(?P<work_type>Contract|Freelance|Permanent)\b",
+        "start_date_regex": r"(?:Start(?: date)?|Start):\s*(?P<start_date>[^*\n\r]+?)(?=\s+\*|\s+Duration:|\s+End date:|$)",
+        "language_regex": r"(?:Languages?:\s*|Language skills:\s*|Fluent in\s+)(?P<language>[A-Z][A-Za-z]+(?:\s*\([^)]*\))?)",
+    }
 
 
 def _add_candidate(scored: list[tuple[int, Tag]], seen: set[int], tag: Tag, score: int) -> None:
@@ -338,7 +719,10 @@ def _summary_markdown(
     warnings: list[str],
     pagination_links: list[Any] | None = None,
     application_entries: list[Any] | None = None,
+    detail_sample_url: str = "",
+    recipe_blueprint: dict[str, Any] | None = None,
 ) -> str:
+    blueprint_recipe = (recipe_blueprint or {}).get("recipe") or {}
     lines = [
         "# Recipe Calibration Summary",
         "",
@@ -347,7 +731,19 @@ def _summary_markdown(
         f"Candidate regions: {len(candidates)}",
         f"Pagination-looking links: {len(pagination_links or [])}",
         f"Application entrypoints: {len(application_entries or [])}",
+        f"Detail sample: {detail_sample_url or 'none'}",
     ]
+    if blueprint_recipe:
+        listing = blueprint_recipe.get("listing") or {}
+        detail = blueprint_recipe.get("detail") or {}
+        pagination = blueprint_recipe.get("pagination") or {}
+        lines.extend(
+            [
+                f"Draft card selector: `{listing.get('card_selector', '')}`",
+                f"Draft detail follow: {bool(detail.get('follow'))}",
+                f"Draft pagination selector: `{pagination.get('page_link_selector', '')}`",
+            ]
+        )
     if audit:
         lines.extend(
             [

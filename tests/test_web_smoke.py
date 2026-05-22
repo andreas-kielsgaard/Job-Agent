@@ -423,9 +423,10 @@ def test_source_detail_capture_calibration_action_is_bounded(
         capture_mode = "static_html"
         candidate_count = 12
         recipe_extracted_count = 3
+        detail_sample_url = ""
         warnings = []
 
-    def fake_capture(url, recipe_path, rendered, root, max_candidates):
+    def fake_capture(url, recipe_path, rendered, root, max_candidates, capture_detail):
         captured.update(
             {
                 "url": url,
@@ -433,6 +434,7 @@ def test_source_detail_capture_calibration_action_is_bounded(
                 "rendered": rendered,
                 "root": root,
                 "max_candidates": max_candidates,
+                "capture_detail": capture_detail,
             }
         )
         return FakeCalibrationResult()
@@ -441,7 +443,7 @@ def test_source_detail_capture_calibration_action_is_bounded(
 
     response = client.post(
         "/sources/eursap-jobs/recipe-calibration/capture",
-        data={"max_candidates": "500"},
+        data={"max_candidates": "500", "capture_detail": "1"},
         follow_redirects=False,
     )
 
@@ -453,6 +455,7 @@ def test_source_detail_capture_calibration_action_is_bounded(
         "rendered": None,
         "root": project_root,
         "max_candidates": 50,
+        "capture_detail": True,
     }
 
 
