@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 
 import pytest
@@ -32,7 +33,7 @@ def test_source_detail_displays_recipe_generation_controls_and_artifacts(client:
 
     assert response.status_code == 200
     assert "Generate or replace recipe" in response.text
-    assert "Save draft recipe for review" in response.text
+    assert "Generate recipe draft" in response.text
     assert "eursap-artifact" in response.text
     assert "a.looking__card" in response.text
     assert "--save-candidate" in response.text
@@ -44,7 +45,7 @@ def test_generate_candidate_plain_suggestion_saves_pending_candidate(
     artifact = _write_artifact(project_root)
 
     monkeypatch.setattr(
-        "job_agent.web.routers.sources.suggest_recipe_from_artifact",
+        "job_agent.services.recipe_generation_run_service.suggest_recipe_from_artifact",
         lambda *args, **kwargs: _suggestion(artifact),
     )
 
@@ -55,7 +56,13 @@ def test_generate_candidate_plain_suggestion_saves_pending_candidate(
     )
 
     assert response.status_code == 303
-    assert "Pending+recipe+candidate+saved" in response.headers["location"]
+    assert "/sources/eursap-jobs/recipe-generation/" in response.headers["location"]
+    run = _wait_for_generation_run(client, response.headers["location"])
+    assert run["status"] == "completed"
+    assert run["candidate_id"]
+    assert run["compatibility_url"]
+    assert run["recipe_review_url"]
+    assert (project_root / run["generated_recipe_path"]).exists()
     candidates = RecipeCandidateStore(project_root).list_candidates()
     assert len(candidates) == 1
     candidate = RecipeCandidateStore(project_root).load_candidate(candidates[0].candidate_id)
@@ -69,7 +76,7 @@ def test_generate_candidate_with_refinement_saves_attempt_history(
     artifact = _write_artifact(project_root)
 
     monkeypatch.setattr(
-        "job_agent.web.routers.sources.suggest_recipe_with_refinement",
+        "job_agent.services.recipe_generation_run_service.suggest_recipe_with_refinement",
         lambda *args, **kwargs: _refinement(artifact),
     )
 
@@ -80,6 +87,9 @@ def test_generate_candidate_with_refinement_saves_attempt_history(
     )
 
     assert response.status_code == 303
+    run = _wait_for_generation_run(client, response.headers["location"])
+    assert run["status"] == "completed"
+    assert run["attempt_count"] == 1
     candidate_id = RecipeCandidateStore(project_root).list_candidates()[0].candidate_id
     candidate = RecipeCandidateStore(project_root).load_candidate(candidate_id)
     assert candidate.refinement_used is True
@@ -108,7 +118,7 @@ def test_generate_candidate_handles_llm_unavailable_as_redirect_warning(
     def unavailable(*args, **kwargs):
         raise RuntimeError("ANTHROPIC_API_KEY is missing or placeholder.")
 
-    monkeypatch.setattr("job_agent.web.routers.sources.suggest_recipe_from_artifact", unavailable)
+    monkeypatch.setattr("job_agent.services.recipe_generation_run_service.suggest_recipe_from_artifact", unavailable)
 
     response = client.post(
         "/sources/eursap-jobs/recipe-candidates/generate",
@@ -117,8 +127,32 @@ def test_generate_candidate_handles_llm_unavailable_as_redirect_warning(
     )
 
     assert response.status_code == 303
-    assert "warning=" in response.headers["location"]
+    assert "/sources/eursap-jobs/recipe-generation/" in response.headers["location"]
+    run = _wait_for_generation_run(client, response.headers["location"])
+    assert run["status"] == "failed"
+    assert "ANTHROPIC_API_KEY" in run["error"]
     assert not RecipeCandidateStore(project_root).list_candidates()
+
+
+def test_generated_draft_recipe_is_available_in_follow_up_dropdowns(client: TestClient, project_root: Path) -> None:
+    recipe_path = project_root / "output" / "recipe-generation-runs" / "example-run" / "suggested-recipe.yaml"
+    recipe_path.parent.mkdir(parents=True, exist_ok=True)
+    recipe_path.write_text(VALID_RECIPE_YAML, encoding="utf-8")
+    relative = recipe_path.relative_to(project_root).as_posix()
+
+    preview_response = client.get(
+        f"/recipe-preview?recipe_path={relative}&input_path_or_url=https://eursap.eu/jobs&selected_source_id=eursap-jobs"
+    )
+    compatibility_response = client.get(
+        f"/compatibility?recipe_path={relative}&url=https://eursap.eu/jobs&selected_source_id=eursap-jobs"
+    )
+
+    assert preview_response.status_code == 200
+    assert compatibility_response.status_code == 200
+    assert "Generated draft: suggested-recipe.yaml" in preview_response.text
+    assert "Generated draft: suggested-recipe.yaml" in compatibility_response.text
+    assert f'<option value="{relative}" selected>' in preview_response.text
+    assert f'<option value="{relative}" selected>' in compatibility_response.text
 
 
 def test_source_detail_displays_relevant_pending_and_rejected_candidates(
@@ -185,6 +219,18 @@ def _write_artifact(project_root: Path) -> Path:
         encoding="utf-8",
     )
     return artifact
+
+
+def _wait_for_generation_run(client: TestClient, location: str) -> dict:
+    status_url = f"{location}/status"
+    for _ in range(40):
+        response = client.get(status_url)
+        assert response.status_code == 200
+        data = response.json()
+        if data["status"] in {"completed", "failed"}:
+            return data
+        time.sleep(0.05)
+    raise AssertionError("Recipe generation run did not finish.")
 
 
 def _suggestion(artifact: Path) -> RecipeSuggestionResult:

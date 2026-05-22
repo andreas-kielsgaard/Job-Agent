@@ -16,6 +16,7 @@ from job_agent.services.package_index_service import PackageIndexService
 from job_agent.services.recipe_artifact_service import RecipeArtifactService
 from job_agent.services.recipe_candidate_approval_service import RecipeCandidateApprovalService
 from job_agent.services.recipe_candidate_service import RecipeCandidateStore
+from job_agent.services.recipe_generation_run_service import RecipeGenerationRunService
 from job_agent.services.recipe_generation_status_service import RecipeGenerationStatusService
 from job_agent.services.setup_service import SetupService
 from job_agent.services.source_execution_readiness_service import SourceExecutionReadinessService
@@ -92,6 +93,10 @@ def recipe_candidate_approval_service() -> RecipeCandidateApprovalService:
 
 def recipe_generation_status_service() -> RecipeGenerationStatusService:
     return RecipeGenerationStatusService(_current_root)
+
+
+def recipe_generation_run_service() -> RecipeGenerationRunService:
+    return RecipeGenerationRunService(_current_root)
 
 
 def approved_recipe_adoption_service() -> ApprovedRecipeAdoptionService:

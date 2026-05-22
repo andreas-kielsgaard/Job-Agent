@@ -42,6 +42,15 @@ def default_recipe_for_source(source: SourceRegistryEntry | None, recipes: list[
     return ""
 
 
+def include_selected_recipe_option(recipes: list[dict[str, str]], recipe_path: str) -> list[dict[str, str]]:
+    normalized = recipe_path.replace("\\", "/").strip()
+    if not normalized:
+        return recipes
+    if any(option["value"] == normalized for option in recipes):
+        return recipes
+    return [{"label": f"Generated draft: {Path(normalized).name}", "value": normalized}, *recipes]
+
+
 def _recipe_label(path: Path, fallback: str) -> str:
     try:
         data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}

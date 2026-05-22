@@ -7,7 +7,7 @@ from job_agent.services.recipe_preview_service import explain_recipe, preview_re
 from job_agent.services.source_health_service import SourceHealthService
 from job_agent.web.debug_state import record_debug_event
 from job_agent.web.dependencies import current_root, templates
-from job_agent.web.form_options import default_recipe_for_source, recipe_options, source_options
+from job_agent.web.form_options import default_recipe_for_source, include_selected_recipe_option, recipe_options, source_options
 
 router = APIRouter()
 
@@ -29,6 +29,7 @@ def recipe_preview_form(
     source_key = selected_source_id.strip() or source_id.strip()
     selected_source = next((source for source in sources if source.id == source_key), None)
     recipe_path = recipe_path or default_recipe_for_source(selected_source, recipes)
+    recipes = include_selected_recipe_option(recipes, recipe_path)
     if selected_source and not input_path_or_url:
         input_path_or_url = selected_source.url
     saved_health = SourceHealthService(root).get_health(selected_source.id) if selected_source else None
@@ -95,6 +96,7 @@ def run_recipe_preview(
             recipe_path = recipe_path or default_recipe_for_source(selected_source, recipes)
             input_path_or_url = input_path_or_url or selected_source.url
             source_id = source_id or selected_source.id
+    recipes = include_selected_recipe_option(recipes, recipe_path)
     if not input_path_or_url.strip().startswith(("http://", "https://")):
         record_debug_event(
             root,

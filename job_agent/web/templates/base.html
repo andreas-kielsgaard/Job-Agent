@@ -153,7 +153,7 @@
         return (value || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
       }
 
-      function applySelectedSource(select) {
+      function applySelectedSource(select, forceRecipe = false) {
         const form = select.closest("form");
         const option = select.selectedOptions[0];
         if (!form || !option) return;
@@ -165,9 +165,9 @@
         if (urlInput && mode !== "custom") {
           urlInput.value = url;
         }
-        if (recipeSelect && recipe) {
+        if (recipeSelect && recipe && (forceRecipe || !recipeSelect.value)) {
           recipeSelect.value = recipe;
-        } else if (recipeSelect && select.value) {
+        } else if (recipeSelect && select.value && (forceRecipe || !recipeSelect.value)) {
           const sourceText = normalizeOptionText(option.textContent);
           const match = [...recipeSelect.options].find((recipeOption) => {
             const recipeText = normalizeOptionText(recipeOption.textContent);
@@ -236,7 +236,7 @@
         });
         document.querySelectorAll('select[name="selected_source_id"]').forEach((select) => {
           select.addEventListener("change", () => {
-            applySelectedSource(select);
+            applySelectedSource(select, true);
             sendFrontendDebug("source_selected");
           });
           if (select.value) applySelectedSource(select);

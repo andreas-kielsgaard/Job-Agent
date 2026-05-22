@@ -6,7 +6,7 @@ from fastapi.responses import HTMLResponse
 from job_agent.services.job_board_check_service import check_job_board_compatibility
 from job_agent.web.debug_state import record_debug_event
 from job_agent.web.dependencies import current_root, templates
-from job_agent.web.form_options import default_recipe_for_source, recipe_options, source_options
+from job_agent.web.form_options import default_recipe_for_source, include_selected_recipe_option, recipe_options, source_options
 
 router = APIRouter()
 
@@ -27,6 +27,7 @@ def compatibility_form(
     if selected_source:
         url = url or selected_source.url
         recipe_path = recipe_path or default_recipe_for_source(selected_source, recipes)
+    recipes = include_selected_recipe_option(recipes, recipe_path)
     normalized_source_mode = source_mode if source_mode in {"configured", "custom"} else "configured"
     saved_health = selected_source.health if show_saved and selected_source else None
     record_debug_event(
@@ -81,6 +82,7 @@ def run_compatibility_check(
         if selected_source:
             url = url or selected_source.url
             recipe_path = recipe_path or default_recipe_for_source(selected_source, recipes)
+    recipes = include_selected_recipe_option(recipes, recipe_path)
     if not url.strip().startswith(("http://", "https://")):
         record_debug_event(
             root,

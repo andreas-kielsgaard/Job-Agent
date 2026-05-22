@@ -1,0 +1,240 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="source-detail-header">
+  <div>
+    <p class="eyebrow">Recipe generation</p>
+    <h1>Generating Recipe Draft</h1>
+    <p class="muted">{{ source.name }}</p>
+  </div>
+  <a class="button light" href="/sources/{{ source.id }}">Back to source</a>
+</div>
+
+<div class="panel running-panel">
+  <div class="row">
+    <div style="margin-right:auto;">
+      <h2 id="generation-title">Preparing generator</h2>
+      <p class="muted" id="generation-note">The generator is reading the saved capture and building a draft recipe for review.</p>
+    </div>
+    <span class="badge" id="generation-status">{{ run.status }}</span>
+  </div>
+  <div class="grid">
+    <div class="stat"><span>Saved capture</span><strong id="generation-artifact">{{ run.artifact_dir }}</strong></div>
+    <div class="stat"><span>Mode</span><strong id="generation-mode">{{ "Refine locally" if run.refine else "Draft only" }}</strong></div>
+    <div class="stat"><span>Max attempts</span><strong id="generation-attempt-limit">{{ run.max_attempts }}</strong></div>
+    <div class="stat"><span>Started</span><strong id="generation-started">{{ run.started_at or "Queued" }}</strong></div>
+  </div>
+  <ol class="progress-steps" id="generation-phases">
+    <li class="active">Resolve source and saved capture</li>
+    <li>Inspect selector, pagination, and detail evidence</li>
+    <li>Generate and validate draft recipe</li>
+    <li>Save pending recipe candidate</li>
+    <li>Prepare follow-up checks</li>
+  </ol>
+  <h3>Generator Log</h3>
+  <ol class="progress-steps" id="generation-log"></ol>
+</div>
+
+<div class="panel" id="generation-result" hidden>
+  <div class="row">
+    <h2 style="margin-right:auto;">Generated Recipe</h2>
+    <span class="badge" id="result-schema">unknown</span>
+  </div>
+  <p id="result-explanation" class="muted"></p>
+  <div class="grid">
+    <div class="stat"><span>Strategy</span><strong id="result-strategy">n/a</strong></div>
+    <div class="stat"><span>Confidence</span><strong id="result-confidence">n/a</strong></div>
+    <div class="stat"><span>Quality</span><strong id="result-quality">n/a</strong></div>
+    <div class="stat"><span>Jobs in local check</span><strong id="result-jobs">0</strong></div>
+    <div class="stat"><span>Useful titles</span><strong id="result-useful">0</strong></div>
+    <div class="stat"><span>Unique URLs</span><strong id="result-urls">0</strong></div>
+  </div>
+  <div id="result-observations"></div>
+  <div id="result-notes"></div>
+  <div class="action-row" id="result-actions"></div>
+</div>
+
+<div class="panel" id="generation-failure" hidden>
+  <h2>Generation Failed</h2>
+  <p class="muted" id="failure-message"></p>
+  <div class="action-row">
+    <a class="button" href="/sources/{{ source.id }}#recipe-generation">Try again</a>
+    <a class="button light" href="/sources/{{ source.id }}">Back to source</a>
+  </div>
+</div>
+
+<details class="panel diagnostic-panel" id="generated-yaml-panel" hidden>
+  <summary>Generated YAML</summary>
+  <pre class="copy-source" id="generated-yaml"></pre>
+</details>
+
+<script>
+  const initialRun = {{ run|tojson }};
+  const statusUrl = "/sources/{{ source.id }}/recipe-generation/{{ run.run_id }}/status";
+  let pollTimer = null;
+
+  function text(value) {
+    return value ? String(value) : "";
+  }
+
+  function escapeHtml(value) {
+    return text(value)
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#039;");
+  }
+
+  function statusClass(status) {
+    const value = text(status).toLowerCase();
+    if (["completed", "complete", "success"].includes(value)) return "complete";
+    if (["failed", "failure", "error"].includes(value)) return "failed";
+    if (["running", "pending", "warning"].includes(value)) return "active";
+    return "";
+  }
+
+  function phaseIndex(phase) {
+    const value = text(phase).toLowerCase();
+    if (value.includes("inspect")) return 1;
+    if (value.includes("generate") || value.includes("refine")) return 2;
+    if (value.includes("save")) return 3;
+    if (value.includes("prepare next")) return 4;
+    return 0;
+  }
+
+  function setPhase(index, state) {
+    const items = [...document.querySelectorAll("#generation-phases li")];
+    items.forEach((item, itemIndex) => {
+      item.className = "";
+      if (itemIndex < index) item.className = "complete";
+      if (itemIndex === index) item.className = state;
+    });
+  }
+
+  function finishPhases(ok) {
+    const items = [...document.querySelectorAll("#generation-phases li")];
+    items.forEach((item, index) => {
+      item.className = ok ? "complete" : (index === items.length - 1 ? "failed" : "complete");
+    });
+  }
+
+  function renderSteps(run) {
+    const steps = run.steps || [];
+    document.getElementById("generation-log").innerHTML = steps.map(step => `
+      <li class="${statusClass(step.status)}">
+        <strong>${escapeHtml(step.phase)}</strong>
+        <div>${escapeHtml(step.detail)}</div>
+        <small>${escapeHtml(step.created_at)}</small>
+      </li>
+    `).join("");
+    const latest = steps[steps.length - 1];
+    if (latest && !["completed", "failed"].includes(run.status)) {
+      setPhase(phaseIndex(latest.phase), statusClass(latest.status) || "active");
+    }
+  }
+
+  function renderObservations(run) {
+    const observations = run.evidence_observations || {};
+    const parts = [
+      `Candidate selector regions: ${observations.top_candidate_count || 0}`,
+      `Pagination links observed: ${observations.pagination_link_count || 0}`,
+      `Application entries observed: ${observations.application_entry_count || 0}`,
+      `Detail sample: ${observations.detail_sample_captured ? "captured" : "not captured"}`,
+      `Recipe blueprint: ${observations.blueprint_present ? "available" : "not available"}`
+    ];
+    document.getElementById("result-observations").innerHTML = `
+      <h3>Evidence Used</h3>
+      <div class="badge-row">${parts.map(item => `<span class="badge">${escapeHtml(item)}</span>`).join("")}</div>
+      ${run.evidence_summary ? `<p class="muted">${escapeHtml(run.evidence_summary)}</p>` : ""}
+    `;
+  }
+
+  function renderNotes(run) {
+    const notes = [
+      ...(run.validation_errors || []).map(item => `Validation: ${item}`),
+      ...(run.quality_warnings || []).map(item => `Quality: ${item}`),
+      ...(run.warnings || []).map(item => `Warning: ${item}`),
+      ...(run.assumptions || []).map(item => `Assumption: ${item}`)
+    ];
+    document.getElementById("result-notes").innerHTML = notes.length
+      ? `<h3>Review Notes</h3><ul>${notes.map(item => `<li>${escapeHtml(item)}</li>`).join("")}</ul>`
+      : "";
+  }
+
+  function renderActions(run) {
+    const actions = [];
+    if (run.candidate_url) actions.push(`<a class="button" href="${escapeHtml(run.candidate_url)}">Review draft recipe</a>`);
+    if (run.compatibility_url) actions.push(`<a class="button light" href="${escapeHtml(run.compatibility_url)}">Compatibility check</a>`);
+    if (run.recipe_review_url) actions.push(`<a class="button light" href="${escapeHtml(run.recipe_review_url)}">Run recipe review</a>`);
+    if (run.recipe_rules_url) actions.push(`<a class="button light" href="${escapeHtml(run.recipe_rules_url)}">Recipe rules</a>`);
+    actions.push(`<a class="button light" href="/sources/{{ source.id }}">Back to source</a>`);
+    document.getElementById("result-actions").innerHTML = actions.join("");
+  }
+
+  function renderResult(run) {
+    document.getElementById("generation-result").hidden = false;
+    document.getElementById("result-schema").innerText = run.schema_valid ? "schema valid" : "schema needs review";
+    document.getElementById("result-explanation").innerText = run.explanation || "The generator saved a draft recipe. Review the YAML and run the checks before approving it.";
+    document.getElementById("result-strategy").innerText = run.selected_strategy || "n/a";
+    document.getElementById("result-confidence").innerText = run.confidence || "n/a";
+    document.getElementById("result-quality").innerText = run.quality_status || (run.schema_valid ? "schema valid" : "needs review");
+    document.getElementById("result-jobs").innerText = run.extracted_job_count || 0;
+    document.getElementById("result-useful").innerText = run.useful_titles || 0;
+    document.getElementById("result-urls").innerText = run.unique_urls || 0;
+    renderObservations(run);
+    renderNotes(run);
+    renderActions(run);
+    if (run.suggested_recipe_yaml) {
+      document.getElementById("generated-yaml-panel").hidden = false;
+      document.getElementById("generated-yaml").innerText = run.suggested_recipe_yaml;
+    }
+  }
+
+  function renderFailure(run) {
+    document.getElementById("generation-failure").hidden = false;
+    document.getElementById("failure-message").innerText = run.error || "The generator could not complete.";
+  }
+
+  function renderRun(run) {
+    document.getElementById("generation-status").innerText = run.status || "unknown";
+    document.getElementById("generation-started").innerText = run.started_at || "Queued";
+    renderSteps(run);
+    if (run.status === "completed") {
+      document.getElementById("generation-title").innerText = "Recipe draft generated";
+      document.getElementById("generation-note").innerText = "Review the generated recipe, then run the compatibility and recipe review checks before approving it.";
+      finishPhases(true);
+      renderResult(run);
+    } else if (run.status === "failed") {
+      document.getElementById("generation-title").innerText = "Recipe generation failed";
+      document.getElementById("generation-note").innerText = "The generator stopped before creating a usable draft.";
+      finishPhases(false);
+      renderFailure(run);
+    } else {
+      document.getElementById("generation-title").innerText = run.status === "running" ? "Generating recipe draft" : "Waiting to generate recipe";
+      document.getElementById("generation-note").innerText = "The log updates as the generator resolves the source, reads the capture, creates the draft, and saves follow-up checks.";
+    }
+  }
+
+  async function pollRun() {
+    try {
+      const response = await fetch(statusUrl, { cache: "no-store" });
+      const run = await response.json();
+      renderRun(run);
+      if (["completed", "failed"].includes(run.status)) {
+        window.clearInterval(pollTimer);
+        pollTimer = null;
+      }
+    } catch (error) {
+      document.getElementById("generation-note").innerText = "Could not refresh generation status.";
+    }
+  }
+
+  window.addEventListener("DOMContentLoaded", () => {
+    renderRun(initialRun);
+    if (!["completed", "failed"].includes(initialRun.status)) {
+      pollTimer = window.setInterval(pollRun, 1000);
+      window.setTimeout(pollRun, 250);
+    }
+  });
+</script>
+{% endblock %}

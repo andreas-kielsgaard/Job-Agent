@@ -10,7 +10,6 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Stre
 
 from job_agent.services.recipe_calibration_service import capture_recipe_calibration
 from job_agent.services.recipe_preview_service import explain_recipe
-from job_agent.services.recipe_suggestion_service import suggest_recipe_from_artifact, suggest_recipe_with_refinement
 from job_agent.services.single_source_run_service import SingleSourceRunService
 from job_agent.services.source_dry_run_service import SourceDryRunService
 from job_agent.services.source_registry_service import SOURCE_KIND_DEFINITIONS, SOURCE_STATUS_DEFINITIONS
@@ -20,6 +19,7 @@ from job_agent.web.dependencies import (
     recipe_artifact_service,
     recipe_candidate_approval_service,
     recipe_candidate_store,
+    recipe_generation_run_service,
     recipe_generation_status_service,
     source_execution_readiness_service,
     source_registry_service,
@@ -399,29 +399,50 @@ def generate_recipe_candidate(
     refine: str = Form(""),
     max_attempts: int = Form(3),
 ) -> RedirectResponse:
-    source = _registry_source_or_404(source_id)
     try:
-        artifact_path = recipe_artifact_service().resolve_artifact_path(artifact_dir)
-        if bool(refine):
-            refinement = suggest_recipe_with_refinement(
-                artifact_path,
-                source_name=source.name,
-                start_url=source.url,
-                max_attempts=max_attempts,
-                root=execution_source_service().root,
-            )
-            candidate = recipe_candidate_store().save_candidate_from_refinement(refinement)
-        else:
-            suggestion = suggest_recipe_from_artifact(
-                artifact_path,
-                source_name=source.name,
-                start_url=source.url,
-                root=execution_source_service().root,
-            )
-            candidate = recipe_candidate_store().save_candidate_from_suggestion(suggestion)
+        run = recipe_generation_run_service().start(
+            source_id,
+            artifact_dir=artifact_dir,
+            refine=bool(refine),
+            max_attempts=max_attempts,
+        )
     except (RuntimeError, ValueError) as exc:
         return _redirect_to_source(source_id, warning=f"Recipe candidate generation failed: {exc}")
-    return _redirect_to_source(source_id, message=f"Pending recipe candidate saved: {candidate.candidate_id}")
+    return RedirectResponse(f"/sources/{source_id}/recipe-generation/{run['run_id']}", status_code=303)
+
+
+@router.get("/sources/{source_id}/recipe-generation/{run_id}", response_class=HTMLResponse)
+def recipe_generation_run_detail(request: Request, source_id: str, run_id: str) -> HTMLResponse:
+    source = _registry_source_or_404(source_id)
+    try:
+        run = recipe_generation_run_service().load(run_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if run.get("source_id") != source.id:
+        raise HTTPException(status_code=404, detail="Recipe generation run does not belong to this source.")
+    response = templates.TemplateResponse(
+        request,
+        "recipe_generation_run.html",
+        {
+            "request": request,
+            "source": source,
+            "run": run,
+        },
+    )
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+@router.get("/sources/{source_id}/recipe-generation/{run_id}/status")
+def recipe_generation_run_status(source_id: str, run_id: str) -> JSONResponse:
+    source = _registry_source_or_404(source_id)
+    try:
+        run = recipe_generation_run_service().load(run_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if run.get("source_id") != source.id:
+        raise HTTPException(status_code=404, detail="Recipe generation run does not belong to this source.")
+    return JSONResponse(run)
 
 
 @router.get("/recipe-candidates/{candidate_id}", response_class=HTMLResponse)
