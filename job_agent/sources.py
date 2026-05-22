@@ -120,16 +120,32 @@ class GenericHtmlAdapter(SourceAdapter):
             return SourceRunResult(warnings=[SourceWarning(source_name, f"Fetch failed: {exc}", url)])
         _emit_fetch_progress(progress_callback, "Listing page fetched", "completed", f"Fetched {response.url}.", "listing")
 
-        jobs = extract_generic_jobs_from_html(
+        max_results = _positive_int(self.source.get("max_results"), 25)
+        all_jobs = extract_generic_jobs_from_html(
             response.text,
             base_url=url,
             source_name=source_name,
             source_id=self.source.get("source_id", ""),
-            max_results=self.source.get("max_results", 25),
+            max_results=None,
         )
-        _emit_fetch_progress(progress_callback, "Generic extraction", "completed", f"Found {len(jobs)} plausible job link(s).")
+        jobs = all_jobs[:max_results]
+        listing_limit_skipped_count = max(0, len(all_jobs) - len(jobs))
+        _emit_fetch_progress(
+            progress_callback,
+            "Generic extraction",
+            "completed",
+            f"Found {len(jobs)} plausible job link(s).",
+        )
+        metadata = {
+            "adapter": "generic_html",
+            "listing_observed_count": len(all_jobs),
+            "listing_extracted_count": len(jobs),
+            "listing_limit_skipped_count": listing_limit_skipped_count,
+            "job_limit": max_results,
+        }
         if not jobs:
             return SourceRunResult(
+                metadata=metadata,
                 warnings=[
                     SourceWarning(
                         source_name,
@@ -138,7 +154,7 @@ class GenericHtmlAdapter(SourceAdapter):
                     )
                 ]
             )
-        return SourceRunResult(jobs=jobs)
+        return SourceRunResult(jobs=jobs, metadata=metadata)
 
 
 class WhitehallResourcesAdapter(GenericHtmlAdapter):
@@ -484,7 +500,9 @@ def _recipe_result_metadata(
         "listing_missing_url_count": result.listing_missing_url_count,
         "listing_rejected_count": result.listing_rejected_count,
         "listing_duplicate_count": result.listing_duplicate_count,
-        "listing_limit_skipped_count": result.listing_limit_skipped_count,
+        "listing_limit_skipped_count": (
+            result.listing_limit_skipped_count + max(0, len(result.jobs) - retained_job_count)
+        ),
         "listing_pages": [
             {
                 "page_url": page.page_url,
@@ -574,7 +592,7 @@ def extract_generic_jobs_from_html(
     base_url: str,
     source_name: str,
     source_id: str = "",
-    max_results: int = 25,
+    max_results: int | None = 25,
 ) -> list[Job]:
     soup = BeautifulSoup(html, "html.parser")
     jobs: list[Job] = []
@@ -604,7 +622,7 @@ def extract_generic_jobs_from_html(
                 extraction_notes=["Generic HTML link extraction; verify details manually."],
             )
         )
-    return jobs[:max_results]
+    return jobs if max_results is None else jobs[:max_results]
 
 
 def _positive_int(value, default: int) -> int:

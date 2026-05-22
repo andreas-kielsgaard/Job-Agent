@@ -81,6 +81,29 @@ def test_generic_html_adapter_extracts_plausible_job_links(monkeypatch: pytest.M
 
     assert len(result.jobs) == 2
     assert result.jobs[0].application_url.startswith("https://example.com/")
+    assert result.metadata["listing_observed_count"] == 2
+    assert result.metadata["listing_extracted_count"] == 2
+    assert result.metadata["listing_limit_skipped_count"] == 0
+
+
+def test_generic_html_adapter_reports_configured_result_cap(
+    monkeypatch: pytest.MonkeyPatch, project_root: Path
+) -> None:
+    html = """
+    <ul>
+      <li><a href="/jobs/sap-abap">SAP ABAP Consultant contract</a></li>
+      <li><a href="/jobs/sap-rap">SAP RAP Developer contract</a></li>
+      <li><a href="/jobs/sap-basis">SAP Basis Consultant contract</a></li>
+    </ul>
+    """
+    monkeypatch.setattr("requests.get", lambda *args, **kwargs: FakeResponse(html))
+
+    result = GenericHtmlAdapter({"name": "HTML", "url": "https://example.com", "max_results": 2}, project_root).fetch()
+
+    assert len(result.jobs) == 2
+    assert result.metadata["listing_observed_count"] == 3
+    assert result.metadata["listing_extracted_count"] == 2
+    assert result.metadata["listing_limit_skipped_count"] == 1
 
 
 def test_recipe_html_adapter_extracts_jobs_from_recipe(monkeypatch: pytest.MonkeyPatch, project_root: Path) -> None:
