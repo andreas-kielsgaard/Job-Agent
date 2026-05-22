@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Form, HTTPException, Request
+from fastapi import APIRouter, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
 
 from job_agent.services.job_board_check_service import check_job_board_compatibility
@@ -12,10 +12,23 @@ router = APIRouter()
 
 
 @router.get("/compatibility", response_class=HTMLResponse)
-def compatibility_form(request: Request) -> HTMLResponse:
+def compatibility_form(
+    request: Request,
+    url: str = Query(""),
+    recipe_path: str = Query(""),
+    source_mode: str = Query("configured"),
+    selected_source_id: str = Query(""),
+    show_saved: bool = Query(False),
+) -> HTMLResponse:
     root = current_root()
     recipes = recipe_options(root)
     sources = source_options(root)
+    selected_source = next((source for source in sources if source.id == selected_source_id.strip()), None)
+    if selected_source:
+        url = url or selected_source.url
+        recipe_path = recipe_path or default_recipe_for_source(selected_source, recipes)
+    normalized_source_mode = source_mode if source_mode in {"configured", "custom"} else "configured"
+    saved_health = selected_source.health if show_saved and selected_source else None
     record_debug_event(
         root,
         feature="compatibility",
@@ -23,7 +36,10 @@ def compatibility_form(request: Request) -> HTMLResponse:
         method=request.method,
         request_path=str(request.url),
         state={
-            "source_mode": "configured",
+            "source_mode": normalized_source_mode,
+            "selected_source_id": selected_source.id if selected_source else selected_source_id,
+            "url": url,
+            "recipe_path": recipe_path,
             "source_count": len(sources),
             "recipe_count": len(recipes),
             "sources": _source_debug_options(sources),
@@ -38,7 +54,11 @@ def compatibility_form(request: Request) -> HTMLResponse:
             "report": None,
             "sources": sources,
             "recipe_options": recipes,
-            "source_mode": "configured",
+            "source_mode": normalized_source_mode,
+            "selected_source_id": selected_source.id if selected_source else selected_source_id,
+            "url": url,
+            "recipe_path": recipe_path,
+            "saved_health": saved_health,
         },
     )
 
@@ -139,6 +159,7 @@ def run_compatibility_check(
             "selected_source_id": selected_source.id if selected_source else selected_source_id,
             "sources": sources,
             "recipe_options": recipes,
+            "saved_health": selected_source.health if selected_source else None,
         },
     )
 

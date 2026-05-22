@@ -49,7 +49,7 @@ class ApprovedRecipeAdoptionService:
         source = self.registry.get_source(source_id)
         if not source:
             raise ValueError(f"Source not found: {source_id}")
-        if source.kind not in {"recipe", "experimental_recipe"} and not source.recipe_path:
+        if source.kind != "recipe" and not source.recipe_path:
             raise ValueError("Only recipe-backed sources can adopt approved recipes.")
 
         warnings = []
@@ -98,10 +98,7 @@ class ApprovedRecipeAdoptionService:
 
     def _validate_approved_recipe_path(self, value: str) -> str:
         path = Path(value)
-        if path.is_absolute():
-            resolved = path.resolve()
-        else:
-            resolved = (self.root / path).resolve()
+        resolved = path.resolve() if path.is_absolute() else (self.root / path).resolve()
         base = (self.root / "sources" / "recipes").resolve()
         if resolved != base and base not in resolved.parents:
             raise ValueError("Approved recipe path must stay under sources/recipes.")

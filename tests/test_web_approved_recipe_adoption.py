@@ -29,7 +29,7 @@ def test_candidate_detail_shows_adoption_form_only_for_approved_candidates(clien
 
     assert "Adopt For Source" not in pending_response.text
     assert "Adopt For Source" in approved_response.text
-    assert "Prepare disabled execution entry" in approved_response.text
+    assert "Prepare disabled daily-run entry" in approved_response.text
 
 
 def test_web_adoption_updates_registry_and_redirects(client: TestClient, project_root: Path) -> None:

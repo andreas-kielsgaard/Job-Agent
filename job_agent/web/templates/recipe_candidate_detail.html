@@ -121,10 +121,10 @@
 {% if candidate.status == "approved" and source %}
 <div class="panel">
   <h2>Adopt For Source</h2>
-  <p class="muted">Adoption updates the source registry recipe_path to this approved recipe. It can optionally prepare a disabled execution entry, but it never enables daily-run execution.</p>
+  <p class="muted">Adoption updates the source registry recipe_path to this approved recipe. It can optionally prepare a disabled daily-run entry, but it never enables daily-run execution.</p>
   <form method="post" action="/recipe-candidates/{{ candidate.candidate_id }}/adopt">
     <input type="hidden" name="source_id" value="{{ source.id }}">
-    <label class="check"><input type="checkbox" name="prepare_disabled_execution_entry" value="1"> Prepare disabled execution entry</label>
+    <label class="check"><input type="checkbox" name="prepare_disabled_execution_entry" value="1"> Prepare disabled daily-run entry</label>
     <button type="submit" class="button">Adopt approved recipe for this source</button>
   </form>
 </div>

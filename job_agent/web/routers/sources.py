@@ -6,10 +6,11 @@ from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from job_agent.services.recipe_calibration_service import capture_recipe_calibration
+from job_agent.services.recipe_preview_service import explain_recipe
 from job_agent.services.recipe_suggestion_service import suggest_recipe_from_artifact, suggest_recipe_with_refinement
 from job_agent.services.single_source_run_service import SingleSourceRunService
 from job_agent.services.source_dry_run_service import SourceDryRunService
-from job_agent.services.source_registry_service import VALID_STATUSES
+from job_agent.services.source_registry_service import SOURCE_KIND_DEFINITIONS, SOURCE_STATUS_DEFINITIONS
 from job_agent.web.dependencies import (
     approved_recipe_adoption_service,
     execution_source_service,
@@ -24,12 +25,17 @@ from job_agent.web.dependencies import (
 from job_agent.web.form_options import recipe_options
 
 router = APIRouter()
-SOURCE_STATUS_OPTIONS = ["active", "experimental", "needs_review", "disabled"]
 
 
 @router.get("/sources", response_class=HTMLResponse)
-def source_overview(request: Request) -> HTMLResponse:
-    sources = source_registry_service().list_sources()
+def source_overview(
+    request: Request,
+    message: str = "",
+    warning: str = "",
+) -> HTMLResponse:
+    all_sources = source_registry_service().list_sources()
+    sources = [source for source in all_sources if source.status != "archived"]
+    archived_sources = [source for source in all_sources if source.status == "archived"]
     execution_by_source = {
         str(source.get("source_id") or ""): source
         for source in execution_source_service().list_sources()
@@ -38,7 +44,14 @@ def source_overview(request: Request) -> HTMLResponse:
     return templates.TemplateResponse(
         request,
         "sources.html",
-        {"request": request, "sources": sources, "execution_by_source": execution_by_source},
+        {
+            "request": request,
+            "sources": sources,
+            "archived_sources": archived_sources,
+            "message": message,
+            "warning": warning,
+            "execution_by_source": execution_by_source,
+        },
     )
 
 
@@ -52,6 +65,8 @@ def source_detail(request: Request, source_id: str, message: str = "", warning: 
     recipe_candidates = _candidates_for_source(source, artifacts)
     generation_status = recipe_generation_status_service().build_for_source(source.id)
     go_live_readiness = source_execution_readiness_service().evaluate(source.id)
+    best_artifact_dir = generation_status.best_artifact.artifact_dir if generation_status.best_artifact else ""
+    recipe_explanation = explain_recipe(source.recipe_path, root=execution_source_service().root) if source.recipe_path else None
     return templates.TemplateResponse(
         request,
         "source_detail.html",
@@ -65,9 +80,13 @@ def source_detail(request: Request, source_id: str, message: str = "", warning: 
             "recipe_artifacts": artifacts,
             "recipe_candidates": recipe_candidates,
             "recipe_generation_status": generation_status,
+            "recipe_explanation": recipe_explanation,
             "go_live_readiness": go_live_readiness,
             "recipe_options": recipe_options(execution_source_service().root),
-            "status_options": [status for status in SOURCE_STATUS_OPTIONS if status in VALID_STATUSES],
+            "kind_options": SOURCE_KIND_DEFINITIONS,
+            "status_options": SOURCE_STATUS_DEFINITIONS,
+            "compatibility_url": _compatibility_url(source),
+            "recipe_editor_url": _recipe_editor_url(source, best_artifact_dir),
         },
     )
 
@@ -76,23 +95,49 @@ def source_detail(request: Request, source_id: str, message: str = "", warning: 
 def update_registry_source(
     source_id: str,
     name: str = Form(...),
+    kind: str = Form(...),
     url: str = Form(""),
     status: str = Form(...),
     recipe_path: str = Form(""),
     notes: str = Form(""),
 ) -> RedirectResponse:
     try:
-        source_registry_service().update_source(
+        updated = source_registry_service().update_source(
             source_id,
             name=name,
+            kind=kind,
             url=url,
             status=status,
             recipe_path=recipe_path,
             notes=notes,
         )
+        if updated.status == "archived":
+            _disable_execution_entry_if_present(updated.id)
     except (KeyError, ValueError) as exc:
         return _redirect_to_source(source_id, warning=f"Source update failed: {exc}")
     return _redirect_to_source(source_id, message="Source registry updated.")
+
+
+@router.post("/sources/{source_id}/archive")
+def archive_registry_source(source_id: str) -> RedirectResponse:
+    try:
+        source = source_registry_service().archive_source(source_id)
+        disabled = _disable_execution_entry_if_present(source.id)
+    except KeyError as exc:
+        return _redirect_to_sources(warning=f"Source archive failed: {exc}")
+    suffix = " Existing daily-run execution entry was disabled." if disabled else ""
+    return _redirect_to_sources(
+        message=f"Source archived. It is hidden from normal source lists and blocked from daily-run enablement.{suffix}",
+    )
+
+
+@router.post("/sources/{source_id}/restore")
+def restore_registry_source(source_id: str) -> RedirectResponse:
+    try:
+        source_registry_service().restore_source(source_id)
+    except KeyError as exc:
+        return _redirect_to_sources(warning=f"Source restore failed: {exc}")
+    return _redirect_to_source(source_id, message="Source restored to Needs review.")
 
 
 @router.post("/sources/{source_id}/recipe-calibration/capture")
@@ -128,18 +173,49 @@ def capture_recipe_calibration_artifact(
     return _redirect_to_source(source_id, message=message)
 
 
+@router.post("/sources/{source_id}/recipe/update")
+def update_source_recipe(
+    source_id: str,
+    recipe_path: str = Form(""),
+) -> RedirectResponse:
+    source = _registry_source_or_404(source_id)
+    normalized_recipe_path = recipe_path.replace("\\", "/").strip()
+    kind = "recipe" if normalized_recipe_path else ("job_board" if source.kind == "recipe" else source.kind)
+    try:
+        source_registry_service().update_source(
+            source_id,
+            name=source.name,
+            kind=kind,
+            url=source.url,
+            status=source.status,
+            recipe_path=normalized_recipe_path,
+            notes=source.notes,
+        )
+    except (KeyError, ValueError) as exc:
+        return _redirect_to_source(source_id, warning=f"Recipe update failed: {exc}")
+    return _redirect_to_source(source_id, message="Source recipe updated.")
+
+
 @router.post("/sources/{source_id}/execution/create")
 def create_execution_source(source_id: str) -> RedirectResponse:
     source = _registry_source_or_404(source_id)
     _require_recipe_source(source)
+    _require_not_archived(source)
     execution_source_service().create_or_update_recipe_source(source, enabled=False)
-    return _redirect_to_source(source_id, message="Disabled execution entry created.")
+    return _redirect_to_source(
+        source_id,
+        message=(
+            "Disabled daily-run entry prepared in sources/recruiting-sites.yaml. "
+            "It will not run until you explicitly enable it after readiness checks."
+        ),
+    )
 
 
 @router.post("/sources/{source_id}/execution/update")
 def update_execution_source(source_id: str) -> RedirectResponse:
     source = _registry_source_or_404(source_id)
     _require_recipe_source(source)
+    _require_not_archived(source)
     execution_source_service().create_or_update_recipe_source(source, enabled=False)
     return _redirect_to_source(source_id, message="Execution entry updated and kept disabled.")
 
@@ -148,6 +224,7 @@ def update_execution_source(source_id: str) -> RedirectResponse:
 def enable_execution_source(source_id: str) -> RedirectResponse:
     source = _registry_source_or_404(source_id)
     _require_recipe_source(source)
+    _require_not_archived(source)
     result = source_execution_readiness_service().enable_when_ready(source.id)
     if not result.enabled:
         warning = " ".join(result.check.blockers[:3]) or "Source is not ready for daily-run enablement."
@@ -206,6 +283,7 @@ def dry_run_source_readiness(source_id: str) -> RedirectResponse:
 def enable_source_when_ready(source_id: str) -> RedirectResponse:
     source = _registry_source_or_404(source_id)
     _require_recipe_source(source)
+    _require_not_archived(source)
     result = source_execution_readiness_service().enable_when_ready(source.id)
     if not result.enabled:
         warning = " ".join(result.check.blockers[:3]) or "Source is not ready for daily-run enablement."
@@ -216,6 +294,7 @@ def enable_source_when_ready(source_id: str) -> RedirectResponse:
 @router.post("/sources/{source_id}/run-now")
 def run_source_now(source_id: str) -> RedirectResponse:
     source = _registry_source_or_404(source_id)
+    _require_not_archived(source)
     execution_entry = execution_source_service().find_by_source_id(source.id)
     if not execution_entry:
         return _redirect_to_source(source_id, warning="Create an execution entry before running this source.")
@@ -361,6 +440,26 @@ def _recipe_preview_url(source) -> str:
     return f"/recipe-preview?{urlencode(params)}"
 
 
+def _compatibility_url(source) -> str:
+    params = {
+        "source_mode": "configured",
+        "selected_source_id": source.id,
+        "url": source.url,
+        "recipe_path": source.recipe_path,
+        "show_saved": "1",
+    }
+    return f"/compatibility?{urlencode(params)}"
+
+
+def _recipe_editor_url(source, artifact_dir: str = "") -> str:
+    if not source.recipe_path:
+        return "/recipe-editor"
+    params = {"recipe_path": source.recipe_path}
+    if artifact_dir:
+        params["artifact_dir"] = artifact_dir
+    return f"/recipe-editor?{urlencode(params)}"
+
+
 def _registry_source_or_404(source_id: str):
     source = source_registry_service().get_source(source_id)
     if not source:
@@ -373,6 +472,19 @@ def _require_recipe_source(source) -> None:
         raise HTTPException(status_code=400, detail="Only recipe-backed sources can be configured for recipe execution.")
 
 
+def _require_not_archived(source) -> None:
+    if source.status == "archived":
+        raise HTTPException(status_code=400, detail="Archived sources cannot be prepared, enabled, or run.")
+
+
+def _disable_execution_entry_if_present(source_id: str) -> bool:
+    try:
+        execution_source_service().disable(source_id)
+    except KeyError:
+        return False
+    return True
+
+
 def _redirect_to_source(source_id: str, *, message: str = "", warning: str = "") -> RedirectResponse:
     params = {}
     if message:
@@ -381,6 +493,20 @@ def _redirect_to_source(source_id: str, *, message: str = "", warning: str = "")
         params["warning"] = warning
     suffix = f"?{urlencode(params)}" if params else ""
     return RedirectResponse(f"/sources/{source_id}{suffix}", status_code=303)
+
+
+def _redirect_to_sources(
+    *,
+    message: str = "",
+    warning: str = "",
+) -> RedirectResponse:
+    params = {}
+    if message:
+        params["message"] = message
+    if warning:
+        params["warning"] = warning
+    suffix = f"?{urlencode(params)}" if params else ""
+    return RedirectResponse(f"/sources{suffix}", status_code=303)
 
 
 def _candidates_for_source(source, artifacts) -> list:

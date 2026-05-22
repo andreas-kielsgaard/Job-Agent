@@ -87,6 +87,21 @@
   </form>
 </div>
 
+{% if saved_health and saved_health.health_status != "untested" %}
+<div class="panel">
+  <h2>Saved Source / Recipe Result</h2>
+  <p class="muted">Previous saved recipe review result for the selected configured source. Run check below to refresh compatibility evidence.</p>
+  <div class="grid">
+    <div class="stat"><span>Status</span><strong>{{ saved_health.health_status }}</strong></div>
+    <div class="stat"><span>Last preview</span><strong>{{ saved_health.last_preview_at or "Never" }}</strong></div>
+    <div class="stat"><span>Jobs extracted</span><strong>{{ saved_health.extracted_job_count }}</strong></div>
+    <div class="stat"><span>Useful titles</span><strong>{{ saved_health.useful_titles }}</strong></div>
+    <div class="stat"><span>Unique URLs</span><strong>{{ saved_health.unique_urls }}</strong></div>
+  </div>
+  <p><strong>Summary:</strong> {{ saved_health.health_summary }}</p>
+</div>
+{% endif %}
+
 {% if report %}
 <div class="panel">
   <h2>Recommendation</h2>

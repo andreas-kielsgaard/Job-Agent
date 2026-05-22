@@ -149,6 +149,12 @@ a:hover {
   margin: 0;
 }
 
+.danger-zone {
+  border-top: 1px solid var(--line);
+  margin-top: 18px;
+  padding-top: 16px;
+}
+
 .row {
   display: flex;
   gap: 10px;
@@ -192,6 +198,12 @@ button.secondary {
 button.light {
   background: var(--accent-soft);
   color: #115e59;
+}
+
+.button.danger,
+button.danger {
+  background: #fee2e2;
+  color: var(--bad);
 }
 
 input,
@@ -353,6 +365,11 @@ td {
   padding: 16px;
 }
 
+.source-card.archived {
+  background: #fafafa;
+  opacity: 0.82;
+}
+
 .source-card h2 {
   margin: 0 0 3px;
   font-size: 20px;
@@ -401,6 +418,11 @@ td {
 
 .source-card-actions .button {
   text-align: center;
+}
+
+.source-card-actions form,
+.source-card-actions button {
+  width: 100%;
 }
 
 .badge {
@@ -662,4 +684,82 @@ td {
 
 .spinner.active {
   display: inline-block;
+}
+
+.recipe-editor-shell {
+  display: grid;
+  grid-template-columns: minmax(320px, 430px) minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.recipe-editor-panel {
+  min-width: 0;
+}
+
+.selector-list {
+  display: grid;
+  gap: 12px;
+}
+
+.selector-field {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  background: var(--panel);
+}
+
+.selector-field.active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+.selector-field textarea {
+  min-height: 72px;
+  font-family: Consolas, monospace;
+}
+
+.picked-text {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px;
+  background: #fbfcfd;
+  overflow-wrap: anywhere;
+}
+
+.sticky-save {
+  position: sticky;
+  bottom: 12px;
+  padding: 12px;
+  margin-top: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.95);
+}
+
+.recipe-page-view {
+  position: sticky;
+  top: 18px;
+}
+
+.recipe-snapshot-frame {
+  width: 100%;
+  height: min(78vh, 860px);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+}
+
+@media (max-width: 980px) {
+  .recipe-editor-shell {
+    grid-template-columns: 1fr;
+  }
+
+  .recipe-page-view {
+    position: static;
+  }
+
+  .recipe-snapshot-frame {
+    height: 68vh;
+  }
 }

@@ -24,7 +24,7 @@ def source_options(root: Path) -> list[SourceRegistryEntry]:
     return [
         source
         for source in SourceRegistryService(root).list_sources()
-        if source.url or source.recipe_path or source.kind in {"recipe", "experimental_recipe"}
+        if source.status != "archived" and (source.url or source.recipe_path or source.kind == "recipe")
     ]
 
 

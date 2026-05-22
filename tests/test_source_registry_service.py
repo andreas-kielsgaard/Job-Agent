@@ -60,6 +60,8 @@ def test_registry_discovers_recipe_files_not_listed_in_registry(project_root: Pa
 
     assert source is not None
     assert source.name == "Acme Jobs"
+    assert source.kind == "recipe"
+    assert source.status == "testing"
     assert source.url == "https://example.com/jobs"
     assert source.recipe_path == "sources/recipes/experimental/acme-jobs.yaml"
 
@@ -101,8 +103,9 @@ def test_update_source_persists_default_source_edits(project_root: Path) -> None
     updated = service.update_source(
         "eursap-jobs",
         name="Eursap Jobs Reviewed",
+        kind="recipe",
         url="https://eursap.eu/jobs?contract=sap",
-        status="active",
+        status="ready",
         recipe_path="sources/recipes/experimental/eursap-jobs.yaml",
         notes="Reviewed for daily-run prep.",
     )
@@ -110,8 +113,11 @@ def test_update_source_persists_default_source_edits(project_root: Path) -> None
     registry = read_yaml(project_root / "sources" / "source-registry.yaml", {})
     saved = next(item for item in registry["sources"] if item["id"] == "eursap-jobs")
     assert updated.name == "Eursap Jobs Reviewed"
-    assert updated.status == "active"
+    assert updated.kind == "recipe"
+    assert updated.status == "ready"
     assert saved["name"] == "Eursap Jobs Reviewed"
+    assert saved["kind"] == "recipe"
+    assert saved["status"] == "ready"
     assert saved["url"] == "https://eursap.eu/jobs?contract=sap"
     assert saved["notes"] == "Reviewed for daily-run prep."
 
@@ -121,11 +127,30 @@ def test_update_source_rejects_unknown_status(project_root: Path) -> None:
         SourceRegistryService(project_root).update_source(
             "eursap-jobs",
             name="Eursap Jobs",
+            kind="recipe",
             url="https://eursap.eu/jobs",
             status="live",
             recipe_path="sources/recipes/experimental/eursap-jobs.yaml",
             notes="",
         )
+
+
+def test_archive_and_restore_source_hide_without_deleting(project_root: Path) -> None:
+    service = SourceRegistryService(project_root)
+
+    archived = service.archive_source("whitehall-sap-contract")
+
+    registry = read_yaml(project_root / "sources" / "source-registry.yaml", {})
+    saved = next(item for item in registry["sources"] if item["id"] == "whitehall-sap-contract")
+    assert archived.status == "archived"
+    assert saved["status"] == "archived"
+    assert saved["enabled"] is False
+    assert "archived_at" in saved
+
+    restored = service.restore_source("whitehall-sap-contract")
+
+    assert restored.status == "needs_review"
+    assert restored.kind == "recipe"
 
 
 def test_registry_includes_saved_source_health(project_root: Path) -> None:

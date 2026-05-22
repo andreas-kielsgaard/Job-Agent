@@ -1,19 +1,26 @@
 {% extends "base.html" %}
 {% block content %}
 <h1>Sources</h1>
+{% if message %}
+<div class="panel"><span class="badge high">{{ message }}</span></div>
+{% endif %}
+{% if warning %}
+<div class="panel"><span class="badge low">{{ warning }}</span></div>
+{% endif %}
 <div class="panel">
   <p class="muted">Sources are reviewed job origins. Recipe-backed sources can be previewed, dry-run, and later enabled for daily runs after readiness checks pass.</p>
   <div class="grid">
-    <div class="stat"><span>Registered sources</span><strong>{{ sources|length }}</strong></div>
+    <div class="stat"><span>Active sources</span><strong>{{ sources|length }}</strong></div>
     <div class="stat"><span>Recipe-backed</span><strong>{{ sources|selectattr("recipe_path")|list|length }}</strong></div>
     <div class="stat"><span>Execution entries</span><strong>{{ execution_by_source|length }}</strong></div>
+    <div class="stat"><span>Archived</span><strong>{{ archived_sources|length }}</strong></div>
   </div>
 </div>
 
 <div class="source-list">
   {% for source in sources %}
   {% set execution = execution_by_source.get(source.id) %}
-  <article class="source-card">
+  <article class="source-card{% if source.status == 'archived' %} archived{% endif %}">
     <div class="source-card-main">
       <div class="source-title-row">
         <div>
@@ -21,8 +28,8 @@
           <div class="muted">{{ source.id }}</div>
         </div>
         <div class="badge-row">
-          <span class="badge">{{ source.kind }}</span>
-          <span class="badge {{ 'high' if source.status == 'active' else 'medium' if source.status in ['experimental', 'needs_review'] else 'low' }}">{{ source.status }}</span>
+          <span class="badge">{{ source.kind_label }}</span>
+          <span class="badge {{ source.status_badge }}">{{ source.status_label }}</span>
           {% if execution %}
           <span class="badge {{ 'high' if execution.enabled else 'medium' }}">{{ "execution enabled" if execution.enabled else "execution disabled" }}</span>
           {% elif source.recipe_path %}
@@ -66,14 +73,61 @@
     </div>
     <div class="source-card-actions">
       <a class="button light" href="/sources/{{ source.id }}">Detail</a>
+      {% if source.status == "archived" %}
+      <form method="post" action="/sources/{{ source.id }}/restore" class="inline-form">
+        <button type="submit" class="button light">Restore</button>
+      </form>
+      {% else %}
       {% if source.recipe_path %}
       <a class="button light" href="/recipe-preview?recipe_path={{ source.recipe_path|urlencode }}&input_path_or_url={{ source.url|urlencode }}&source_mode=configured&selected_source_id={{ source.id|urlencode }}">Preview</a>
       {% endif %}
       {% if execution %}
       <a class="button light" href="/sources/{{ source.id }}/dry-run{% if not execution.enabled %}?force_disabled=true{% endif %}">Dry run</a>
       {% endif %}
+      <form method="post" action="/sources/{{ source.id }}/archive" class="inline-form">
+        <button type="submit" class="button light">Archive</button>
+      </form>
+      {% endif %}
     </div>
   </article>
   {% endfor %}
 </div>
+
+{% if archived_sources %}
+<details class="panel diagnostic-panel archived-source-list">
+  <summary>Archived sources ({{ archived_sources|length }})</summary>
+  <p class="muted">Archived sources are hidden from normal source dropdowns and cannot be enabled for daily runs. Restore a source if you want to review or use it again.</p>
+  <div class="source-list">
+    {% for source in archived_sources %}
+    {% set execution = execution_by_source.get(source.id) %}
+    <article class="source-card archived">
+      <div class="source-card-main">
+        <div class="source-title-row">
+          <div>
+            <h2>{{ source.name }}</h2>
+            <div class="muted">{{ source.id }}</div>
+          </div>
+          <div class="badge-row">
+            <span class="badge">{{ source.kind_label }}</span>
+            <span class="badge {{ source.status_badge }}">{{ source.status_label }}</span>
+            {% if execution %}
+            <span class="badge medium">daily-run entry disabled</span>
+            {% endif %}
+          </div>
+        </div>
+        {% if source.notes %}
+        <p class="muted source-note">{{ source.notes }}</p>
+        {% endif %}
+      </div>
+      <div class="source-card-actions">
+        <a class="button light" href="/sources/{{ source.id }}">Detail</a>
+        <form method="post" action="/sources/{{ source.id }}/restore" class="inline-form">
+          <button type="submit" class="button light">Restore</button>
+        </form>
+      </div>
+    </article>
+    {% endfor %}
+  </div>
+</details>
+{% endif %}
 {% endblock %}

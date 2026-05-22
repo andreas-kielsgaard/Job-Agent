@@ -1,0 +1,154 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Recipe Editor</h1>
+<div class="panel">
+  <p class="muted">Edit recipe selectors against a saved calibration snapshot. Live recruiter sites often block embedded frames, so this view uses local page.html artifacts and injects picker/highlight tooling.</p>
+  <form method="get" action="/recipe-editor" class="form-grid">
+    <div>
+      <label>Recipe</label>
+      <select name="recipe_path">
+        {% for option in recipe_options %}
+        <option value="{{ option.value }}" {% if state.recipe_path == option.value %}selected{% endif %}>{{ option.label }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div>
+      <label>Snapshot artifact</label>
+      <select name="artifact_dir">
+        <option value="">Select artifact</option>
+        {% for artifact in state.artifacts %}
+        <option value="{{ artifact.artifact_dir }}" {% if state.artifact_dir == artifact.artifact_dir %}selected{% endif %}>
+          {{ artifact.display_name }}{% if artifact.capture_mode %} - {{ artifact.capture_mode }}{% endif %}{% if not artifact.has_page_html %} - missing page.html{% endif %}
+        </option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="form-actions">
+      <button type="submit">Open editor</button>
+    </div>
+  </form>
+  {% if saved %}
+  <p><span class="badge high">Recipe saved</span></p>
+  {% endif %}
+  {% for warning in state.warnings %}
+  <p><span class="badge warning">{{ warning }}</span></p>
+  {% endfor %}
+</div>
+
+{% if state.recipe_path %}
+<div class="recipe-editor-shell">
+  <section class="recipe-editor-panel">
+    <div class="panel">
+      <div class="row">
+        <h2 style="margin-right:auto;">{{ state.recipe_name }}</h2>
+        <span class="badge">{{ state.mode or "mode not set" }}</span>
+      </div>
+      {% if state.start_url %}
+      <p class="muted">Default URL: <a href="{{ state.start_url }}" target="_blank" rel="noreferrer">{{ state.start_url }}</a></p>
+      {% endif %}
+      <p class="muted">Focus a selector field, then click the matching element in the snapshot. Focusing a field with a selector highlights its matches in the page view.</p>
+      <div id="picked-text" class="picked-text muted">No page element selected yet.</div>
+    </div>
+
+    <form method="post" action="/recipe-editor/save">
+      <input type="hidden" name="recipe_path" value="{{ state.recipe_path }}">
+      <input type="hidden" name="artifact_dir" value="{{ state.artifact_dir }}">
+      <div class="selector-list">
+        {% for field in state.fields %}
+        <div class="selector-field">
+          <div class="row">
+            <label for="{{ field.input_name }}" style="margin-right:auto;">{{ field.label }}{% if field.required %} <span class="badge warning">required</span>{% endif %}</label>
+            <button class="light" type="button" data-highlight-target="{{ field.input_name }}" onclick="showSelectorField(this)">Show</button>
+          </div>
+          <textarea
+            id="{{ field.input_name }}"
+            name="{{ field.input_name }}"
+            class="compact-textarea selector-input"
+            data-selector-path="{{ field.path }}"
+            onfocus="setActiveSelectorField(this)"
+            oninput="highlightSelectorField(this)"
+          >{{ field.value }}</textarea>
+          <p class="muted field-note">{{ field.help_text }}</p>
+        </div>
+        {% endfor %}
+      </div>
+      <div class="form-actions sticky-save">
+        <button type="submit">Save recipe selectors</button>
+      </div>
+    </form>
+  </section>
+
+  <section class="recipe-page-view panel">
+    <div class="row">
+      <h2 style="margin-right:auto;">In-Page View</h2>
+      {% if state.artifact_dir %}
+      <span class="badge">{{ state.artifact_dir }}</span>
+      {% endif %}
+    </div>
+    {% if state.artifact_dir %}
+    <iframe
+      id="recipe-snapshot-frame"
+      class="recipe-snapshot-frame"
+      sandbox="allow-scripts"
+      src="/recipe-editor/snapshot?artifact_dir={{ state.artifact_dir|urlencode }}"
+      title="Recipe calibration page snapshot"
+    ></iframe>
+    {% else %}
+    <p class="muted">Select a calibration artifact with page.html to use the visual picker and highlighter.</p>
+    {% endif %}
+  </section>
+</div>
+{% endif %}
+
+<script>
+  let activeSelectorField = null;
+
+  function firstSelector(value) {
+    return (value || "").split(/[\n,]/).map((item) => item.trim()).find(Boolean) || "";
+  }
+
+  function snapshotFrame() {
+    return document.getElementById("recipe-snapshot-frame");
+  }
+
+  function sendHighlight(selector) {
+    const frame = snapshotFrame();
+    if (!frame || !frame.contentWindow) return;
+    frame.contentWindow.postMessage({ type: "recipe-editor-highlight", selector }, "*");
+  }
+
+  function setActiveSelectorField(field) {
+    activeSelectorField = field;
+    document.querySelectorAll(".selector-field.active").forEach((item) => item.classList.remove("active"));
+    field.closest(".selector-field")?.classList.add("active");
+    highlightSelectorField(field);
+  }
+
+  function highlightSelectorField(field) {
+    sendHighlight(firstSelector(field.value));
+  }
+
+  function showSelectorField(button) {
+    const field = document.getElementById(button.dataset.highlightTarget);
+    if (!field) return;
+    field.focus();
+    setActiveSelectorField(field);
+  }
+
+  window.addEventListener("message", (event) => {
+    if (!event.data || event.data.type !== "recipe-editor-selection") return;
+    const target = activeSelectorField || document.querySelector(".selector-input");
+    if (!target) return;
+    target.value = event.data.selector || "";
+    target.focus();
+    const text = event.data.text || "";
+    document.getElementById("picked-text").textContent = text ? `Selected text: ${text}` : "Selected element has no visible text.";
+    sendHighlight(target.value);
+  });
+
+  document.addEventListener("DOMContentLoaded", () => {
+    const firstField = document.querySelector(".selector-input");
+    if (firstField) setActiveSelectorField(firstField);
+  });
+</script>
+{% endblock %}

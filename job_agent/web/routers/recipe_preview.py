@@ -30,6 +30,7 @@ def recipe_preview_form(
     recipe_path = recipe_path or default_recipe_for_source(selected_source, recipes)
     if selected_source and not input_path_or_url:
         input_path_or_url = selected_source.url
+    saved_health = SourceHealthService(root).get_health(selected_source.id) if selected_source else None
     recipe_explanation = explain_recipe(recipe_path, root=root) if recipe_path else None
     normalized_source_mode = source_mode if source_mode in {"configured", "custom"} else "configured"
     normalized_tab = tab if tab in {"execute", "explain"} else "execute"
@@ -66,6 +67,7 @@ def recipe_preview_form(
             "sources": sources,
             "recipe_options": recipes,
             "tab": normalized_tab,
+            "saved_health": saved_health,
         },
     )
 
@@ -151,6 +153,7 @@ def run_recipe_preview(
         )
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     recipe_explanation = explain_recipe(recipe_path, root=root) if recipe_path else None
+    saved_health = SourceHealthService(root).get_health(source_id.strip()) if source_id.strip() else None
     record_debug_event(
         root,
         feature="recipe_preview",
@@ -187,6 +190,7 @@ def run_recipe_preview(
             "recipe_options": recipes,
             "health_saved": health_saved,
             "tab": "execute",
+            "saved_health": saved_health,
         },
     )
 

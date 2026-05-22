@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from statistics import mean
 from typing import Any
@@ -12,8 +13,64 @@ from job_agent.services.package_index_service import PackageIndexService
 from job_agent.services.source_health_service import SourceHealthRecord, SourceHealthService
 
 REGISTRY_PATH = Path("sources/source-registry.yaml")
-VALID_KINDS = {"manual", "local_yaml", "generic_html", "recipe", "experimental_recipe"}
-VALID_STATUSES = {"active", "disabled", "experimental", "needs_review"}
+SOURCE_KIND_DEFINITIONS = [
+    {
+        "value": "manual",
+        "label": "Manual intake",
+        "description": "Jobs are added by hand from emails, recruiters, or copied postings.",
+    },
+    {
+        "value": "local_yaml",
+        "label": "Local YAML file",
+        "description": "Jobs come from a local YAML file used for samples or controlled imports.",
+    },
+    {
+        "value": "job_board",
+        "label": "Job-board URL",
+        "description": "A public job-board URL without a selected recipe.",
+    },
+    {
+        "value": "recipe",
+        "label": "Recipe-backed job board",
+        "description": "A public job-board URL paired with a recipe for structured extraction.",
+    },
+]
+SOURCE_STATUS_DEFINITIONS = [
+    {
+        "value": "ready",
+        "label": "Ready",
+        "description": "Reviewed as a useful source. Daily runs still require a separate enabled execution entry.",
+        "badge": "high",
+    },
+    {
+        "value": "testing",
+        "label": "Testing",
+        "description": "Available for preview and dry-run checks, but not yet trusted for normal unattended use.",
+        "badge": "medium",
+    },
+    {
+        "value": "needs_review",
+        "label": "Needs review",
+        "description": "Needs human review before being treated as a trusted source.",
+        "badge": "medium",
+    },
+    {
+        "value": "paused",
+        "label": "Paused",
+        "description": "Kept in the registry but intentionally not being advanced right now.",
+        "badge": "low",
+    },
+    {
+        "value": "archived",
+        "label": "Archived",
+        "description": "Hidden from normal source lists and blocked from daily-run enablement.",
+        "badge": "low",
+    },
+]
+VALID_KINDS = {item["value"] for item in SOURCE_KIND_DEFINITIONS}
+VALID_STATUSES = {item["value"] for item in SOURCE_STATUS_DEFINITIONS}
+KIND_ALIASES = {"experimental_recipe": "recipe", "generic_html": "job_board"}
+STATUS_ALIASES = {"active": "ready", "experimental": "testing", "disabled": "paused"}
 
 
 @dataclass
@@ -57,6 +114,26 @@ class SourceRegistryEntry:
     health: SourceHealthRecord = field(default_factory=lambda: SourceHealthRecord(source_id=""))
     stats: SourceStats = field(default_factory=SourceStats)
 
+    @property
+    def kind_label(self) -> str:
+        return source_kind_definition(self.kind)["label"]
+
+    @property
+    def kind_description(self) -> str:
+        return source_kind_definition(self.kind)["description"]
+
+    @property
+    def status_label(self) -> str:
+        return source_status_definition(self.status)["label"]
+
+    @property
+    def status_description(self) -> str:
+        return source_status_definition(self.status)["description"]
+
+    @property
+    def status_badge(self) -> str:
+        return source_status_definition(self.status)["badge"]
+
 
 class SourceRegistryService:
     def __init__(self, root: Path = ROOT) -> None:
@@ -90,6 +167,7 @@ class SourceRegistryService:
         source_id: str,
         *,
         name: str,
+        kind: str,
         url: str,
         status: str,
         recipe_path: str,
@@ -98,7 +176,10 @@ class SourceRegistryService:
         current = self.get_source(source_id)
         if not current:
             raise KeyError(f"Source not found: {source_id}")
-        normalized_status = status.strip()
+        normalized_kind = _coerce_kind(kind)
+        if normalized_kind not in VALID_KINDS:
+            raise ValueError(f"Unsupported source type: {kind}")
+        normalized_status = _coerce_status(status)
         if normalized_status not in VALID_STATUSES:
             raise ValueError(f"Unsupported source status: {status}")
         normalized_recipe_path = recipe_path.replace("\\", "/").strip()
@@ -123,14 +204,14 @@ class SourceRegistryService:
             sources.append(target)
 
         target["name"] = name.strip() or current.name
+        target["kind"] = normalized_kind
         target["url"] = url.strip()
         target["status"] = normalized_status
         target["recipe_path"] = normalized_recipe_path
         target["notes"] = notes.strip()
-        if normalized_recipe_path and str(target.get("kind") or "") not in {"recipe", "experimental_recipe"}:
-            target["kind"] = "experimental_recipe"
-        if not normalized_recipe_path and str(target.get("kind") or "") in {"recipe", "experimental_recipe"}:
-            target["kind"] = "manual"
+        if normalized_status == "archived":
+            target["enabled"] = False
+            target["archived_at"] = _utc_now()
 
         self.path.parent.mkdir(parents=True, exist_ok=True)
         write_yaml(self.path, data)
@@ -138,6 +219,34 @@ class SourceRegistryService:
         if not updated:
             raise KeyError(f"Source not found after update: {source_id}")
         return updated
+
+    def archive_source(self, source_id: str) -> SourceRegistryEntry:
+        current = self.get_source(source_id)
+        if not current:
+            raise KeyError(f"Source not found: {source_id}")
+        return self.update_source(
+            source_id,
+            name=current.name,
+            kind=current.kind,
+            url=current.url,
+            status="archived",
+            recipe_path=current.recipe_path,
+            notes=current.notes,
+        )
+
+    def restore_source(self, source_id: str, status: str = "needs_review") -> SourceRegistryEntry:
+        current = self.get_source(source_id)
+        if not current:
+            raise KeyError(f"Source not found: {source_id}")
+        return self.update_source(
+            source_id,
+            name=current.name,
+            kind=current.kind,
+            url=current.url,
+            status=status,
+            recipe_path=current.recipe_path,
+            notes=current.notes,
+        )
 
     def adopt_recipe_path(self, source_id: str, recipe_path: str, note: str = "") -> SourceRegistryEntry:
         self.ensure_registry()
@@ -156,10 +265,10 @@ class SourceRegistryService:
             if _slug(str(item.get("id") or item.get("name") or "")) != normalized_source_id:
                 continue
             item["recipe_path"] = normalized_recipe_path
-            if str(item.get("kind") or "") not in {"recipe", "experimental_recipe"}:
-                item["kind"] = "experimental_recipe"
-            if str(item.get("status") or "") == "needs_review":
-                item["status"] = "experimental"
+            if _normalize_kind(str(item.get("kind") or "")) != "recipe":
+                item["kind"] = "recipe"
+            if _normalize_status(str(item.get("status") or "")) == "needs_review":
+                item["status"] = "testing"
             tags = _list_value(item.get("tags"))
             for tag in ["recipe", "adopted"]:
                 if tag not in tags:
@@ -177,14 +286,14 @@ class SourceRegistryService:
 
     def _entry_from_mapping(self, data: dict[str, Any]) -> SourceRegistryEntry:
         source_id = _slug(str(data.get("id") or data.get("name") or "source"))
-        kind = str(data.get("kind") or "manual").strip()
-        status = str(data.get("status") or "needs_review").strip()
+        kind = _normalize_kind(str(data.get("kind") or "manual"))
+        status = _normalize_status(str(data.get("status") or "needs_review"))
         recipe_path = str(data.get("recipe_path") or "").strip()
         return SourceRegistryEntry(
             id=source_id,
             name=str(data.get("name") or source_id).strip(),
-            kind=kind if kind in VALID_KINDS else "manual",
-            status=status if status in VALID_STATUSES else "needs_review",
+            kind=kind,
+            status=status,
             url=str(data.get("url") or "").strip(),
             recipe_path=recipe_path,
             added_at=str(data.get("added_at") or "").strip(),
@@ -250,7 +359,7 @@ def _default_sources() -> list[dict[str, Any]]:
             "id": "manual-intake",
             "name": "Manual Intake",
             "kind": "manual",
-            "status": "active",
+            "status": "ready",
             "url": "",
             "recipe_path": "",
             "added_at": "2026-05-09",
@@ -262,7 +371,7 @@ def _default_sources() -> list[dict[str, Any]]:
             "id": "sample-jobs",
             "name": "Sample Jobs",
             "kind": "local_yaml",
-            "status": "active",
+            "status": "ready",
             "url": "",
             "recipe_path": "",
             "added_at": "2026-05-09",
@@ -273,37 +382,37 @@ def _default_sources() -> list[dict[str, Any]]:
         {
             "id": "eursap-jobs",
             "name": "Eursap Jobs",
-            "kind": "experimental_recipe",
-            "status": "experimental",
+            "kind": "recipe",
+            "status": "testing",
             "url": "https://eursap.eu/jobs",
             "recipe_path": "sources/recipes/experimental/eursap-jobs.yaml",
             "added_at": "2026-05-09",
             "enabled": False,
-            "notes": "Live-calibrated experimental recipe from saved local calibration artifacts. Not connected to daily runs.",
+            "notes": "Recipe-backed source from saved local calibration artifacts. Not connected to daily runs.",
             "tags": ["sap", "recipe", "live-calibrated"],
         },
         {
             "id": "whitehall-sap-contract",
             "name": "Whitehall Resources SAP Jobs",
-            "kind": "experimental_recipe",
-            "status": "experimental",
+            "kind": "recipe",
+            "status": "testing",
             "url": "https://www.whitehallresources.com/sap-jobs/",
             "recipe_path": "sources/recipes/experimental/whitehall-sap-contract.yaml",
             "added_at": "2026-05-09",
             "enabled": False,
-            "notes": "Live-calibrated experimental recipe using saved Whitehall SAP job-item listing blocks. Not connected to daily runs.",
+            "notes": "Recipe-backed source using saved Whitehall SAP job-item listing blocks. Not connected to daily runs.",
             "tags": ["sap", "recipe", "live-calibrated"],
         },
         {
             "id": "montreal-associates-jobs",
             "name": "Montreal Associates Job Search",
-            "kind": "experimental_recipe",
+            "kind": "recipe",
             "status": "needs_review",
             "url": "https://www.montrealassociates.com/uk/candidates/job-search/",
             "recipe_path": "sources/recipes/experimental/montreal-associates-jobs.yaml",
             "added_at": "2026-05-09",
             "enabled": False,
-            "notes": "Partial rendered experimental recipe. Saved preview works, but broad results include non-SAP roles.",
+            "notes": "Partial rendered recipe. Saved preview works, but broad results include non-SAP roles.",
             "tags": ["sap", "recipe", "partial"],
         },
     ]
@@ -332,8 +441,8 @@ def _recipe_source_mappings(root: Path, existing_ids: set[str]) -> list[dict[str
             {
                 "id": source_id,
                 "name": str(data.get("source_name") or path.stem.replace("-", " ").title()).strip(),
-                "kind": "experimental_recipe" if "/experimental/" in f"/{relative}" else "recipe",
-                "status": "experimental" if "/experimental/" in f"/{relative}" else "needs_review",
+                "kind": "recipe",
+                "status": "testing" if "/experimental/" in f"/{relative}" else "needs_review",
                 "url": start_url,
                 "recipe_path": relative,
                 "added_at": "",
@@ -353,8 +462,8 @@ def _source_entry_mapping(source: SourceRegistryEntry) -> dict[str, Any]:
     return {
         "id": source.id,
         "name": source.name,
-        "kind": source.kind,
-        "status": source.status,
+        "kind": _normalize_kind(source.kind),
+        "status": _normalize_status(source.status),
         "url": source.url,
         "recipe_path": source.recipe_path,
         "added_at": source.added_at,
@@ -362,6 +471,43 @@ def _source_entry_mapping(source: SourceRegistryEntry) -> dict[str, Any]:
         "notes": source.notes,
         "tags": list(source.tags),
     }
+
+
+def source_kind_definition(kind: str) -> dict[str, str]:
+    normalized = _normalize_kind(kind)
+    return next((item for item in SOURCE_KIND_DEFINITIONS if item["value"] == normalized), SOURCE_KIND_DEFINITIONS[0])
+
+
+def source_status_definition(status: str) -> dict[str, str]:
+    normalized = _normalize_status(status)
+    fallback = next(item for item in SOURCE_STATUS_DEFINITIONS if item["value"] == "needs_review")
+    return next((item for item in SOURCE_STATUS_DEFINITIONS if item["value"] == normalized), fallback)
+
+
+def _normalize_kind(kind: str) -> str:
+    normalized = _coerce_kind(kind)
+    return normalized if normalized in VALID_KINDS else "manual"
+
+
+def _normalize_status(status: str) -> str:
+    normalized = _coerce_status(status)
+    return normalized if normalized in VALID_STATUSES else "needs_review"
+
+
+def _coerce_kind(kind: str) -> str:
+    normalized = kind.strip() or "manual"
+    normalized = KIND_ALIASES.get(normalized, normalized)
+    return normalized
+
+
+def _coerce_status(status: str) -> str:
+    normalized = status.strip() or "needs_review"
+    normalized = STATUS_ALIASES.get(normalized, normalized)
+    return normalized
+
+
+def _utc_now() -> str:
+    return datetime.now(UTC).isoformat(timespec="seconds")
 
 
 def _stats_from_packages(packages: list[dict[str, Any]]) -> SourceStats:

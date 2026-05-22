@@ -322,21 +322,44 @@ def test_source_overview_and_detail_routes_render(client: TestClient) -> None:
 
     assert detail.status_code == 200
     assert "What These Labels Mean" in detail.text
-    assert "Review lifecycle. Experimental means usable for testing" in detail.text
+    assert "Source type" in detail.text
+    assert "Recipe-backed job board" in detail.text
+    assert "Lifecycle" in detail.text
+    assert "Testing" in detail.text
     assert "Next Actions" in detail.text
     assert "Source Settings" in detail.text
     assert "Save source settings" in detail.text
     assert "Capture one-page calibration artifact" in detail.text
+    assert "Selected recipe" in detail.text
+    assert "Use selected recipe" in detail.text
+    assert "Open recipe review" in detail.text
+    assert "Open compatibility check" in detail.text
+    assert "Open recipe editor" in detail.text
     assert "sources/recipes/experimental/eursap-jobs.yaml" in detail.text
     assert "live-calibrated experimental" in detail.text
     assert "Extraction health is based on manual recipe preview/test results" in detail.text
-    assert "Source value is based on saved job packages and review statuses" in detail.text
+    assert "Source value is based on saved job packages and job review outcomes" in detail.text
     assert "Daily-run Execution" in detail.text
-    assert "Create disabled execution entry" in detail.text
+    assert "Prepare disabled daily-run entry" in detail.text
     assert "No run data yet" in detail.text
     assert "/recipe-preview" in detail.text
     assert "selected_source_id=eursap-jobs" in detail.text
     assert "Contact tracking not implemented yet" in detail.text
+
+
+def test_source_detail_updates_selected_recipe(client: TestClient, project_root: Path) -> None:
+    from job_agent.services.source_registry_service import SourceRegistryService
+
+    response = client.post(
+        "/sources/eursap-jobs/recipe/update",
+        data={"recipe_path": "sources/recipes/experimental/whitehall-sap-contract.yaml"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    source = SourceRegistryService(project_root).get_source("eursap-jobs")
+    assert source.recipe_path == "sources/recipes/experimental/whitehall-sap-contract.yaml"
+    assert source.kind == "recipe"
 
 
 def test_source_detail_updates_registry_fields(client: TestClient, project_root: Path) -> None:
@@ -344,8 +367,9 @@ def test_source_detail_updates_registry_fields(client: TestClient, project_root:
         "/sources/eursap-jobs/registry/update",
         data={
             "name": "Eursap Jobs Reviewed",
+            "kind": "recipe",
             "url": "https://eursap.eu/jobs?contract=sap",
-            "status": "active",
+            "status": "ready",
             "recipe_path": "sources/recipes/experimental/eursap-jobs.yaml",
             "notes": "Ready for controlled dry run.",
         },
@@ -358,6 +382,35 @@ def test_source_detail_updates_registry_fields(client: TestClient, project_root:
     assert "Eursap Jobs Reviewed" in detail.text
     assert "https://eursap.eu/jobs?contract=sap" in detail.text
     assert "Ready for controlled dry run." in detail.text
+
+
+def test_source_archive_hides_source_from_default_overview_and_disables_execution(
+    client: TestClient, project_root: Path
+) -> None:
+    from job_agent.io.yaml_store import read_yaml
+
+    client.post("/sources/whitehall-sap-contract/execution/create", follow_redirects=False)
+
+    archive_response = client.post("/sources/whitehall-sap-contract/archive", follow_redirects=False)
+
+    assert archive_response.status_code == 303
+    assert archive_response.headers["location"].startswith("/sources")
+    config = read_yaml(project_root / "sources" / "recruiting-sites.yaml", {})
+    assert config["sources"][0]["enabled"] is False
+
+    overview = client.get("/sources")
+
+    active_section = overview.text.split("Archived sources", 1)[0]
+    assert "Whitehall Resources SAP Jobs" not in active_section
+    assert "Archived sources (1)" in overview.text
+    assert "Whitehall Resources SAP Jobs" in overview.text
+    assert "Restore" in overview.text
+
+    restore_response = client.post("/sources/whitehall-sap-contract/restore", follow_redirects=False)
+
+    assert restore_response.status_code == 303
+    detail = client.get("/sources/whitehall-sap-contract")
+    assert "Needs review" in detail.text
 
 
 def test_source_detail_capture_calibration_action_is_bounded(
@@ -430,6 +483,14 @@ def test_source_routes_render_saved_health(client: TestClient, project_root: Pat
 
     overview = client.get("/sources")
     detail = client.get("/sources/eursap-jobs")
+    compatibility = client.get(
+        "/compatibility?source_mode=configured&selected_source_id=eursap-jobs"
+        "&recipe_path=sources/recipes/experimental/eursap-jobs.yaml&show_saved=1"
+    )
+    preview = client.get(
+        "/recipe-preview?source_mode=configured&selected_source_id=eursap-jobs"
+        "&recipe_path=sources/recipes/experimental/eursap-jobs.yaml"
+    )
 
     assert overview.status_code == 200
     assert "good" in overview.text
@@ -438,6 +499,12 @@ def test_source_routes_render_saved_health(client: TestClient, project_root: Pat
     assert "Recipe Health" in detail.text
     assert "output/recipe-calibration/eursap/page.html" in detail.text
     assert "9 jobs extracted, 9 useful titles, no generic labels." in detail.text
+    assert compatibility.status_code == 200
+    assert "Saved Source / Recipe Result" in compatibility.text
+    assert "9 jobs extracted, 9 useful titles, no generic labels." in compatibility.text
+    assert preview.status_code == 200
+    assert "Saved Review Result" in preview.text
+    assert "9 jobs extracted, 9 useful titles, no generic labels." in preview.text
 
 
 def test_source_routes_render_value_metrics(client: TestClient, project_root: Path) -> None:
