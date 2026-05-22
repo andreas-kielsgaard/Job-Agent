@@ -311,7 +311,7 @@ def test_source_overview_and_detail_routes_render(client: TestClient) -> None:
     assert 'class="source-list"' in overview.text
     assert 'class="source-card"' in overview.text
     assert "Extraction health" in overview.text
-    assert "Source value" in overview.text
+    assert "Historical results" in overview.text
     assert "execution missing" in overview.text
     assert "Manual Intake" in overview.text
     assert "Eursap Jobs" in overview.text
@@ -337,11 +337,14 @@ def test_source_overview_and_detail_routes_render(client: TestClient) -> None:
     assert "Open recipe editor" in detail.text
     assert "sources/recipes/experimental/eursap-jobs.yaml" in detail.text
     assert "live-calibrated experimental" in detail.text
-    assert "Extraction health is based on manual recipe preview/test results" in detail.text
-    assert "Source value is based on saved job packages and job review outcomes" in detail.text
+    assert "Last saved review" in detail.text
+    assert "Generate or replace recipe" in detail.text
+    assert "Draft recipes" in detail.text
+    assert "Historical Results" in detail.text
+    assert "This summarizes jobs already saved from this source in previous runs" in detail.text
     assert "Daily-run Execution" in detail.text
     assert "Prepare disabled daily-run entry" in detail.text
-    assert "No run data yet" in detail.text
+    assert "No saved jobs from this source yet" in detail.text
     assert "/recipe-preview" in detail.text
     assert "selected_source_id=eursap-jobs" in detail.text
     assert "Contact tracking not implemented yet" in detail.text
@@ -496,7 +499,7 @@ def test_source_routes_render_saved_health(client: TestClient, project_root: Pat
     assert "good" in overview.text
     assert "9 jobs extracted, 9 useful titles, no generic labels." in overview.text
     assert detail.status_code == 200
-    assert "Recipe Health" in detail.text
+    assert "Last saved review" in detail.text
     assert "output/recipe-calibration/eursap/page.html" in detail.text
     assert "9 jobs extracted, 9 useful titles, no generic labels." in detail.text
     assert compatibility.status_code == 200
@@ -532,10 +535,10 @@ def test_source_routes_render_value_metrics(client: TestClient, project_root: Pa
     detail = client.get("/sources/sample-jobs")
 
     assert overview.status_code == 200
-    assert "promising" in overview.text
+    assert "Promising results" in overview.text
     assert "Avg/best score: 84/84" in overview.text
     assert detail.status_code == 200
-    assert "Value status" in detail.text
+    assert "Result history" in detail.text
     assert "SAP ABAP Consultant" in detail.text
     assert "Last seen run" in detail.text
 

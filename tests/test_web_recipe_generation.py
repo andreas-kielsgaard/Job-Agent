@@ -25,14 +25,14 @@ limits:
 """
 
 
-def test_source_detail_displays_recipe_generation_panel_and_artifacts(client: TestClient, project_root: Path) -> None:
+def test_source_detail_displays_recipe_generation_controls_and_artifacts(client: TestClient, project_root: Path) -> None:
     _write_artifact(project_root)
 
     response = client.get("/sources/eursap-jobs")
 
     assert response.status_code == 200
-    assert "Recipe Generation" in response.text
-    assert "Generate pending candidate" in response.text
+    assert "Generate or replace recipe" in response.text
+    assert "Save draft recipe for review" in response.text
     assert "eursap-artifact" in response.text
     assert "a.looking__card" in response.text
     assert "--save-candidate" in response.text
@@ -135,7 +135,7 @@ def test_source_detail_displays_relevant_pending_and_rejected_candidates(
     assert response.status_code == 200
     assert pending.candidate_id in response.text
     assert rejected.candidate_id in response.text
-    assert "Recipe Candidates" in response.text
+    assert "Draft recipes" in response.text
     assert "rejected" in response.text
 
 

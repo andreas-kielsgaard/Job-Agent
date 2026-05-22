@@ -91,11 +91,20 @@ class SourceStats:
     last_successful_extraction: str = ""
     last_successful_run_id: str = ""
     value_status: str = "no_data"
-    value_summary: str = "No run data yet."
+    value_summary: str = "No saved jobs from this source yet."
 
     @property
     def best_recent_match(self) -> str:
         return self.best_recent_match_title
+
+    @property
+    def value_label(self) -> str:
+        return {
+            "no_data": "No saved jobs yet",
+            "low_value": "Mostly low fit",
+            "mixed": "Mixed results",
+            "promising": "Promising results",
+        }.get(self.value_status, self.value_status.replace("_", " ").title())
 
 
 @dataclass
@@ -608,7 +617,7 @@ def _value_summary(
     average_match_score: int,
 ) -> str:
     if value_status == "no_data":
-        return "No run data yet."
+        return "No saved jobs from this source yet."
     if value_status == "promising":
         return (
             f"{jobs_found_total} saved jobs with {strong_matches} strong and "

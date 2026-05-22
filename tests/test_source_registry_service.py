@@ -204,7 +204,8 @@ def test_source_stats_with_no_packages_show_no_data(project_root: Path) -> None:
     assert source is not None
     assert source.stats.jobs_found_total == 0
     assert source.stats.value_status == "no_data"
-    assert source.stats.value_summary == "No run data yet."
+    assert source.stats.value_label == "No saved jobs yet"
+    assert source.stats.value_summary == "No saved jobs from this source yet."
 
 
 def test_source_stats_with_strong_and_exploratory_packages_are_promising(project_root: Path) -> None:
@@ -251,6 +252,7 @@ def test_source_stats_with_strong_and_exploratory_packages_are_promising(project
     assert source.stats.best_match_score == 88
     assert source.stats.best_recent_match_title == "SAP ABAP Consultant"
     assert source.stats.value_status == "promising"
+    assert source.stats.value_label == "Promising results"
 
 
 def test_source_stats_with_not_interesting_low_score_packages_are_low_value(project_root: Path) -> None:
@@ -292,6 +294,7 @@ def test_source_stats_with_not_interesting_low_score_packages_are_low_value(proj
     assert source.stats.weak_or_excluded_matches == 2
     assert source.stats.not_interesting_count == 2
     assert source.stats.value_status == "low_value"
+    assert source.stats.value_label == "Mostly low fit"
 
 
 def test_manual_intake_matches_manual_posting_packages(project_root: Path) -> None:

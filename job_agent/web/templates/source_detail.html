@@ -162,7 +162,6 @@
   {% endif %}
     <a class="button light" href="{{ compatibility_url }}">Open compatibility check</a>
     <a class="button light" href="{{ recipe_editor_url }}">Open recipe editor</a>
-    <a class="button light" href="#recipe-generation">Generate replacement recipe candidate</a>
   </div>
   {% if recipe_explanation %}
   <details>
@@ -179,47 +178,68 @@
     <pre class="copy-source">python -m job_agent.cli test-recipe {{ source.recipe_path }} {{ source.url }} --base-url {{ source.url }} --source-id {{ source.id }}</pre>
   </details>
   {% else %}
-  <div class="action-row" style="margin-top:14px;">
-    <a class="button light" href="#recipe-generation">Generate new recipe candidate</a>
-    <a class="button light" href="{{ recipe_editor_url }}">Open recipe editor</a>
-  </div>
-  <p class="muted">Select an existing recipe above or generate a new candidate from a one-page calibration artifact.</p>
+  <div class="action-row" style="margin-top:14px;"><a class="button light" href="{{ recipe_editor_url }}">Open recipe editor</a></div>
+  <p class="muted">Select an existing recipe above or generate a new draft from a one-page calibration artifact.</p>
   {% endif %}
-</div>
 
-{% if source.recipe_path %}
-<div class="panel">
-  <h2>Recipe Lifecycle</h2>
-  <p class="muted">Generation, approval, health, and execution are separate stages. Approval can create a recipe and save health; it does not enable daily runs.</p>
-  <div class="grid">
-    <div class="stat"><span>Calibration artifacts</span><strong>{{ recipe_generation_status.artifact_count }}</strong></div>
-    <div class="stat"><span>Pending candidates</span><strong>{{ recipe_generation_status.pending_candidates }}</strong></div>
-    <div class="stat"><span>Approved candidates</span><strong>{{ recipe_generation_status.approved_candidates }}</strong></div>
-    <div class="stat"><span>Latest candidate</span><strong>{{ recipe_generation_status.latest_candidate_status or "none" }}</strong></div>
-    <div class="stat"><span>Approved recipe</span><strong>{{ recipe_generation_status.latest_approved_recipe_path or "none" }}</strong></div>
-    <div class="stat"><span>Source health</span><strong>{{ recipe_generation_status.source_health_status }}</strong></div>
-    <div class="stat"><span>Daily-run entry</span><strong>{{ "prepared" if recipe_generation_status.execution_entry_exists else "not prepared" }}</strong></div>
-    <div class="stat"><span>Execution enabled</span><strong>{{ "yes" if recipe_generation_status.execution_enabled else "no" }}</strong></div>
-  </div>
-  {% if recipe_generation_status.best_artifact %}
-  <p><strong>Best local artifact:</strong> {{ recipe_generation_status.best_artifact.display_name }} - {{ recipe_generation_status.best_artifact.match_reason }}</p>
+  {% if source.recipe_path %}
+  <details>
+    <summary>Last saved review</summary>
+    <p class="muted">Saved recipe review results say whether extraction appeared to work for the last tested input. They do not enable this source for daily runs.</p>
+    <div class="grid" style="margin-top:12px;">
+      <div class="stat"><span>Status</span><strong>{{ source.health.health_status }}</strong></div>
+      <div class="stat"><span>Last review</span><strong>{{ source.health.last_preview_at or "Never" }}</strong></div>
+      <div class="stat"><span>Input type</span><strong>{{ source.health.last_input_type or "Unknown" }}</strong></div>
+      <div class="stat"><span>Mode used</span><strong>{{ source.health.mode_used or "Unknown" }}</strong></div>
+      <div class="stat"><span>Jobs extracted</span><strong>{{ source.health.extracted_job_count }}</strong></div>
+      <div class="stat"><span>Useful titles</span><strong>{{ source.health.useful_titles }}</strong></div>
+      <div class="stat"><span>Generic labels</span><strong>{{ source.health.generic_labels }}</strong></div>
+      <div class="stat"><span>Unique URLs</span><strong>{{ source.health.unique_urls }}</strong></div>
+      <div class="stat"><span>Avg description</span><strong>{{ source.health.average_description_length }}</strong></div>
+    </div>
+    <p><strong>Input used:</strong> {{ source.health.last_input_value or "No saved review input yet." }}</p>
+    <p><strong>Summary:</strong> {{ source.health.health_summary }}</p>
+    {% if source.health.warnings %}
+    <ul>
+      {% for warning in source.health.warnings %}
+      <li>{{ warning }}</li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+  </details>
   {% endif %}
-  {% for warning in recipe_generation_status.warnings %}
-  <p class="muted">Workflow note: {{ warning }}</p>
-  {% endfor %}
-  {% if recipe_generation_status.latest_approved_recipe_path and not recipe_generation_status.approved_matches_source_recipe_path and recipe_generation_status.latest_candidate_id %}
-  <p><a class="button light" href="/recipe-candidates/{{ recipe_generation_status.latest_candidate_id }}?source_id={{ source.id }}">Review adoption for latest approved candidate</a></p>
-  {% endif %}
-</div>
-{% endif %}
 
-<div class="panel" id="recipe-generation">
-  <h2>Recipe Generation</h2>
-  <p class="muted">Generate a pending recipe candidate from saved local calibration artifacts. A candidate is a proposed recipe version for review; it is not active until approved and adopted.</p>
+  <details>
+    <summary>Setup status</summary>
+    <p class="muted">These are review and setup checkpoints. Creating, approving, or selecting a recipe does not enable daily runs.</p>
+    <div class="grid" style="margin-top:12px;">
+      <div class="stat"><span>Calibration artifacts</span><strong>{{ recipe_generation_status.artifact_count }}</strong></div>
+      <div class="stat"><span>Drafts waiting review</span><strong>{{ recipe_generation_status.pending_candidates }}</strong></div>
+      <div class="stat"><span>Approved drafts</span><strong>{{ recipe_generation_status.approved_candidates }}</strong></div>
+      <div class="stat"><span>Latest draft</span><strong>{{ recipe_generation_status.latest_candidate_status or "none" }}</strong></div>
+      <div class="stat"><span>Approved recipe</span><strong>{{ recipe_generation_status.latest_approved_recipe_path or "none" }}</strong></div>
+      <div class="stat"><span>Saved review status</span><strong>{{ recipe_generation_status.source_health_status }}</strong></div>
+      <div class="stat"><span>Daily-run entry</span><strong>{{ "prepared" if recipe_generation_status.execution_entry_exists else "not prepared" }}</strong></div>
+      <div class="stat"><span>Execution enabled</span><strong>{{ "yes" if recipe_generation_status.execution_enabled else "no" }}</strong></div>
+    </div>
+    {% if recipe_generation_status.best_artifact %}
+    <p><strong>Best local artifact:</strong> {{ recipe_generation_status.best_artifact.display_name }} - {{ recipe_generation_status.best_artifact.match_reason }}</p>
+    {% endif %}
+    {% for warning in recipe_generation_status.warnings %}
+    <p class="muted">Note: {{ warning }}</p>
+    {% endfor %}
+    {% if recipe_generation_status.latest_approved_recipe_path and not recipe_generation_status.approved_matches_source_recipe_path and recipe_generation_status.latest_candidate_id %}
+    <p><a class="button light" href="/recipe-candidates/{{ recipe_generation_status.latest_candidate_id }}?source_id={{ source.id }}">Review adoption for latest approved draft</a></p>
+    {% endif %}
+  </details>
+
+  <details id="recipe-generation">
+  <summary>Generate or replace recipe</summary>
+  <p class="muted">Use a one-page calibration capture to create a draft recipe for review. The draft is not active until it is approved and selected for this source.</p>
   {% if source.url %}
   <form method="post" action="/sources/{{ source.id }}/recipe-calibration/capture">
     <div class="row">
-      <label>Candidate regions <input type="number" name="max_candidates" value="30" min="5" max="50" style="max-width:7rem;"></label>
+      <label>Page regions <input type="number" name="max_candidates" value="30" min="5" max="50" style="max-width:7rem;"></label>
       <label class="check"><input type="checkbox" name="rendered" value="1"> Render with browser</label>
       <button type="submit" class="button light">Capture one-page calibration artifact</button>
     </div>
@@ -239,7 +259,7 @@
     <div class="row">
       <label class="check"><input type="checkbox" name="refine" value="1" checked> Refine locally</label>
       <label>Max attempts <input type="number" name="max_attempts" value="3" min="1" max="8" style="max-width:7rem;"></label>
-      <button type="submit" class="button">Generate pending candidate</button>
+      <button type="submit" class="button">Save draft recipe for review</button>
     </div>
   </form>
   <details>
@@ -247,7 +267,7 @@
     {% for artifact in recipe_artifacts %}
     <div class="stat" style="margin:0.6rem 0;">
       <span>{{ artifact.display_name }} | {{ artifact.match_reason }}</span>
-      <strong>{{ artifact.capture_mode or "unknown mode" }} | {{ artifact.candidate_count }} candidates | page.html: {{ "yes" if artifact.has_page_html else "no" }}</strong>
+      <strong>{{ artifact.capture_mode or "unknown mode" }} | {{ artifact.candidate_count }} regions | page.html: {{ "yes" if artifact.has_page_html else "no" }}</strong>
       <p class="muted">{{ artifact.capture_url or "No capture URL" }}</p>
       {% if artifact.top_candidate_selectors %}
       <p class="muted">Selectors: {{ artifact.top_candidate_selectors|join(", ") }}</p>
@@ -269,16 +289,16 @@
     <pre class="copy-source">python -m job_agent.cli calibrate-recipe {{ source.url or "https://example.com/jobs" }}{% if source.recipe_path %} --recipe {{ source.recipe_path }}{% endif %} --max-candidates 30</pre>
   </details>
   {% endif %}
-</div>
+  </details>
 
-<div class="panel">
-  <h2>Recipe Candidates</h2>
-  <p class="muted">Candidates are saved proposed recipe revisions. Approving checks and writes a recipe file; adopting points this source at that approved recipe. Neither step enables daily runs by itself.</p>
+  <details>
+  <summary>Draft recipes ({{ recipe_candidates|length }})</summary>
+  <p class="muted">Drafts are proposed recipe revisions. Approving writes a recipe file; selecting it points this source at that recipe. Neither step enables daily runs.</p>
   {% if recipe_candidates %}
   <table>
     <thead>
       <tr>
-        <th>Candidate</th>
+        <th>Draft</th>
         <th>Status</th>
         <th>Schema</th>
         <th>Refinement</th>
@@ -299,7 +319,7 @@
         <td>
           <a class="button light" href="/recipe-candidates/{{ candidate.candidate_id }}?source_id={{ source.id }}">Show</a>
           {% if candidate.status == "pending" %}
-          <a class="button light" href="/recipe-candidates/{{ candidate.candidate_id }}?source_id={{ source.id }}">Approve</a>
+          <a class="button light" href="/recipe-candidates/{{ candidate.candidate_id }}?source_id={{ source.id }}">Review</a>
           <form method="post" action="/recipe-candidates/{{ candidate.candidate_id }}/reject" style="display:inline;">
             <input type="hidden" name="source_id" value="{{ source.id }}">
             <input type="hidden" name="reason" value="Rejected from source detail.">
@@ -312,50 +332,22 @@
     </tbody>
   </table>
   {% else %}
-  <p class="muted">No saved recipe candidates match this source yet.</p>
+  <p class="muted">No saved draft recipes match this source yet.</p>
   {% endif %}
-</div>
-
-<div class="panel">
-  <h2>Recipe Health</h2>
-  {% if source.recipe_path %}
-  <p class="muted">Extraction health is based on manual recipe preview/test results. It says whether extraction appears to work; it does not enable this source.</p>
-  <div class="grid">
-    <div class="stat"><span>Status</span><strong>{{ source.health.health_status }}</strong></div>
-    <div class="stat"><span>Last preview</span><strong>{{ source.health.last_preview_at or "Never" }}</strong></div>
-    <div class="stat"><span>Input type</span><strong>{{ source.health.last_input_type or "Unknown" }}</strong></div>
-    <div class="stat"><span>Mode used</span><strong>{{ source.health.mode_used or "Unknown" }}</strong></div>
-    <div class="stat"><span>Jobs extracted</span><strong>{{ source.health.extracted_job_count }}</strong></div>
-    <div class="stat"><span>Useful titles</span><strong>{{ source.health.useful_titles }}</strong></div>
-    <div class="stat"><span>Generic labels</span><strong>{{ source.health.generic_labels }}</strong></div>
-    <div class="stat"><span>Unique URLs</span><strong>{{ source.health.unique_urls }}</strong></div>
-    <div class="stat"><span>Avg description</span><strong>{{ source.health.average_description_length }}</strong></div>
-  </div>
-  <p><strong>Input used:</strong> {{ source.health.last_input_value or "No saved preview input yet." }}</p>
-  <p><strong>Summary:</strong> {{ source.health.health_summary }}</p>
-  {% if source.health.warnings %}
-  <ul>
-    {% for warning in source.health.warnings %}
-    <li>{{ warning }}</li>
-    {% endfor %}
-  </ul>
-  {% endif %}
-  {% else %}
-  <p class="muted">Recipe health is not applicable to this source yet.</p>
-  {% endif %}
+  </details>
 </div>
 
 {% if source.recipe_path %}
 <div class="panel">
   <h2>Go-Live Readiness</h2>
-  <p class="muted">Go-live readiness is based on the configured execution source dry run. It is separate from recipe preview health and does not write packages or run records.</p>
+  <p class="muted">Go-live readiness is based on the configured execution source dry run. It is separate from saved recipe review results and does not write packages or run records.</p>
   <div class="grid">
     <div class="stat"><span>Readiness</span><strong>{{ go_live_readiness.readiness_status }}</strong></div>
     <div class="stat"><span>Last dry run</span><strong>{{ go_live_readiness.last_checked_at or "Never" }}</strong></div>
     <div class="stat"><span>Dry-run status</span><strong>{{ go_live_readiness.dry_run_status }}</strong></div>
     <div class="stat"><span>Dry-run jobs</span><strong>{{ go_live_readiness.dry_run_job_count }}</strong></div>
     <div class="stat"><span>Dry-run warnings</span><strong>{{ go_live_readiness.dry_run_warning_count }}</strong></div>
-    <div class="stat"><span>Source health</span><strong>{{ go_live_readiness.checks.source_health_status }}</strong></div>
+    <div class="stat"><span>Saved review status</span><strong>{{ go_live_readiness.checks.source_health_status }}</strong></div>
     <div class="stat"><span>Daily-run entry</span><strong>{{ "prepared" if go_live_readiness.checks.execution_entry_exists else "not prepared" }}</strong></div>
     <div class="stat"><span>Recipe paths match</span><strong>{{ "yes" if go_live_readiness.checks.execution_entry_recipe_path_matches_registry else "no" }}</strong></div>
   </div>
@@ -441,7 +433,7 @@ enabled: {{ "true" if execution_entry.enabled else "false" }}</pre>
   {% endif %}
   {% endif %}
   {% if source.health.health_status != "good" %}
-  <p class="muted">Run recipe preview and save source health before enabling.</p>
+  <p class="muted">Run recipe preview and save the review result before enabling.</p>
   {% endif %}
   <p class="muted">A source registry entry existing does not mean daily-run execution is prepared or enabled. Good health does not enable a source by itself.</p>
   <p class="muted">Progression: Recipe Preview tests extraction from one input. Source Dry Run tests this configured execution source without writes. Run this source now writes normal outputs for this source only. Daily Run executes all enabled sources.</p>
@@ -449,13 +441,13 @@ enabled: {{ "true" if execution_entry.enabled else "false" }}</pre>
 {% endif %}
 
 <div class="panel">
-  <h2>Source Value</h2>
-  <p class="muted">Source value is based on saved job packages and job review outcomes. It is a historical usefulness signal, separate from extraction health.</p>
+  <h2>Historical Results</h2>
+  <p class="muted">This summarizes jobs already saved from this source in previous runs. It is separate from whether the recipe can read the board right now.</p>
   <div class="grid">
-    <div class="stat"><span>Value status</span><strong>{{ source.stats.value_status }}</strong></div>
-    <div class="stat"><span>Jobs found</span><strong>{{ source.stats.jobs_found_total }}</strong></div>
+    <div class="stat"><span>Result history</span><strong>{{ source.stats.value_label }}</strong></div>
+    <div class="stat"><span>Saved jobs</span><strong>{{ source.stats.jobs_found_total }}</strong></div>
     <div class="stat"><span>Strong matches</span><strong>{{ source.stats.strong_matches }}</strong></div>
-    <div class="stat"><span>Exploratory matches</span><strong>{{ source.stats.exploratory_matches }}</strong></div>
+    <div class="stat"><span>Possible matches</span><strong>{{ source.stats.exploratory_matches }}</strong></div>
     <div class="stat"><span>Weak/excluded</span><strong>{{ source.stats.weak_or_excluded_matches }}</strong></div>
     <div class="stat"><span>Applied</span><strong>{{ source.stats.applied_count }}</strong></div>
     <div class="stat"><span>Not interesting</span><strong>{{ source.stats.not_interesting_count }}</strong></div>
