@@ -67,6 +67,7 @@ def source_detail(request: Request, source_id: str, message: str = "", warning: 
     go_live_readiness = source_execution_readiness_service().evaluate(source.id)
     best_artifact_dir = generation_status.best_artifact.artifact_dir if generation_status.best_artifact else ""
     recipe_explanation = explain_recipe(source.recipe_path, root=execution_source_service().root) if source.recipe_path else None
+    source_status = _source_page_status(source, execution_entry, go_live_readiness, _recipe_preview_url(source))
     return templates.TemplateResponse(
         request,
         "source_detail.html",
@@ -81,6 +82,8 @@ def source_detail(request: Request, source_id: str, message: str = "", warning: 
             "recipe_candidates": recipe_candidates,
             "recipe_generation_status": generation_status,
             "recipe_explanation": recipe_explanation,
+            "recipe_capabilities": _recipe_capabilities(recipe_explanation),
+            "source_status": source_status,
             "go_live_readiness": go_live_readiness,
             "recipe_options": recipe_options(execution_source_service().root),
             "kind_options": SOURCE_KIND_DEFINITIONS,
@@ -458,6 +461,185 @@ def _recipe_editor_url(source, artifact_dir: str = "") -> str:
     if artifact_dir:
         params["artifact_dir"] = artifact_dir
     return f"/recipe-editor?{urlencode(params)}"
+
+
+def _source_page_status(source, execution_entry, readiness, recipe_preview_url: str) -> dict:
+    execution_enabled = bool(execution_entry and execution_entry.get("enabled", True))
+    status = {
+        "title": "Ready for review",
+        "summary": "This source is configured, but it still needs a saved recipe preview and dry run before automation.",
+        "badge": source.status_label,
+        "badge_class": source.status_badge,
+        "primary_action": None,
+        "secondary_action": {"type": "link", "label": "Edit settings", "href": "#source-settings"},
+        "preview_label": _status_label(source.health.health_status),
+        "dry_run_label": _status_label(readiness.readiness_status),
+        "automation_label": "Enabled" if execution_enabled else "Prepared but off" if execution_entry else "Not prepared",
+        "blockers": [],
+    }
+    if source.status == "archived":
+        status.update(
+            {
+                "title": "Archived",
+                "summary": "This source is hidden from normal source lists and cannot run automatically until restored.",
+                "badge": "Archived",
+                "badge_class": "low",
+                "primary_action": {
+                    "type": "post",
+                    "label": "Restore source",
+                    "action": f"/sources/{source.id}/restore",
+                },
+                "blockers": ["Restore this source before testing or enabling it."],
+            }
+        )
+    elif not source.url:
+        status.update(
+            {
+                "title": "Needs a source URL",
+                "summary": "Add the job-board URL before testing extraction.",
+                "badge": "Needs setup",
+                "badge_class": "medium",
+                "primary_action": {"type": "link", "label": "Add source URL", "href": "#source-settings"},
+                "blockers": ["No source URL is saved."],
+            }
+        )
+    elif not source.recipe_path:
+        status.update(
+            {
+                "title": "Needs a recipe",
+                "summary": "Choose or create a recipe so the app knows how to read this source.",
+                "badge": "Needs setup",
+                "badge_class": "medium",
+                "primary_action": {"type": "link", "label": "Choose recipe", "href": "#recipe"},
+                "blockers": ["No extraction recipe is selected."],
+            }
+        )
+    elif source.health.health_status != "good":
+        status.update(
+            {
+                "title": "Not ready yet",
+                "summary": "The recipe has not passed a saved preview. Run recipe preview first.",
+                "badge": "Needs preview",
+                "badge_class": "medium",
+                "primary_action": {"type": "link", "label": "Run recipe preview", "href": recipe_preview_url},
+                "blockers": [source.health.health_summary],
+            }
+        )
+    elif not execution_entry:
+        status.update(
+            {
+                "title": "Preview passed",
+                "summary": "Extraction looks usable. Prepare automation when you want this source included in scheduled checks.",
+                "badge": "Preview passed",
+                "badge_class": "high",
+                "primary_action": {
+                    "type": "post",
+                    "label": "Prepare automation",
+                    "action": f"/sources/{source.id}/execution/create",
+                },
+            }
+        )
+    elif readiness.readiness_status != "ready":
+        status.update(
+            {
+                "title": "Needs a dry run",
+                "summary": "Recipe preview passed. Now prove the configured source can run end-to-end without saving jobs.",
+                "badge": "Needs dry run",
+                "badge_class": "medium",
+                "primary_action": {
+                    "type": "post",
+                    "label": "Run dry run and save result",
+                    "action": f"/sources/{source.id}/dry-run-readiness",
+                },
+                "blockers": list(readiness.blockers[:3]),
+            }
+        )
+    elif not execution_enabled:
+        status.update(
+            {
+                "title": "Ready to enable",
+                "summary": "Preview and dry-run checks passed. Automatic job checks are still off until you enable them.",
+                "badge": "Ready",
+                "badge_class": "high",
+                "primary_action": {
+                    "type": "post",
+                    "label": "Enable automatic checks",
+                    "action": f"/sources/{source.id}/enable-when-ready",
+                },
+            }
+        )
+    else:
+        status.update(
+            {
+                "title": "Running automatically",
+                "summary": "This source is enabled for scheduled job checks.",
+                "badge": "Enabled",
+                "badge_class": "high",
+                "primary_action": {
+                    "type": "post",
+                    "label": "Run this source now",
+                    "action": f"/sources/{source.id}/run-now",
+                },
+            }
+        )
+    return status
+
+
+def _recipe_capabilities(recipe_explanation) -> list[dict[str, str]]:
+    if not recipe_explanation:
+        return []
+    card_detail = _explanation_detail(recipe_explanation.listing_fields, "Job card") or "configured listing blocks"
+    field_labels = [
+        item.label
+        for item in recipe_explanation.listing_fields
+        if item.label not in {"Job card"} and item.detail != "Not configured."
+    ]
+    detail_status = "Will open detail pages" if recipe_explanation.detail_follow else "Listing page only"
+    detail_text = (
+        f"Checks sample one posting detail page; full runs follow retained listings with "
+        f"{recipe_explanation.detail_delay:g}s delay."
+        if recipe_explanation.detail_follow
+        else "Does not open posting detail pages."
+    )
+    pagination_status = "Can follow pagination" if recipe_explanation.pagination_configured else "No pagination"
+    pagination_text = (
+        f"Can follow page links; full runs may scan up to {recipe_explanation.pagination_max_pages} pages."
+        if recipe_explanation.pagination_configured
+        else "No pagination selectors are configured."
+    )
+    return [
+        {
+            "label": "Find listing cards",
+            "status": "Configured",
+            "detail": f"Uses {card_detail} to find job tiles on the source page.",
+        },
+        {
+            "label": "Read job fields",
+            "status": f"{len(field_labels)} fields",
+            "detail": ", ".join(field_labels) if field_labels else "No listing fields are configured.",
+        },
+        {"label": "Open postings", "status": detail_status, "detail": detail_text},
+        {"label": "Handle pagination", "status": pagination_status, "detail": pagination_text},
+    ]
+
+
+def _explanation_detail(items, label: str) -> str:
+    for item in items:
+        if item.label == label:
+            return item.detail
+    return ""
+
+
+def _status_label(status: str) -> str:
+    return {
+        "good": "Passed",
+        "warning": "Needs review",
+        "failing": "Failed",
+        "untested": "Not tested",
+        "ready": "Ready",
+        "blocked": "Blocked",
+        "no_data": "No data",
+    }.get(str(status or "").strip(), str(status or "Unknown").replace("_", " ").title())
 
 
 def _registry_source_or_404(source_id: str):

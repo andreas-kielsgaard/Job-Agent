@@ -18,8 +18,8 @@ def test_source_detail_shows_go_live_readiness_panel(client: TestClient) -> None
     response = client.get("/sources/eursap-jobs")
 
     assert response.status_code == 200
-    assert "Go-Live Readiness" in response.text
-    assert "Go-live readiness is based on the configured execution source dry run" in response.text
+    assert "Automation" in response.text
+    assert "Automatic checks are off until recipe preview and dry-run checks pass" in response.text
 
 
 def test_web_dry_run_readiness_route_saves_readiness(

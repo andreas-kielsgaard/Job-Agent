@@ -321,33 +321,27 @@ def test_source_overview_and_detail_routes_render(client: TestClient) -> None:
     detail = client.get("/sources/eursap-jobs")
 
     assert detail.status_code == 200
-    assert "What These Labels Mean" in detail.text
-    assert "Source type" in detail.text
-    assert "Recipe-backed job board" in detail.text
-    assert "Lifecycle" in detail.text
-    assert "Testing" in detail.text
-    assert "Next Actions" in detail.text
-    assert "Source Settings" in detail.text
+    assert "Not ready yet" in detail.text
+    assert "Run recipe preview" in detail.text
+    assert "Recipe preview" in detail.text
+    assert "Dry run" in detail.text
+    assert "Automatic checks" in detail.text
+    assert "Source settings" in detail.text
     assert "Save source settings" in detail.text
-    assert "Capture one-page calibration artifact" in detail.text
+    assert "Capture one page" in detail.text
     assert "Selected recipe" in detail.text
     assert "Use selected recipe" in detail.text
-    assert "Open recipe review" in detail.text
-    assert "Open compatibility check" in detail.text
-    assert "Open recipe editor" in detail.text
-    assert "sources/recipes/experimental/eursap-jobs.yaml" in detail.text
-    assert "live-calibrated experimental" in detail.text
-    assert "Last saved review" in detail.text
+    assert "Compatibility check" in detail.text
+    assert "Recipe editor" in detail.text
+    assert "Extraction" in detail.text
+    assert "Saved review details" in detail.text
     assert "Generate or replace recipe" in detail.text
     assert "Draft recipes" in detail.text
     assert "Historical Results" in detail.text
-    assert "This summarizes jobs already saved from this source in previous runs" in detail.text
-    assert "Daily-run Execution" in detail.text
-    assert "Prepare disabled daily-run entry" in detail.text
-    assert "No saved jobs from this source yet" in detail.text
+    assert "No jobs have been saved from this source yet" in detail.text
+    assert "Automation" in detail.text
     assert "/recipe-preview" in detail.text
     assert "selected_source_id=eursap-jobs" in detail.text
-    assert "Contact tracking not implemented yet" in detail.text
 
 
 def test_source_detail_updates_selected_recipe(client: TestClient, project_root: Path) -> None:
@@ -499,7 +493,7 @@ def test_source_routes_render_saved_health(client: TestClient, project_root: Pat
     assert "good" in overview.text
     assert "9 jobs extracted, 9 useful titles, no generic labels." in overview.text
     assert detail.status_code == 200
-    assert "Last saved review" in detail.text
+    assert "Saved review details" in detail.text
     assert "output/recipe-calibration/eursap/page.html" in detail.text
     assert "9 jobs extracted, 9 useful titles, no generic labels." in detail.text
     assert compatibility.status_code == 200
@@ -649,8 +643,8 @@ def test_source_detail_shows_dry_run_link_when_execution_entry_exists(client: Te
     detail = client.get("/sources/eursap-jobs")
 
     assert detail.status_code == 200
-    assert "/sources/eursap-jobs/dry-run" in detail.text
-    assert "Dry run execution source" in detail.text
+    assert "/sources/eursap-jobs/dry-run-readiness" in detail.text
+    assert "Run dry run and save result" in detail.text
 
 
 def test_source_dry_run_route_renders_result(monkeypatch: pytest.MonkeyPatch, client: TestClient) -> None:

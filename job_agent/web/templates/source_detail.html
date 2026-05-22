@@ -1,118 +1,18 @@
 {% extends "base.html" %}
 {% block content %}
-<div class="row">
-  <h1 style="margin-right:auto;">{{ source.name }}</h1>
-  {% if source.status == "archived" %}<span class="badge low">Archived</span>{% endif %}
-  <a class="button light" href="/sources">Back to sources</a>
-</div>
-
-<div class="panel">
-  <h2>What These Labels Mean</h2>
-  <div class="grid">
-    <div class="stat"><span>Source type</span><strong>{{ source.kind_label }}</strong><p class="muted">{{ source.kind_description }}</p></div>
-    <div class="stat"><span>Lifecycle</span><strong>{{ source.status_label }}</strong><p class="muted">{{ source.status_description }}</p></div>
-    <div class="stat"><span>Daily-run execution</span><strong>{{ "enabled" if execution_entry and execution_entry.enabled else "prepared but disabled" if execution_entry else "not prepared" }}</strong><p class="muted">Execution is the separate daily-run config entry. Not prepared means this registry source will not be used by daily runs.</p></div>
-  </div>
-</div>
-
-<div class="panel">
-  <h2>Next Actions</h2>
-  <div class="action-row">
-    {% if recipe_preview_url %}
-    <a class="button" href="{{ recipe_preview_url }}">Preview recipe</a>
-    {% endif %}
-    <a class="button light" href="#source-settings">Edit source settings</a>
-    {% if source.status == "archived" %}
-    <form method="post" action="/sources/{{ source.id }}/restore" class="inline-form">
-      <button type="submit" class="button light">Restore to review</button>
-    </form>
-    {% elif source.recipe_path %}
-    {% if execution_entry %}
-    <a class="button light" href="/sources/{{ source.id }}/dry-run{% if not execution_entry.enabled %}?force_disabled=true{% endif %}">Dry run source</a>
-    {% if not execution_entry.enabled %}
-    <form method="post" action="/sources/{{ source.id }}/dry-run-readiness" class="inline-form">
-      <button type="submit" class="button light">Save dry-run readiness</button>
-    </form>
-    {% endif %}
+<div class="source-detail-header">
+  <div>
+    <p class="eyebrow">Source</p>
+    <h1>{{ source.name }}</h1>
+    {% if source.url %}
+    <a class="source-url" href="{{ source.url }}" target="_blank" rel="noreferrer">{{ source.url }}</a>
     {% else %}
-    <form method="post" action="/sources/{{ source.id }}/execution/create" class="inline-form">
-      <button type="submit" class="button light">Prepare disabled daily-run entry</button>
-    </form>
-    {% endif %}
-    {% if execution_entry and not execution_entry.enabled and go_live_readiness.readiness_status == "ready" %}
-    <form method="post" action="/sources/{{ source.id }}/enable-when-ready" class="inline-form">
-      <button type="submit" class="button">Enable when ready</button>
-    </form>
-    {% endif %}
+    <p class="muted">No source URL saved.</p>
     {% endif %}
   </div>
-  <p class="muted">Preview tests extraction. Preparing a daily-run entry writes a disabled record to sources/recruiting-sites.yaml using this source URL and recipe; it will not run until explicitly enabled after readiness checks.</p>
-</div>
-
-<div class="panel" id="source-settings">
-  <h2>Source Settings</h2>
-  <div class="grid">
-    <div class="stat"><span>Source type</span><strong>{{ source.kind_label }}</strong></div>
-    <div class="stat"><span>Lifecycle</span><strong>{{ source.status_label }}</strong></div>
-    <div class="stat"><span>Daily-run entry</span><strong>{{ "present" if execution_entry else "not prepared" }}</strong></div>
-    <div class="stat"><span>Added</span><strong>{{ source.added_at or "Unknown" }}</strong></div>
-  </div>
-  <form method="post" action="/sources/{{ source.id }}/registry/update">
-    <div class="form-grid">
-      <div>
-        <label>Source name</label>
-        <input name="name" value="{{ source.name }}" required>
-      </div>
-      <div>
-        <label>Source URL</label>
-        <input name="url" value="{{ source.url }}" placeholder="https://example.com/jobs">
-      </div>
-      <div>
-        <label>Source type</label>
-        <select name="kind">
-          {% for option in kind_options %}
-          <option value="{{ option.value }}" {% if source.kind == option.value %}selected{% endif %}>{{ option.label }}</option>
-          {% endfor %}
-        </select>
-        <p class="field-note muted">This describes how the source should be handled in the app; the selected recipe below is what links recipe preview to this source.</p>
-      </div>
-      <div>
-        <label>Lifecycle status</label>
-        <select name="status">
-          {% for option in status_options %}
-          <option value="{{ option.value }}" {% if source.status == option.value %}selected{% endif %}>{{ option.label }}</option>
-          {% endfor %}
-        </select>
-        <p class="field-note muted">Archived sources are hidden from normal source lists and cannot be enabled for daily runs.</p>
-      </div>
-      <div>
-        <label>Recipe</label>
-        <select name="recipe_path">
-          <option value="">No recipe</option>
-          {% for option in recipe_options %}
-          <option value="{{ option.value }}" {% if source.recipe_path == option.value %}selected{% endif %}>{{ option.label }}</option>
-          {% endfor %}
-        </select>
-      </div>
-    </div>
-    <label>Notes</label>
-    <textarea name="notes" class="compact-textarea">{{ source.notes }}</textarea>
-    <div class="form-actions"><button type="submit">Save source settings</button></div>
-  </form>
-  <p class="muted">Changing the registry recipe does not enable daily-run execution. Use the execution controls after preview and dry-run checks pass.</p>
-  <p><strong>Tags:</strong> {{ source.tags|join(", ") or "none" }}</p>
-  <div class="danger-zone">
-    {% if source.status == "archived" %}
-    <p class="muted">This source is archived. Restoring it brings it back to normal source lists as Needs review; it does not enable daily runs.</p>
-    <form method="post" action="/sources/{{ source.id }}/restore" class="inline-form">
-      <button type="submit" class="button light">Restore source</button>
-    </form>
-    {% else %}
-    <p class="muted">Archive hides this source from normal source lists and disables any existing daily-run entry. Historical job packages are left alone.</p>
-    <form method="post" action="/sources/{{ source.id }}/archive" class="inline-form">
-      <button type="submit" class="button danger">Archive source</button>
-    </form>
-    {% endif %}
+  <div class="source-header-actions">
+    {% if source.status == "archived" %}<span class="badge low">Archived</span>{% endif %}
+    <a class="button light" href="/sources">Back to sources</a>
   </div>
 </div>
 
@@ -123,9 +23,64 @@
 <div class="panel"><span class="badge low">{{ execution_warning }}</span></div>
 {% endif %}
 
-<div class="panel">
-  <h2>Recipe</h2>
-  <p class="muted">The selected recipe is the link between this source and recipe preview, compatibility checks, dry runs, and daily-run extraction. Changing it here does not enable daily runs.</p>
+<div class="panel source-status-panel">
+  <div class="source-status-main">
+    <span class="badge {{ source_status.badge_class }}">{{ source_status.badge }}</span>
+    <h2>{{ source_status.title }}</h2>
+    <p class="muted">{{ source_status.summary }}</p>
+    <div class="action-row">
+      {% if source_status.primary_action %}
+        {% if source_status.primary_action.type == "post" %}
+        <form method="post" action="{{ source_status.primary_action.action }}" class="inline-form">
+          <button type="submit" class="button">{{ source_status.primary_action.label }}</button>
+        </form>
+        {% else %}
+        <a class="button" href="{{ source_status.primary_action.href }}">{{ source_status.primary_action.label }}</a>
+        {% endif %}
+      {% endif %}
+      <a class="button light" href="#source-settings">Edit settings</a>
+    </div>
+  </div>
+  <div class="source-progress-grid">
+    <div>
+      <span>Recipe preview</span>
+      <strong>{{ source_status.preview_label }}</strong>
+      <p>{{ source.health.health_summary }}</p>
+    </div>
+    <div>
+      <span>Dry run</span>
+      <strong>{{ source_status.dry_run_label }}</strong>
+      <p>{{ go_live_readiness.readiness_summary }}</p>
+    </div>
+    <div>
+      <span>Automatic checks</span>
+      <strong>{{ source_status.automation_label }}</strong>
+      <p>{% if execution_entry and execution_entry.enabled %}This source is included in scheduled runs.{% elif execution_entry %}Automation is prepared but disabled.{% else %}Automation has not been prepared.{% endif %}</p>
+    </div>
+  </div>
+  {% if source_status.blockers %}
+  <div class="source-blockers">
+    <strong>Needs attention</strong>
+    <ul>
+      {% for blocker in source_status.blockers %}
+      <li>{{ blocker }}</li>
+      {% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+</div>
+
+<div class="panel" id="recipe">
+  <div class="section-heading-row">
+    <div>
+      <h2>Extraction</h2>
+      <p class="muted">This is how the app reads jobs from the source page.</p>
+    </div>
+    {% if recipe_preview_url %}
+    <a class="button light" href="{{ recipe_preview_url }}">Recipe preview</a>
+    {% endif %}
+  </div>
+
   <form method="post" action="/sources/{{ source.id }}/recipe/update">
     <div class="form-grid">
       <div>
@@ -142,50 +97,25 @@
       </div>
     </div>
   </form>
-  {% if source.recipe_path %}
-  <div class="grid" style="margin-top:14px;">
-    <div class="stat"><span>Recipe state</span><strong>{{ source.recipe_state }}</strong></div>
-    <div class="stat"><span>Compatibility status</span><strong>{{ source.health.health_status }}</strong><p class="muted">{{ source.health.health_summary }}</p></div>
-    <div class="stat"><span>Last review</span><strong>{{ source.health.last_preview_at or "Never" }}</strong></div>
-    <div class="stat"><span>Jobs in last review</span><strong>{{ source.health.extracted_job_count }}</strong></div>
-    {% if recipe_explanation %}
-    <div class="stat"><span>Default mode</span><strong>{{ recipe_explanation.mode_label }}</strong></div>
-    <div class="stat"><span>Detail pages</span><strong>{{ "followed" if recipe_explanation.detail_follow else "not configured" }}</strong></div>
-    <div class="stat"><span>Pagination</span><strong>{{ "configured" if recipe_explanation.pagination_configured else "not configured" }}</strong></div>
-    <div class="stat"><span>Run page cap</span><strong>{{ recipe_explanation.pagination_max_pages }}</strong></div>
-    {% endif %}
-  </div>
-  <p><strong>Path:</strong> {{ source.recipe_path }}</p>
-  <div class="action-row">
-  {% if recipe_preview_url %}
-    <a class="button" href="{{ recipe_preview_url }}">Open recipe review</a>
-  {% endif %}
-    <a class="button light" href="{{ compatibility_url }}">Open compatibility check</a>
-    <a class="button light" href="{{ recipe_editor_url }}">Open recipe editor</a>
-  </div>
-  {% if recipe_explanation %}
-  <details>
-    <summary>Recipe field and navigation details</summary>
-    <div class="grid" style="margin-top:12px;">
-      {% for item in recipe_explanation.listing_fields + recipe_explanation.navigation_fields %}
-      <div class="stat"><span>{{ item.label }}</span><strong>{{ item.detail }}</strong></div>
-      {% endfor %}
-    </div>
-  </details>
-  {% endif %}
-  <details>
-    <summary>Copyable preview command</summary>
-    <pre class="copy-source">python -m job_agent.cli test-recipe {{ source.recipe_path }} {{ source.url }} --base-url {{ source.url }} --source-id {{ source.id }}</pre>
-  </details>
-  {% else %}
-  <div class="action-row" style="margin-top:14px;"><a class="button light" href="{{ recipe_editor_url }}">Open recipe editor</a></div>
-  <p class="muted">Select an existing recipe above or generate a new draft from a one-page calibration artifact.</p>
-  {% endif %}
 
   {% if source.recipe_path %}
-  <details>
-    <summary>Last saved review</summary>
-    <p class="muted">Saved recipe review results say whether extraction appeared to work for the last tested input. They do not enable this source for daily runs.</p>
+  <div class="source-proof-grid">
+    {% for capability in recipe_capabilities %}
+    <div>
+      <span>{{ capability.label }}</span>
+      <strong>{{ capability.status }}</strong>
+      <p>{{ capability.detail }}</p>
+    </div>
+    {% endfor %}
+  </div>
+
+  <div class="action-row">
+    <a class="button light" href="{{ compatibility_url }}">Compatibility check</a>
+    <a class="button light" href="{{ recipe_editor_url }}">Recipe editor</a>
+  </div>
+
+  <details class="diagnostic-panel">
+    <summary>Saved review details</summary>
     <div class="grid" style="margin-top:12px;">
       <div class="stat"><span>Status</span><strong>{{ source.health.health_status }}</strong></div>
       <div class="stat"><span>Last review</span><strong>{{ source.health.last_preview_at or "Never" }}</strong></div>
@@ -195,7 +125,6 @@
       <div class="stat"><span>Useful titles</span><strong>{{ source.health.useful_titles }}</strong></div>
       <div class="stat"><span>Generic labels</span><strong>{{ source.health.generic_labels }}</strong></div>
       <div class="stat"><span>Unique URLs</span><strong>{{ source.health.unique_urls }}</strong></div>
-      <div class="stat"><span>Avg description</span><strong>{{ source.health.average_description_length }}</strong></div>
     </div>
     <p><strong>Input used:</strong> {{ source.health.last_input_value or "No saved review input yet." }}</p>
     <p><strong>Summary:</strong> {{ source.health.health_summary }}</p>
@@ -207,23 +136,32 @@
     </ul>
     {% endif %}
   </details>
+
+  {% if recipe_explanation %}
+  <details class="diagnostic-panel">
+    <summary>Fields and selectors</summary>
+    <div class="grid" style="margin-top:12px;">
+      {% for item in recipe_explanation.listing_fields + recipe_explanation.navigation_fields %}
+      <div class="stat"><span>{{ item.label }}</span><strong>{{ item.detail }}</strong></div>
+      {% endfor %}
+    </div>
+  </details>
   {% endif %}
 
-  <details>
-    <summary>Setup status</summary>
-    <p class="muted">These are review and setup checkpoints. Creating, approving, or selecting a recipe does not enable daily runs.</p>
+  <details class="diagnostic-panel">
+    <summary>Recipe setup details</summary>
     <div class="grid" style="margin-top:12px;">
-      <div class="stat"><span>Calibration artifacts</span><strong>{{ recipe_generation_status.artifact_count }}</strong></div>
+      <div class="stat"><span>Saved captures</span><strong>{{ recipe_generation_status.artifact_count }}</strong></div>
       <div class="stat"><span>Drafts waiting review</span><strong>{{ recipe_generation_status.pending_candidates }}</strong></div>
       <div class="stat"><span>Approved drafts</span><strong>{{ recipe_generation_status.approved_candidates }}</strong></div>
       <div class="stat"><span>Latest draft</span><strong>{{ recipe_generation_status.latest_candidate_status or "none" }}</strong></div>
       <div class="stat"><span>Approved recipe</span><strong>{{ recipe_generation_status.latest_approved_recipe_path or "none" }}</strong></div>
       <div class="stat"><span>Saved review status</span><strong>{{ recipe_generation_status.source_health_status }}</strong></div>
-      <div class="stat"><span>Daily-run entry</span><strong>{{ "prepared" if recipe_generation_status.execution_entry_exists else "not prepared" }}</strong></div>
+      <div class="stat"><span>Automation entry</span><strong>{{ "prepared" if recipe_generation_status.execution_entry_exists else "not prepared" }}</strong></div>
       <div class="stat"><span>Execution enabled</span><strong>{{ "yes" if recipe_generation_status.execution_enabled else "no" }}</strong></div>
     </div>
     {% if recipe_generation_status.best_artifact %}
-    <p><strong>Best local artifact:</strong> {{ recipe_generation_status.best_artifact.display_name }} - {{ recipe_generation_status.best_artifact.match_reason }}</p>
+    <p><strong>Best capture:</strong> {{ recipe_generation_status.best_artifact.display_name }} - {{ recipe_generation_status.best_artifact.match_reason }}</p>
     {% endif %}
     {% for warning in recipe_generation_status.warnings %}
     <p class="muted">Note: {{ warning }}</p>
@@ -232,124 +170,125 @@
     <p><a class="button light" href="/recipe-candidates/{{ recipe_generation_status.latest_candidate_id }}?source_id={{ source.id }}">Review adoption for latest approved draft</a></p>
     {% endif %}
   </details>
-
-  <details id="recipe-generation">
-  <summary>Generate or replace recipe</summary>
-  <p class="muted">Use a one-page calibration capture to create a draft recipe for review. The draft is not active until it is approved and selected for this source.</p>
-  {% if source.url %}
-  <form method="post" action="/sources/{{ source.id }}/recipe-calibration/capture">
-    <div class="row">
-      <label>Page regions <input type="number" name="max_candidates" value="30" min="5" max="50" style="max-width:7rem;"></label>
-      <label class="check"><input type="checkbox" name="rendered" value="1"> Render with browser</label>
-      <button type="submit" class="button light">Capture one-page calibration artifact</button>
-    </div>
-  </form>
-  <p class="muted">This fetches only the saved source URL once and stores local evidence under output/recipe-calibration. It does not follow every listing or enable daily runs.</p>
   {% else %}
-  <p class="muted">Save a source URL before capturing calibration evidence.</p>
+  <p class="muted">Choose an existing recipe or create one before this source can be tested.</p>
+  <div class="action-row">
+    <a class="button light" href="{{ recipe_editor_url }}">Open recipe editor</a>
+  </div>
   {% endif %}
-  {% if recipe_artifacts %}
-  <form method="post" action="/sources/{{ source.id }}/recipe-candidates/generate">
-    <label>Local calibration artifact</label>
-    <select name="artifact_dir">
+
+  <details class="diagnostic-panel" id="recipe-generation">
+    <summary>Generate or replace recipe</summary>
+    <p class="muted">Capture one source page and use it to create a draft recipe for review. Drafts do not become active automatically.</p>
+    {% if source.url %}
+    <form method="post" action="/sources/{{ source.id }}/recipe-calibration/capture">
+      <div class="row">
+        <label>Page regions <input type="number" name="max_candidates" value="30" min="5" max="50" style="max-width:7rem;"></label>
+        <label class="check"><input type="checkbox" name="rendered" value="1"> Render with browser</label>
+        <button type="submit" class="button light">Capture one page</button>
+      </div>
+    </form>
+    <p class="muted">This fetches only the saved source URL once. It does not follow every listing or enable automatic checks.</p>
+    {% else %}
+    <p class="muted">Save a source URL before capturing calibration evidence.</p>
+    {% endif %}
+    {% if recipe_artifacts %}
+    <form method="post" action="/sources/{{ source.id }}/recipe-candidates/generate">
+      <label>Saved capture</label>
+      <select name="artifact_dir">
+        {% for artifact in recipe_artifacts %}
+        <option value="{{ artifact.artifact_dir }}">{{ artifact.display_name }} - {{ artifact.match_status }} - {{ artifact.capture_url or "unknown URL" }}</option>
+        {% endfor %}
+      </select>
+      <div class="row">
+        <label class="check"><input type="checkbox" name="refine" value="1" checked> Refine locally</label>
+        <label>Max attempts <input type="number" name="max_attempts" value="3" min="1" max="8" style="max-width:7rem;"></label>
+        <button type="submit" class="button">Save draft recipe for review</button>
+      </div>
+    </form>
+    <details class="diagnostic-panel">
+      <summary>Saved captures</summary>
       {% for artifact in recipe_artifacts %}
-      <option value="{{ artifact.artifact_dir }}">{{ artifact.display_name }} - {{ artifact.match_status }} - {{ artifact.capture_url or "unknown URL" }}</option>
+      <div class="stat" style="margin:0.6rem 0;">
+        <span>{{ artifact.display_name }} | {{ artifact.match_reason }}</span>
+        <strong>{{ artifact.capture_mode or "unknown mode" }} | {{ artifact.candidate_count }} regions | page.html: {{ "yes" if artifact.has_page_html else "no" }}</strong>
+        <p class="muted">{{ artifact.capture_url or "No capture URL" }}</p>
+        {% if artifact.top_candidate_selectors %}
+        <p class="muted">Selectors: {{ artifact.top_candidate_selectors|join(", ") }}</p>
+        {% endif %}
+        {% for warning in artifact.warnings %}
+        <p class="muted">Warning: {{ warning }}</p>
+        {% endfor %}
+      </div>
       {% endfor %}
-    </select>
-    <div class="row">
-      <label class="check"><input type="checkbox" name="refine" value="1" checked> Refine locally</label>
-      <label>Max attempts <input type="number" name="max_attempts" value="3" min="1" max="8" style="max-width:7rem;"></label>
-      <button type="submit" class="button">Save draft recipe for review</button>
-    </div>
-  </form>
-  <details>
-    <summary>Local calibration artifacts</summary>
-    {% for artifact in recipe_artifacts %}
-    <div class="stat" style="margin:0.6rem 0;">
-      <span>{{ artifact.display_name }} | {{ artifact.match_reason }}</span>
-      <strong>{{ artifact.capture_mode or "unknown mode" }} | {{ artifact.candidate_count }} regions | page.html: {{ "yes" if artifact.has_page_html else "no" }}</strong>
-      <p class="muted">{{ artifact.capture_url or "No capture URL" }}</p>
-      {% if artifact.top_candidate_selectors %}
-      <p class="muted">Selectors: {{ artifact.top_candidate_selectors|join(", ") }}</p>
-      {% endif %}
-      {% for warning in artifact.warnings %}
-      <p class="muted">Warning: {{ warning }}</p>
-      {% endfor %}
-    </div>
-    {% endfor %}
-  </details>
-  <details>
-    <summary>Copyable generation command</summary>
-    <pre class="copy-source">python -m job_agent.cli suggest-recipe {{ recipe_artifacts[0].artifact_dir }} --source-name "{{ source.name }}" --start-url {{ source.url }} --refine --max-attempts 3 --save-candidate</pre>
-  </details>
-  {% else %}
-  <p class="muted">No local calibration artifacts found under output/recipe-calibration yet.</p>
-  <details>
-    <summary>Copyable calibration command</summary>
-    <pre class="copy-source">python -m job_agent.cli calibrate-recipe {{ source.url or "https://example.com/jobs" }}{% if source.recipe_path %} --recipe {{ source.recipe_path }}{% endif %} --max-candidates 30</pre>
-  </details>
-  {% endif %}
+    </details>
+    <details class="diagnostic-panel">
+      <summary>Copyable generation command</summary>
+      <pre class="copy-source">python -m job_agent.cli suggest-recipe {{ recipe_artifacts[0].artifact_dir }} --source-name "{{ source.name }}" --start-url {{ source.url }} --refine --max-attempts 3 --save-candidate</pre>
+    </details>
+    {% else %}
+    <p class="muted">No saved captures found yet.</p>
+    <details class="diagnostic-panel">
+      <summary>Copyable calibration command</summary>
+      <pre class="copy-source">python -m job_agent.cli calibrate-recipe {{ source.url or "https://example.com/jobs" }}{% if source.recipe_path %} --recipe {{ source.recipe_path }}{% endif %} --max-candidates 30</pre>
+    </details>
+    {% endif %}
   </details>
 
-  <details>
-  <summary>Draft recipes ({{ recipe_candidates|length }})</summary>
-  <p class="muted">Drafts are proposed recipe revisions. Approving writes a recipe file; selecting it points this source at that recipe. Neither step enables daily runs.</p>
-  {% if recipe_candidates %}
-  <table>
-    <thead>
-      <tr>
-        <th>Draft</th>
-        <th>Status</th>
-        <th>Schema</th>
-        <th>Refinement</th>
-        <th>Quality</th>
-        <th>Jobs</th>
-        <th>Actions</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for candidate in recipe_candidates %}
-      <tr>
-        <td><a href="/recipe-candidates/{{ candidate.candidate_id }}?source_id={{ source.id }}">{{ candidate.candidate_id }}</a><br><span class="muted">{{ candidate.created_at }}</span></td>
-        <td>{{ candidate.status }}</td>
-        <td>{{ "valid" if candidate.schema_valid else "invalid" }}</td>
-        <td>{{ "accepted" if candidate.refinement_accepted else ("used" if candidate.refinement_used else "not used") }}</td>
-        <td>{{ candidate.quality_status or "n/a" }}</td>
-        <td>{{ candidate.extracted_job_count }} extracted / {{ candidate.useful_titles }} useful / {{ candidate.unique_urls }} URLs</td>
-        <td>
-          <a class="button light" href="/recipe-candidates/{{ candidate.candidate_id }}?source_id={{ source.id }}">Show</a>
-          {% if candidate.status == "pending" %}
-          <a class="button light" href="/recipe-candidates/{{ candidate.candidate_id }}?source_id={{ source.id }}">Review</a>
-          <form method="post" action="/recipe-candidates/{{ candidate.candidate_id }}/reject" style="display:inline;">
-            <input type="hidden" name="source_id" value="{{ source.id }}">
-            <input type="hidden" name="reason" value="Rejected from source detail.">
-            <button type="submit" class="button light">Reject</button>
-          </form>
-          {% endif %}
-        </td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-  {% else %}
-  <p class="muted">No saved draft recipes match this source yet.</p>
-  {% endif %}
+  <details class="diagnostic-panel">
+    <summary>Draft recipes ({{ recipe_candidates|length }})</summary>
+    {% if recipe_candidates %}
+    <table>
+      <thead>
+        <tr>
+          <th>Draft</th>
+          <th>Status</th>
+          <th>Schema</th>
+          <th>Refinement</th>
+          <th>Quality</th>
+          <th>Jobs</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for candidate in recipe_candidates %}
+        <tr>
+          <td><a href="/recipe-candidates/{{ candidate.candidate_id }}?source_id={{ source.id }}">{{ candidate.candidate_id }}</a><br><span class="muted">{{ candidate.created_at }}</span></td>
+          <td>{{ candidate.status }}</td>
+          <td>{{ "valid" if candidate.schema_valid else "invalid" }}</td>
+          <td>{{ "accepted" if candidate.refinement_accepted else ("used" if candidate.refinement_used else "not used") }}</td>
+          <td>{{ candidate.quality_status or "n/a" }}</td>
+          <td>{{ candidate.extracted_job_count }} extracted / {{ candidate.useful_titles }} useful / {{ candidate.unique_urls }} URLs</td>
+          <td>
+            <a class="button light" href="/recipe-candidates/{{ candidate.candidate_id }}?source_id={{ source.id }}">Show</a>
+            {% if candidate.status == "pending" %}
+            <a class="button light" href="/recipe-candidates/{{ candidate.candidate_id }}?source_id={{ source.id }}">Review</a>
+            <form method="post" action="/recipe-candidates/{{ candidate.candidate_id }}/reject" style="display:inline;">
+              <input type="hidden" name="source_id" value="{{ source.id }}">
+              <input type="hidden" name="reason" value="Rejected from source detail.">
+              <button type="submit" class="button light">Reject</button>
+            </form>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="muted">No saved draft recipes match this source yet.</p>
+    {% endif %}
   </details>
 </div>
 
 {% if source.recipe_path %}
-<div class="panel">
-  <h2>Go-Live Readiness</h2>
-  <p class="muted">Go-live readiness is based on the configured execution source dry run. It is separate from saved recipe review results and does not write packages or run records.</p>
+<div class="panel" id="automation">
+  <h2>Automation</h2>
+  <p class="muted">Automatic checks are off until recipe preview and dry-run checks pass, and you explicitly enable them.</p>
   <div class="grid">
-    <div class="stat"><span>Readiness</span><strong>{{ go_live_readiness.readiness_status }}</strong></div>
-    <div class="stat"><span>Last dry run</span><strong>{{ go_live_readiness.last_checked_at or "Never" }}</strong></div>
-    <div class="stat"><span>Dry-run status</span><strong>{{ go_live_readiness.dry_run_status }}</strong></div>
+    <div class="stat"><span>Automatic checks</span><strong>{{ source_status.automation_label }}</strong></div>
+    <div class="stat"><span>Dry run</span><strong>{{ source_status.dry_run_label }}</strong></div>
     <div class="stat"><span>Dry-run jobs</span><strong>{{ go_live_readiness.dry_run_job_count }}</strong></div>
-    <div class="stat"><span>Dry-run warnings</span><strong>{{ go_live_readiness.dry_run_warning_count }}</strong></div>
-    <div class="stat"><span>Saved review status</span><strong>{{ go_live_readiness.checks.source_health_status }}</strong></div>
-    <div class="stat"><span>Daily-run entry</span><strong>{{ "prepared" if go_live_readiness.checks.execution_entry_exists else "not prepared" }}</strong></div>
-    <div class="stat"><span>Recipe paths match</span><strong>{{ "yes" if go_live_readiness.checks.execution_entry_recipe_path_matches_registry else "no" }}</strong></div>
+    <div class="stat"><span>Last dry run</span><strong>{{ go_live_readiness.last_checked_at or "Never" }}</strong></div>
   </div>
   <p><strong>Summary:</strong> {{ go_live_readiness.readiness_summary }}</p>
   {% if go_live_readiness.sample_titles %}
@@ -361,88 +300,56 @@
   {% for warning in go_live_readiness.warnings %}
   <p class="muted">Warning: {{ warning }}</p>
   {% endfor %}
-  {% if execution_entry and source.status != "archived" %}
-  <form method="post" action="/sources/{{ source.id }}/dry-run-readiness" style="display:inline;">
-    <button type="submit" class="button light">
-      {% if execution_entry.enabled %}Dry run source and save readiness{% else %}Dry run disabled source and save readiness{% endif %}
-    </button>
-  </form>
-  {% if not execution_entry.enabled and go_live_readiness.readiness_status == "ready" %}
-  <form method="post" action="/sources/{{ source.id }}/enable-when-ready" style="display:inline;">
-    <button type="submit" class="button">Enable when ready</button>
-  </form>
-  {% endif %}
-  {% elif execution_entry %}
-  <p class="muted">This source is archived, so execution actions are disabled. Restore it before running readiness checks or enabling daily runs.</p>
-  {% else %}
-  <p class="muted">Prepare a disabled daily-run entry before saving dry-run readiness.</p>
-  {% if source.status != "archived" %}
-  <form method="post" action="/sources/{{ source.id }}/execution/create" style="display:inline;">
-    <button type="submit" class="button light">Prepare disabled daily-run entry</button>
-  </form>
-  {% endif %}
-  {% endif %}
-  <p class="muted">Enabling is explicit and does not start a source run or daily run.</p>
-</div>
 
-<div class="panel">
-  <h2>Daily-run Execution</h2>
-  <p class="muted">Daily-run execution is separate from the source registry. Preparing an entry writes this source id, URL, recipe path, and enabled=false to sources/recruiting-sites.yaml. It does not fetch jobs or enable daily runs.</p>
-  {% if execution_entry %}
-  <div class="grid">
-    <div class="stat"><span>Daily-run entry</span><strong>Prepared</strong></div>
-    <div class="stat"><span>Type</span><strong>{{ execution_entry.type or execution_entry["type"] }}</strong></div>
-    <div class="stat"><span>Enabled for daily runs</span><strong>{{ "Yes" if execution_entry.enabled else "No" }}</strong></div>
+  <div class="action-row">
+    {% if source.status == "archived" %}
+    <p class="muted">Restore this source before running checks.</p>
+    {% elif not execution_entry %}
+    <form method="post" action="/sources/{{ source.id }}/execution/create" class="inline-form">
+      <button type="submit" class="button">Prepare automation</button>
+    </form>
+    {% else %}
+    <form method="post" action="/sources/{{ source.id }}/dry-run-readiness" class="inline-form">
+      <button type="submit" class="button light">Run dry run and save result</button>
+    </form>
+    {% if execution_entry.enabled %}
+    <form method="post" action="/sources/{{ source.id }}/run-now" class="inline-form">
+      <button type="submit" class="button">Run this source now</button>
+    </form>
+    <form method="post" action="/sources/{{ source.id }}/execution/disable" class="inline-form">
+      <button type="submit" class="button light">Disable automatic checks</button>
+    </form>
+    {% elif go_live_readiness.readiness_status == "ready" %}
+    <form method="post" action="/sources/{{ source.id }}/enable-when-ready" class="inline-form">
+      <button type="submit" class="button">Enable automatic checks</button>
+    </form>
+    {% endif %}
+    {% endif %}
   </div>
-  <pre class="copy-source">name: {{ execution_entry.name }}
+
+  {% if execution_entry %}
+  <details class="diagnostic-panel">
+    <summary>Technical automation entry</summary>
+    <pre class="copy-source">name: {{ execution_entry.name }}
 source_id: {{ execution_entry.source_id }}
 type: {{ execution_entry.type }}
 url: {{ execution_entry.url }}
 recipe_path: {{ execution_entry.recipe_path }}
 enabled: {{ "true" if execution_entry.enabled else "false" }}</pre>
-  {% if source.status != "archived" %}
-  <form method="post" action="/sources/{{ source.id }}/execution/update" style="display:inline;">
-    <button type="submit" class="button light">Refresh disabled daily-run entry</button>
-  </form>
-  <a class="button light" href="/sources/{{ source.id }}/dry-run">Dry run execution source</a>
-  {% if execution_entry.enabled %}
-  <form method="post" action="/sources/{{ source.id }}/run-now" style="display:inline;">
-    <button type="submit" class="button">Run this source now</button>
-  </form>
-  <form method="post" action="/sources/{{ source.id }}/execution/disable" style="display:inline;">
-    <button type="submit" class="button light">Disable for daily runs</button>
-  </form>
-  {% else %}
-  <a class="button light" href="/sources/{{ source.id }}/dry-run?force_disabled=true">Dry run disabled source</a>
-  <p class="muted">Enable this source before running.</p>
-  <form method="post" action="/sources/{{ source.id }}/execution/enable" style="display:inline;">
-    <button type="submit" class="button">Enable for daily runs when ready</button>
-  </form>
+    {% if source.status != "archived" %}
+    <form method="post" action="/sources/{{ source.id }}/execution/update" class="inline-form">
+      <button type="submit" class="button light">Refresh disabled automation entry</button>
+    </form>
+    {% endif %}
+  </details>
   {% endif %}
-  {% else %}
-  <p class="muted">Archived sources cannot be enabled or refreshed for daily runs. Restore the source first if you want to use it again.</p>
-  {% endif %}
-  {% else %}
-  <p><strong>Daily-run entry:</strong> <span class="muted">Not prepared</span></p>
-  {% if source.status != "archived" %}
-  <form method="post" action="/sources/{{ source.id }}/execution/create">
-    <button type="submit" class="button">Prepare disabled daily-run entry</button>
-  </form>
-  {% else %}
-  <p class="muted">Restore this source before preparing a daily-run entry.</p>
-  {% endif %}
-  {% endif %}
-  {% if source.health.health_status != "good" %}
-  <p class="muted">Run recipe preview and save the review result before enabling.</p>
-  {% endif %}
-  <p class="muted">A source registry entry existing does not mean daily-run execution is prepared or enabled. Good health does not enable a source by itself.</p>
-  <p class="muted">Progression: Recipe Preview tests extraction from one input. Source Dry Run tests this configured execution source without writes. Run this source now writes normal outputs for this source only. Daily Run executes all enabled sources.</p>
 </div>
 {% endif %}
 
 <div class="panel">
   <h2>Historical Results</h2>
-  <p class="muted">This summarizes jobs already saved from this source in previous runs. It is separate from whether the recipe can read the board right now.</p>
+  {% if source.stats.jobs_found_total > 0 %}
+  <p class="muted">Jobs already saved from this source in previous runs.</p>
   <div class="grid">
     <div class="stat"><span>Result history</span><strong>{{ source.stats.value_label }}</strong></div>
     <div class="stat"><span>Saved jobs</span><strong>{{ source.stats.jobs_found_total }}</strong></div>
@@ -452,8 +359,6 @@ enabled: {{ "true" if execution_entry.enabled else "false" }}</pre>
     <div class="stat"><span>Applied</span><strong>{{ source.stats.applied_count }}</strong></div>
     <div class="stat"><span>Not interesting</span><strong>{{ source.stats.not_interesting_count }}</strong></div>
     <div class="stat"><span>Unreviewed</span><strong>{{ source.stats.unreviewed_count }}</strong></div>
-    <div class="stat"><span>Average score</span><strong>{{ source.stats.average_match_score }}</strong></div>
-    <div class="stat"><span>Best score</span><strong>{{ source.stats.best_match_score }}</strong></div>
   </div>
   <p><strong>Summary:</strong> {{ source.stats.value_summary }}</p>
   <p><strong>Best recent match:</strong>
@@ -464,11 +369,64 @@ enabled: {{ "true" if execution_entry.enabled else "false" }}</pre>
     {% endif %}
   </p>
   <p><strong>Last seen run:</strong> {{ source.stats.last_run_id or "Not tracked yet." }}</p>
-  <p><strong>Last successful run:</strong> {{ source.stats.last_successful_run_id or "Not tracked yet." }}</p>
+  {% else %}
+  <p class="muted">No jobs have been saved from this source yet. Results will appear here after the source is enabled and runs successfully.</p>
+  {% endif %}
 </div>
 
-<div class="panel">
-  <h2>Recruiter / Contact Notes</h2>
-  <p class="muted">Contact tracking not implemented yet.</p>
-</div>
+<details class="panel diagnostic-panel" id="source-settings">
+  <summary>Source settings</summary>
+  <form method="post" action="/sources/{{ source.id }}/registry/update">
+    <div class="form-grid" style="margin-top:14px;">
+      <div>
+        <label>Source name</label>
+        <input name="name" value="{{ source.name }}" required>
+      </div>
+      <div>
+        <label>Source URL</label>
+        <input name="url" value="{{ source.url }}" placeholder="https://example.com/jobs">
+      </div>
+      <div>
+        <label>Source type</label>
+        <select name="kind">
+          {% for option in kind_options %}
+          <option value="{{ option.value }}" {% if source.kind == option.value %}selected{% endif %}>{{ option.label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div>
+        <label>Lifecycle status</label>
+        <select name="status">
+          {% for option in status_options %}
+          <option value="{{ option.value }}" {% if source.status == option.value %}selected{% endif %}>{{ option.label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div>
+        <label>Recipe</label>
+        <select name="recipe_path">
+          <option value="">No recipe</option>
+          {% for option in recipe_options %}
+          <option value="{{ option.value }}" {% if source.recipe_path == option.value %}selected{% endif %}>{{ option.label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+    </div>
+    <label>Notes</label>
+    <textarea name="notes" class="compact-textarea">{{ source.notes }}</textarea>
+    <div class="form-actions"><button type="submit">Save source settings</button></div>
+  </form>
+  <p class="muted">Tags: {{ source.tags|join(", ") or "none" }}</p>
+  <div class="danger-zone">
+    {% if source.status == "archived" %}
+    <form method="post" action="/sources/{{ source.id }}/restore" class="inline-form">
+      <button type="submit" class="button light">Restore source</button>
+    </form>
+    {% else %}
+    <form method="post" action="/sources/{{ source.id }}/archive" class="inline-form">
+      <button type="submit" class="button danger">Archive source</button>
+    </form>
+    {% endif %}
+  </div>
+</details>
 {% endblock %}

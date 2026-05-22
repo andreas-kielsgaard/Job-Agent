@@ -97,7 +97,7 @@ def test_source_detail_shows_lifecycle_status_and_mismatch_warning(client: TestC
     response = client.get("/sources/eursap-jobs")
 
     assert response.status_code == 200
-    assert "Setup status" in response.text
+    assert "Recipe setup details" in response.text
     assert "generated-eursap.yaml" in response.text
     assert "differs from the source registry recipe_path" in response.text
     assert "Execution enabled" in response.text
