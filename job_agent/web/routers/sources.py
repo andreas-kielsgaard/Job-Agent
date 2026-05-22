@@ -5,9 +5,11 @@ from urllib.parse import urlencode
 from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
+from job_agent.services.recipe_calibration_service import capture_recipe_calibration
 from job_agent.services.recipe_suggestion_service import suggest_recipe_from_artifact, suggest_recipe_with_refinement
 from job_agent.services.single_source_run_service import SingleSourceRunService
 from job_agent.services.source_dry_run_service import SourceDryRunService
+from job_agent.services.source_registry_service import VALID_STATUSES
 from job_agent.web.dependencies import (
     approved_recipe_adoption_service,
     execution_source_service,
@@ -19,17 +21,24 @@ from job_agent.web.dependencies import (
     source_registry_service,
     templates,
 )
+from job_agent.web.form_options import recipe_options
 
 router = APIRouter()
+SOURCE_STATUS_OPTIONS = ["active", "experimental", "needs_review", "disabled"]
 
 
 @router.get("/sources", response_class=HTMLResponse)
 def source_overview(request: Request) -> HTMLResponse:
     sources = source_registry_service().list_sources()
+    execution_by_source = {
+        str(source.get("source_id") or ""): source
+        for source in execution_source_service().list_sources()
+        if isinstance(source, dict)
+    }
     return templates.TemplateResponse(
         request,
         "sources.html",
-        {"request": request, "sources": sources},
+        {"request": request, "sources": sources, "execution_by_source": execution_by_source},
     )
 
 
@@ -57,8 +66,66 @@ def source_detail(request: Request, source_id: str, message: str = "", warning: 
             "recipe_candidates": recipe_candidates,
             "recipe_generation_status": generation_status,
             "go_live_readiness": go_live_readiness,
+            "recipe_options": recipe_options(execution_source_service().root),
+            "status_options": [status for status in SOURCE_STATUS_OPTIONS if status in VALID_STATUSES],
         },
     )
+
+
+@router.post("/sources/{source_id}/registry/update")
+def update_registry_source(
+    source_id: str,
+    name: str = Form(...),
+    url: str = Form(""),
+    status: str = Form(...),
+    recipe_path: str = Form(""),
+    notes: str = Form(""),
+) -> RedirectResponse:
+    try:
+        source_registry_service().update_source(
+            source_id,
+            name=name,
+            url=url,
+            status=status,
+            recipe_path=recipe_path,
+            notes=notes,
+        )
+    except (KeyError, ValueError) as exc:
+        return _redirect_to_source(source_id, warning=f"Source update failed: {exc}")
+    return _redirect_to_source(source_id, message="Source registry updated.")
+
+
+@router.post("/sources/{source_id}/recipe-calibration/capture")
+def capture_recipe_calibration_artifact(
+    source_id: str,
+    rendered: str = Form(""),
+    max_candidates: int = Form(30),
+) -> RedirectResponse:
+    source = _registry_source_or_404(source_id)
+    if not source.url:
+        return _redirect_to_source(source_id, warning="Save a source URL before capturing calibration evidence.")
+    bounded_candidates = max(5, min(max_candidates, 50))
+    root = execution_source_service().root
+    try:
+        result = capture_recipe_calibration(
+            source.url,
+            recipe_path=source.recipe_path or None,
+            rendered=True if rendered else None,
+            root=root,
+            max_candidates=bounded_candidates,
+        )
+    except (RuntimeError, ValueError) as exc:
+        return _redirect_to_source(source_id, warning=f"Calibration capture failed: {exc}")
+
+    try:
+        artifact_label = result.artifact_dir.relative_to(root).as_posix()
+    except ValueError:
+        artifact_label = result.artifact_dir.as_posix()
+    message = (
+        f"Calibration artifact captured: {artifact_label}. "
+        f"{result.candidate_count} candidate regions; recipe extracted {result.recipe_extracted_count} jobs."
+    )
+    return _redirect_to_source(source_id, message=message)
 
 
 @router.post("/sources/{source_id}/execution/create")

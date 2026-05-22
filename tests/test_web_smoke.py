@@ -308,8 +308,11 @@ def test_source_overview_and_detail_routes_render(client: TestClient) -> None:
     overview = client.get("/sources")
 
     assert overview.status_code == 200
+    assert 'class="source-list"' in overview.text
+    assert 'class="source-card"' in overview.text
     assert "Extraction health" in overview.text
     assert "Source value" in overview.text
+    assert "execution missing" in overview.text
     assert "Manual Intake" in overview.text
     assert "Eursap Jobs" in overview.text
     assert "Whitehall Resources SAP Jobs" in overview.text
@@ -318,6 +321,12 @@ def test_source_overview_and_detail_routes_render(client: TestClient) -> None:
     detail = client.get("/sources/eursap-jobs")
 
     assert detail.status_code == 200
+    assert "What These Labels Mean" in detail.text
+    assert "Review lifecycle. Experimental means usable for testing" in detail.text
+    assert "Next Actions" in detail.text
+    assert "Source Settings" in detail.text
+    assert "Save source settings" in detail.text
+    assert "Capture one-page calibration artifact" in detail.text
     assert "sources/recipes/experimental/eursap-jobs.yaml" in detail.text
     assert "live-calibrated experimental" in detail.text
     assert "Extraction health is based on manual recipe preview/test results" in detail.text
@@ -328,6 +337,71 @@ def test_source_overview_and_detail_routes_render(client: TestClient) -> None:
     assert "/recipe-preview" in detail.text
     assert "selected_source_id=eursap-jobs" in detail.text
     assert "Contact tracking not implemented yet" in detail.text
+
+
+def test_source_detail_updates_registry_fields(client: TestClient, project_root: Path) -> None:
+    response = client.post(
+        "/sources/eursap-jobs/registry/update",
+        data={
+            "name": "Eursap Jobs Reviewed",
+            "url": "https://eursap.eu/jobs?contract=sap",
+            "status": "active",
+            "recipe_path": "sources/recipes/experimental/eursap-jobs.yaml",
+            "notes": "Ready for controlled dry run.",
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"].startswith("/sources/eursap-jobs")
+    detail = client.get("/sources/eursap-jobs")
+    assert "Eursap Jobs Reviewed" in detail.text
+    assert "https://eursap.eu/jobs?contract=sap" in detail.text
+    assert "Ready for controlled dry run." in detail.text
+
+
+def test_source_detail_capture_calibration_action_is_bounded(
+    monkeypatch: pytest.MonkeyPatch, client: TestClient, project_root: Path
+) -> None:
+    captured = {}
+
+    class FakeCalibrationResult:
+        url = "https://eursap.eu/jobs"
+        artifact_dir = project_root / "output" / "recipe-calibration" / "fake-artifact"
+        capture_mode = "static_html"
+        candidate_count = 12
+        recipe_extracted_count = 3
+        warnings = []
+
+    def fake_capture(url, recipe_path, rendered, root, max_candidates):
+        captured.update(
+            {
+                "url": url,
+                "recipe_path": recipe_path,
+                "rendered": rendered,
+                "root": root,
+                "max_candidates": max_candidates,
+            }
+        )
+        return FakeCalibrationResult()
+
+    monkeypatch.setattr("job_agent.web.routers.sources.capture_recipe_calibration", fake_capture)
+
+    response = client.post(
+        "/sources/eursap-jobs/recipe-calibration/capture",
+        data={"max_candidates": "500"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert "Calibration+artifact+captured" in response.headers["location"]
+    assert captured == {
+        "url": "https://eursap.eu/jobs",
+        "recipe_path": "sources/recipes/experimental/eursap-jobs.yaml",
+        "rendered": None,
+        "root": project_root,
+        "max_candidates": 50,
+    }
 
 
 def test_source_routes_render_saved_health(client: TestClient, project_root: Path) -> None:

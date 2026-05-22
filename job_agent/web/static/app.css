@@ -137,6 +137,18 @@ a:hover {
   margin-top: 18px;
 }
 
+.action-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+.inline-form {
+  display: inline-flex;
+  margin: 0;
+}
+
 .row {
   display: flex;
   gap: 10px;
@@ -196,6 +208,11 @@ select {
 textarea {
   min-height: 260px;
   font-family: Consolas, monospace;
+}
+
+textarea.compact-textarea {
+  min-height: 90px;
+  font-family: inherit;
 }
 
 label {
@@ -321,6 +338,71 @@ td {
   color: var(--muted);
 }
 
+.source-list {
+  display: grid;
+  gap: 14px;
+}
+
+.source-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(120px, 150px);
+  gap: 18px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 16px;
+}
+
+.source-card h2 {
+  margin: 0 0 3px;
+  font-size: 20px;
+}
+
+.source-title-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.source-fact-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px 18px;
+  margin-top: 14px;
+}
+
+.source-fact-grid > div {
+  min-width: 0;
+}
+
+.fact-label {
+  display: block;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.source-fact-grid strong,
+.source-fact-grid span,
+.source-url {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.source-note {
+  margin: 12px 0 0;
+}
+
+.source-card-actions {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+}
+
+.source-card-actions .button {
+  text-align: center;
+}
+
 .badge {
   display: inline-block;
   border-radius: 999px;
@@ -387,6 +469,18 @@ td {
 @media (max-width: 760px) {
   .source-mode-bar {
     grid-template-columns: 1fr;
+  }
+
+  .source-card {
+    grid-template-columns: 1fr;
+  }
+
+  .source-title-row {
+    display: grid;
+  }
+
+  .source-card-actions {
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
   }
 
   .triage-card {

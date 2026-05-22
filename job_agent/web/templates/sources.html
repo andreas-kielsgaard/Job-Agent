@@ -2,81 +2,78 @@
 {% block content %}
 <h1>Sources</h1>
 <div class="panel">
-  <p class="muted">Sources are places jobs can come from. This registry is a review and configuration layer; daily runs still use the existing source config.</p>
+  <p class="muted">Sources are reviewed job origins. Recipe-backed sources can be previewed, dry-run, and later enabled for daily runs after readiness checks pass.</p>
   <div class="grid">
     <div class="stat"><span>Registered sources</span><strong>{{ sources|length }}</strong></div>
     <div class="stat"><span>Recipe-backed</span><strong>{{ sources|selectattr("recipe_path")|list|length }}</strong></div>
-    <div class="stat"><span>Enabled here</span><strong>{{ sources|selectattr("enabled")|list|length }}</strong></div>
+    <div class="stat"><span>Execution entries</span><strong>{{ execution_by_source|length }}</strong></div>
   </div>
 </div>
 
-<div class="panel">
-  <table>
-    <thead>
-      <tr>
-        <th>Source</th>
-        <th>Kind</th>
-        <th>Status</th>
-        <th>Extraction health</th>
-        <th>Source value</th>
-        <th>Recipe state</th>
-        <th>URL</th>
-        <th>Actions</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for source in sources %}
-      <tr>
-        <td>
-          <strong>{{ source.name }}</strong><br>
-          <span class="muted">{{ source.id }}</span>
-        </td>
-        <td><span class="badge">{{ source.kind }}</span></td>
-        <td>
-          <span class="badge {{ 'high' if source.status == 'active' else 'medium' if source.status in ['experimental', 'needs_review'] else 'low' }}">{{ source.status }}</span><br>
-          <span class="muted">{{ "Enabled" if source.enabled else "Disabled" }}</span>
-        </td>
-        <td>
-          {% if source.recipe_path %}
-          <span class="badge {{ 'high' if source.health.health_status == 'good' else 'medium' if source.health.health_status in ['warning', 'untested'] else 'low' }}">{{ source.health.health_status }}</span>
-          <div>Last preview: {{ source.health.last_preview_at or "Never" }}</div>
-          <div>Jobs: {{ source.health.extracted_job_count }}</div>
-          <div>Useful: {{ source.health.useful_titles }}</div>
-          <div>Generic: {{ source.health.generic_labels }}</div>
-          <div>Warnings: {{ source.health.warnings_count }}</div>
-          <div class="muted">{{ source.health.health_summary }}</div>
-          {% else %}
-          <span class="muted">not applicable</span>
+<div class="source-list">
+  {% for source in sources %}
+  {% set execution = execution_by_source.get(source.id) %}
+  <article class="source-card">
+    <div class="source-card-main">
+      <div class="source-title-row">
+        <div>
+          <h2>{{ source.name }}</h2>
+          <div class="muted">{{ source.id }}</div>
+        </div>
+        <div class="badge-row">
+          <span class="badge">{{ source.kind }}</span>
+          <span class="badge {{ 'high' if source.status == 'active' else 'medium' if source.status in ['experimental', 'needs_review'] else 'low' }}">{{ source.status }}</span>
+          {% if execution %}
+          <span class="badge {{ 'high' if execution.enabled else 'medium' }}">{{ "execution enabled" if execution.enabled else "execution disabled" }}</span>
+          {% elif source.recipe_path %}
+          <span class="badge low">execution missing</span>
           {% endif %}
-        </td>
-        <td>
-          <span class="badge {{ 'high' if source.stats.value_status == 'promising' else 'medium' if source.stats.value_status == 'mixed' else 'low' if source.stats.value_status == 'low_value' else '' }}">{{ source.stats.value_status }}</span>
-          <div>Jobs: {{ source.stats.jobs_found_total }}</div>
-          <div>Strong/exploratory: {{ source.stats.strong_matches }}/{{ source.stats.exploratory_matches }}</div>
-          <div>Applied/not interesting: {{ source.stats.applied_count }}/{{ source.stats.not_interesting_count }}</div>
-          <div>Avg/best score: {{ source.stats.average_match_score }}/{{ source.stats.best_match_score }}</div>
-          <div class="muted">{{ source.stats.value_summary }}</div>
-        </td>
-        <td>{{ source.recipe_state }}</td>
-        <td>
+        </div>
+      </div>
+      <div class="source-fact-grid">
+        <div>
+          <span class="fact-label">Extraction health</span>
+          {% if source.recipe_path %}
+          <strong>{{ source.health.health_status }}</strong>
+          <span>{{ source.health.health_summary }}</span>
+          {% else %}
+          <strong>not applicable</strong>
+          <span>Manual or local source.</span>
+          {% endif %}
+        </div>
+        <div>
+          <span class="fact-label">Source value</span>
+          <strong>{{ source.stats.value_status }}</strong>
+          <span>{{ source.stats.jobs_found_total }} saved jobs. Avg/best score: {{ source.stats.average_match_score }}/{{ source.stats.best_match_score }}</span>
+        </div>
+        <div>
+          <span class="fact-label">Recipe</span>
+          <strong>{{ source.recipe_state }}</strong>
+          <span>{{ source.recipe_path or "none" }}</span>
+        </div>
+        <div>
+          <span class="fact-label">URL</span>
           {% if source.url %}
-          <a href="{{ source.url }}" target="_blank" rel="noreferrer">{{ source.url }}</a>
+          <a class="source-url" href="{{ source.url }}" target="_blank" rel="noreferrer">{{ source.url }}</a>
           {% else %}
           <span class="muted">none</span>
           {% endif %}
-          {% if source.recipe_path %}
-          <div class="muted">{{ source.recipe_path }}</div>
-          {% endif %}
-        </td>
-        <td>
-          <a class="button light" href="/sources/{{ source.id }}">Detail</a>
-          {% if source.recipe_path %}
-          <a class="button light" href="/recipe-preview?recipe_path={{ source.recipe_path|urlencode }}&input_path_or_url={{ source.url|urlencode }}&source_mode=configured&selected_source_id={{ source.id|urlencode }}">Preview</a>
-          {% endif %}
-        </td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
+        </div>
+      </div>
+      {% if source.notes %}
+      <p class="muted source-note">{{ source.notes }}</p>
+      {% endif %}
+    </div>
+    <div class="source-card-actions">
+      <a class="button light" href="/sources/{{ source.id }}">Detail</a>
+      {% if source.recipe_path %}
+      <a class="button light" href="/recipe-preview?recipe_path={{ source.recipe_path|urlencode }}&input_path_or_url={{ source.url|urlencode }}&source_mode=configured&selected_source_id={{ source.id|urlencode }}">Preview</a>
+      {% endif %}
+      {% if execution %}
+      <a class="button light" href="/sources/{{ source.id }}/dry-run{% if not execution.enabled %}?force_disabled=true{% endif %}">Dry run</a>
+      {% endif %}
+    </div>
+  </article>
+  {% endfor %}
 </div>
 {% endblock %}

@@ -3,6 +3,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
+from job_agent.io.yaml_store import read_yaml
 from job_agent.services.source_registry_service import SourceRegistryService
 
 
@@ -90,6 +93,39 @@ def test_get_source_by_id_and_recipe_status(project_root: Path) -> None:
     assert source.recipe_path == "sources/recipes/experimental/eursap-jobs.yaml"
     assert source.recipe_state == "live-calibrated experimental"
     assert source.enabled is False
+
+
+def test_update_source_persists_default_source_edits(project_root: Path) -> None:
+    service = SourceRegistryService(project_root)
+
+    updated = service.update_source(
+        "eursap-jobs",
+        name="Eursap Jobs Reviewed",
+        url="https://eursap.eu/jobs?contract=sap",
+        status="active",
+        recipe_path="sources/recipes/experimental/eursap-jobs.yaml",
+        notes="Reviewed for daily-run prep.",
+    )
+
+    registry = read_yaml(project_root / "sources" / "source-registry.yaml", {})
+    saved = next(item for item in registry["sources"] if item["id"] == "eursap-jobs")
+    assert updated.name == "Eursap Jobs Reviewed"
+    assert updated.status == "active"
+    assert saved["name"] == "Eursap Jobs Reviewed"
+    assert saved["url"] == "https://eursap.eu/jobs?contract=sap"
+    assert saved["notes"] == "Reviewed for daily-run prep."
+
+
+def test_update_source_rejects_unknown_status(project_root: Path) -> None:
+    with pytest.raises(ValueError, match="Unsupported source status"):
+        SourceRegistryService(project_root).update_source(
+            "eursap-jobs",
+            name="Eursap Jobs",
+            url="https://eursap.eu/jobs",
+            status="live",
+            recipe_path="sources/recipes/experimental/eursap-jobs.yaml",
+            notes="",
+        )
 
 
 def test_registry_includes_saved_source_health(project_root: Path) -> None:

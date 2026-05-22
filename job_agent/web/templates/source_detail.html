@@ -6,18 +6,87 @@
 </div>
 
 <div class="panel">
-  <h2>Source Registry</h2>
+  <h2>What These Labels Mean</h2>
+  <div class="grid">
+    <div class="stat"><span>Kind</span><strong>{{ source.kind }}</strong><p class="muted">The source type: manual, local YAML, generic HTML, or recipe-backed extraction.</p></div>
+    <div class="stat"><span>Status</span><strong>{{ source.status }}</strong><p class="muted">Review lifecycle. Experimental means usable for testing but not promoted as a trusted daily-run source yet.</p></div>
+    <div class="stat"><span>Execution</span><strong>{{ "enabled" if execution_entry and execution_entry.enabled else "disabled" if execution_entry else "not configured" }}</strong><p class="muted">Only an enabled execution entry participates in daily runs.</p></div>
+  </div>
+</div>
+
+<div class="panel">
+  <h2>Next Actions</h2>
+  <div class="action-row">
+    {% if recipe_preview_url %}
+    <a class="button" href="{{ recipe_preview_url }}">Preview recipe</a>
+    {% endif %}
+    <a class="button light" href="#source-settings">Edit source settings</a>
+    {% if source.recipe_path %}
+    <a class="button light" href="#recipe-generation">Generate recipe candidate</a>
+    {% if execution_entry %}
+    <a class="button light" href="/sources/{{ source.id }}/dry-run{% if not execution_entry.enabled %}?force_disabled=true{% endif %}">Dry run source</a>
+    {% if not execution_entry.enabled %}
+    <form method="post" action="/sources/{{ source.id }}/dry-run-readiness" class="inline-form">
+      <button type="submit" class="button light">Save dry-run readiness</button>
+    </form>
+    {% endif %}
+    {% else %}
+    <form method="post" action="/sources/{{ source.id }}/execution/create" class="inline-form">
+      <button type="submit" class="button light">Create execution entry</button>
+    </form>
+    {% endif %}
+    {% if execution_entry and not execution_entry.enabled and go_live_readiness.readiness_status == "ready" %}
+    <form method="post" action="/sources/{{ source.id }}/enable-when-ready" class="inline-form">
+      <button type="submit" class="button">Enable when ready</button>
+    </form>
+    {% endif %}
+    {% endif %}
+  </div>
+  <p class="muted">Preview tests extraction. Calibration captures one source page for recipe generation. Dry run tests the configured source without normal writes. Enablement is guarded and explicit.</p>
+</div>
+
+<div class="panel" id="source-settings">
+  <h2>Source Settings</h2>
   <div class="grid">
     <div class="stat"><span>Kind</span><strong>{{ source.kind }}</strong></div>
     <div class="stat"><span>Status</span><strong>{{ source.status }}</strong></div>
-    <div class="stat"><span>Enabled</span><strong>{{ "Yes" if source.enabled else "No" }}</strong></div>
+    <div class="stat"><span>Execution entry</span><strong>{{ "present" if execution_entry else "missing" }}</strong></div>
     <div class="stat"><span>Added</span><strong>{{ source.added_at or "Unknown" }}</strong></div>
   </div>
-  <p><strong>URL:</strong>
-    {% if source.url %}<a href="{{ source.url }}" target="_blank" rel="noreferrer">{{ source.url }}</a>{% else %}<span class="muted">none</span>{% endif %}
-  </p>
+  <form method="post" action="/sources/{{ source.id }}/registry/update">
+    <div class="form-grid">
+      <div>
+        <label>Source name</label>
+        <input name="name" value="{{ source.name }}" required>
+      </div>
+      <div>
+        <label>Source URL</label>
+        <input name="url" value="{{ source.url }}" placeholder="https://example.com/jobs">
+      </div>
+      <div>
+        <label>Review status</label>
+        <select name="status">
+          {% for option in status_options %}
+          <option value="{{ option }}" {% if source.status == option %}selected{% endif %}>{{ option|replace("_", " ")|title }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div>
+        <label>Recipe</label>
+        <select name="recipe_path">
+          <option value="">No recipe</option>
+          {% for option in recipe_options %}
+          <option value="{{ option.value }}" {% if source.recipe_path == option.value %}selected{% endif %}>{{ option.label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+    </div>
+    <label>Notes</label>
+    <textarea name="notes" class="compact-textarea">{{ source.notes }}</textarea>
+    <div class="form-actions"><button type="submit">Save source settings</button></div>
+  </form>
+  <p class="muted">Changing the registry recipe does not enable daily-run execution. Use the execution controls after preview and dry-run checks pass.</p>
   <p><strong>Tags:</strong> {{ source.tags|join(", ") or "none" }}</p>
-  <p><strong>Notes:</strong> {{ source.notes or "None yet." }}</p>
 </div>
 
 {% if execution_message %}
@@ -70,9 +139,21 @@
   {% endif %}
 </div>
 
-<div class="panel">
+<div class="panel" id="recipe-generation">
   <h2>Recipe Generation</h2>
-  <p class="muted">Generate a pending recipe candidate from saved local calibration artifacts. This does not promote a recipe, enable a source, execute a source, or edit daily-run configuration.</p>
+  <p class="muted">Generate a pending recipe candidate from saved local calibration artifacts. A candidate is a proposed recipe version for review; it is not active until approved and adopted.</p>
+  {% if source.url %}
+  <form method="post" action="/sources/{{ source.id }}/recipe-calibration/capture">
+    <div class="row">
+      <label>Candidate regions <input type="number" name="max_candidates" value="30" min="5" max="50" style="max-width:7rem;"></label>
+      <label class="check"><input type="checkbox" name="rendered" value="1"> Render with browser</label>
+      <button type="submit" class="button light">Capture one-page calibration artifact</button>
+    </div>
+  </form>
+  <p class="muted">This fetches only the saved source URL once and stores local evidence under output/recipe-calibration. It does not follow every listing or enable daily runs.</p>
+  {% else %}
+  <p class="muted">Save a source URL before capturing calibration evidence.</p>
+  {% endif %}
   {% if recipe_artifacts %}
   <form method="post" action="/sources/{{ source.id }}/recipe-candidates/generate">
     <label>Local calibration artifact</label>
@@ -109,12 +190,16 @@
   </details>
   {% else %}
   <p class="muted">No local calibration artifacts found under output/recipe-calibration yet.</p>
+  <details>
+    <summary>Copyable calibration command</summary>
+    <pre class="copy-source">python -m job_agent.cli calibrate-recipe {{ source.url or "https://example.com/jobs" }} --recipe {{ source.recipe_path }} --max-candidates 30</pre>
+  </details>
   {% endif %}
 </div>
 
 <div class="panel">
   <h2>Recipe Candidates</h2>
-  <p class="muted">Candidates are review objects only. They are not active recipes and are not connected to daily runs.</p>
+  <p class="muted">Candidates are saved proposed recipe revisions. Approving checks and writes a recipe file; adopting points this source at that approved recipe. Neither step enables daily runs by itself.</p>
   {% if recipe_candidates %}
   <table>
     <thead>
@@ -224,6 +309,9 @@
   {% endif %}
   {% else %}
   <p class="muted">Create a disabled execution entry before saving dry-run readiness.</p>
+  <form method="post" action="/sources/{{ source.id }}/execution/create" style="display:inline;">
+    <button type="submit" class="button light">Create disabled execution entry</button>
+  </form>
   {% endif %}
   <p class="muted">Enabling is explicit and does not start a source run or daily run.</p>
 </div>

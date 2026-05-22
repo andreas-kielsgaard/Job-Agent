@@ -85,6 +85,60 @@ class SourceRegistryService:
     def get_source(self, source_id: str) -> SourceRegistryEntry | None:
         return next((source for source in self.list_sources() if source.id == source_id), None)
 
+    def update_source(
+        self,
+        source_id: str,
+        *,
+        name: str,
+        url: str,
+        status: str,
+        recipe_path: str,
+        notes: str,
+    ) -> SourceRegistryEntry:
+        current = self.get_source(source_id)
+        if not current:
+            raise KeyError(f"Source not found: {source_id}")
+        normalized_status = status.strip()
+        if normalized_status not in VALID_STATUSES:
+            raise ValueError(f"Unsupported source status: {status}")
+        normalized_recipe_path = recipe_path.replace("\\", "/").strip()
+
+        self.ensure_registry()
+        data = read_yaml(self.path, {"sources": []})
+        if not isinstance(data, dict):
+            data = {"sources": []}
+        sources = data.setdefault("sources", [])
+        if not isinstance(sources, list):
+            sources = []
+            data["sources"] = sources
+
+        normalized_source_id = _slug(source_id)
+        target = None
+        for item in sources:
+            if isinstance(item, dict) and _mapping_source_id(item) == normalized_source_id:
+                target = item
+                break
+        if target is None:
+            target = _source_entry_mapping(current)
+            sources.append(target)
+
+        target["name"] = name.strip() or current.name
+        target["url"] = url.strip()
+        target["status"] = normalized_status
+        target["recipe_path"] = normalized_recipe_path
+        target["notes"] = notes.strip()
+        if normalized_recipe_path and str(target.get("kind") or "") not in {"recipe", "experimental_recipe"}:
+            target["kind"] = "experimental_recipe"
+        if not normalized_recipe_path and str(target.get("kind") or "") in {"recipe", "experimental_recipe"}:
+            target["kind"] = "manual"
+
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        write_yaml(self.path, data)
+        updated = self.get_source(normalized_source_id)
+        if not updated:
+            raise KeyError(f"Source not found after update: {source_id}")
+        return updated
+
     def adopt_recipe_path(self, source_id: str, recipe_path: str, note: str = "") -> SourceRegistryEntry:
         self.ensure_registry()
         data = read_yaml(self.path, {"sources": []})
@@ -293,6 +347,21 @@ def _recipe_source_mappings(root: Path, existing_ids: set[str]) -> list[dict[str
 
 def _mapping_source_id(data: dict[str, Any]) -> str:
     return _slug(str(data.get("id") or data.get("name") or "source"))
+
+
+def _source_entry_mapping(source: SourceRegistryEntry) -> dict[str, Any]:
+    return {
+        "id": source.id,
+        "name": source.name,
+        "kind": source.kind,
+        "status": source.status,
+        "url": source.url,
+        "recipe_path": source.recipe_path,
+        "added_at": source.added_at,
+        "enabled": source.enabled,
+        "notes": source.notes,
+        "tags": list(source.tags),
+    }
 
 
 def _stats_from_packages(packages: list[dict[str, Any]]) -> SourceStats:
