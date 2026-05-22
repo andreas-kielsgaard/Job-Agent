@@ -21,6 +21,7 @@ def recipe_preview_form(
     source_mode: str = Query("configured"),
     selected_source_id: str = Query(""),
     tab: str = Query("execute"),
+    auto_run: bool = Query(False),
 ) -> HTMLResponse:
     root = current_root()
     sources = source_options(root)
@@ -52,7 +53,7 @@ def recipe_preview_form(
             recipe_explanation=recipe_explanation,
         ),
     )
-    return templates.TemplateResponse(
+    response = templates.TemplateResponse(
         request,
         "recipe_preview.html",
         {
@@ -67,9 +68,12 @@ def recipe_preview_form(
             "sources": sources,
             "recipe_options": recipes,
             "tab": normalized_tab,
+            "auto_run": auto_run and normalized_tab == "execute" and bool(recipe_path and input_path_or_url),
             "saved_health": saved_health,
         },
     )
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 @router.post("/recipe-preview", response_class=HTMLResponse)
@@ -174,7 +178,7 @@ def run_recipe_preview(
             health_saved=health_saved,
         ),
     )
-    return templates.TemplateResponse(
+    response = templates.TemplateResponse(
         request,
         "recipe_preview.html",
         {
@@ -190,9 +194,12 @@ def run_recipe_preview(
             "recipe_options": recipes,
             "health_saved": health_saved,
             "tab": "execute",
+            "auto_run": False,
             "saved_health": saved_health,
         },
     )
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 def _recipe_preview_debug_state(

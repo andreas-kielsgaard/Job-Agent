@@ -264,6 +264,46 @@ a:hover {
   padding-top: 14px;
 }
 
+.running-panel {
+  border-left: 6px solid var(--accent);
+}
+
+.progress-steps {
+  display: grid;
+  gap: 10px;
+  margin: 16px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.progress-steps li {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: #fbfcfd;
+  color: var(--muted);
+}
+
+.progress-steps li.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--text);
+  font-weight: 700;
+}
+
+.progress-steps li.complete {
+  border-color: #bbf7d0;
+  background: #f0fdf4;
+  color: #166534;
+}
+
+.progress-steps li.failed {
+  border-color: #fecaca;
+  background: #fef2f2;
+  color: var(--bad);
+  font-weight: 700;
+}
+
 .button,
 button {
   border: 0;

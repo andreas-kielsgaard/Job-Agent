@@ -322,10 +322,10 @@ def test_source_overview_and_detail_routes_render(client: TestClient) -> None:
 
     assert detail.status_code == 200
     assert "Not ready yet" in detail.text
-    assert "Run recipe preview" in detail.text
+    assert "Run recipe review" in detail.text
     assert "Recipe preview" in detail.text
-    assert "Dry run" in detail.text
-    assert "Automatic checks" in detail.text
+    assert "Source test" in detail.text
+    assert "Daily run" in detail.text
     assert "Source settings" in detail.text
     assert "Save source settings" in detail.text
     assert "Capture one page" in detail.text
@@ -339,8 +339,9 @@ def test_source_overview_and_detail_routes_render(client: TestClient) -> None:
     assert "Draft recipes" in detail.text
     assert "Historical Results" in detail.text
     assert "No jobs have been saved from this source yet" in detail.text
-    assert "Automation" in detail.text
+    assert "Daily Run" in detail.text
     assert "/recipe-preview" in detail.text
+    assert "auto_run=1" in detail.text
     assert "selected_source_id=eursap-jobs" in detail.text
 
 
@@ -368,7 +369,7 @@ def test_source_detail_updates_registry_fields(client: TestClient, project_root:
             "url": "https://eursap.eu/jobs?contract=sap",
             "status": "ready",
             "recipe_path": "sources/recipes/experimental/eursap-jobs.yaml",
-            "notes": "Ready for controlled dry run.",
+            "notes": "Ready for controlled source test.",
         },
         follow_redirects=False,
     )
@@ -378,7 +379,7 @@ def test_source_detail_updates_registry_fields(client: TestClient, project_root:
     detail = client.get("/sources/eursap-jobs")
     assert "Eursap Jobs Reviewed" in detail.text
     assert "https://eursap.eu/jobs?contract=sap" in detail.text
-    assert "Ready for controlled dry run." in detail.text
+    assert "Ready for controlled source test." in detail.text
 
 
 def test_source_archive_hides_source_from_default_overview_and_disables_execution(
@@ -488,6 +489,10 @@ def test_source_routes_render_saved_health(client: TestClient, project_root: Pat
         "/recipe-preview?source_mode=configured&selected_source_id=eursap-jobs"
         "&recipe_path=sources/recipes/experimental/eursap-jobs.yaml"
     )
+    auto_preview = client.get(
+        "/recipe-preview?source_mode=configured&selected_source_id=eursap-jobs"
+        "&recipe_path=sources/recipes/experimental/eursap-jobs.yaml&auto_run=1"
+    )
 
     assert overview.status_code == 200
     assert "good" in overview.text
@@ -500,8 +505,11 @@ def test_source_routes_render_saved_health(client: TestClient, project_root: Pat
     assert "Saved Source / Recipe Result" in compatibility.text
     assert "9 jobs extracted, 9 useful titles, no generic labels." in compatibility.text
     assert preview.status_code == 200
-    assert "Saved Review Result" in preview.text
+    assert "Last Saved Review" in preview.text
     assert "9 jobs extracted, 9 useful titles, no generic labels." in preview.text
+    assert auto_preview.status_code == 200
+    assert "Running review" in auto_preview.text
+    assert 'requestSubmit()' in auto_preview.text
 
 
 def test_source_routes_render_value_metrics(client: TestClient, project_root: Path) -> None:
@@ -643,8 +651,55 @@ def test_source_detail_shows_dry_run_link_when_execution_entry_exists(client: Te
     detail = client.get("/sources/eursap-jobs")
 
     assert detail.status_code == 200
-    assert "/sources/eursap-jobs/dry-run-readiness" in detail.text
-    assert "Run dry run and save result" in detail.text
+    assert "/sources/eursap-jobs/test-run" in detail.text
+    assert "Test source without saving jobs" in detail.text
+
+
+def test_source_test_run_view_and_api_save_readiness(monkeypatch: pytest.MonkeyPatch, client: TestClient) -> None:
+    from job_agent.services.source_dry_run_service import DryRunJobPreview, SourceDryRunResult
+
+    client.post("/sources/eursap-jobs/execution/create", follow_redirects=False)
+
+    class FakeDryRunService:
+        def __init__(self, root):
+            pass
+
+        def dry_run(self, source_id, *, force_disabled=False):
+            assert source_id == "eursap-jobs"
+            assert force_disabled is True
+            return SourceDryRunResult(
+                source_id="eursap-jobs",
+                source_name="Eursap Jobs",
+                source_type="recipe_html",
+                source_enabled=False,
+                forced_disabled=True,
+                status="success",
+                job_count=1,
+                jobs=[
+                    DryRunJobPreview(
+                        title="SAP Basis Consultant",
+                        url="https://eursap.eu/jobs/sap-basis",
+                        source="Eursap Jobs",
+                        source_id="eursap-jobs",
+                        location="Remote",
+                    )
+                ],
+            )
+
+    monkeypatch.setattr("job_agent.web.routers.sources.SourceDryRunService", FakeDryRunService)
+
+    view = client.get("/sources/eursap-jobs/test-run")
+    response = client.post("/sources/eursap-jobs/test-run")
+
+    assert view.status_code == 200
+    assert "Test Source Without Saving Jobs" in view.text
+    assert "fetch(&#34;/sources/eursap-jobs/test-run&#34;" in view.text or 'fetch("/sources/eursap-jobs/test-run"' in view.text
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "success"
+    assert payload["job_count"] == 1
+    assert payload["jobs"][0]["title"] == "SAP Basis Consultant"
+    assert payload["readiness_status"] in {"ready", "blocked", "warning"}
 
 
 def test_source_dry_run_route_renders_result(monkeypatch: pytest.MonkeyPatch, client: TestClient) -> None:
@@ -684,9 +739,9 @@ def test_source_dry_run_route_renders_result(monkeypatch: pytest.MonkeyPatch, cl
     response = client.get("/sources/eursap-jobs/dry-run?force_disabled=true")
 
     assert response.status_code == 200
-    assert "Source Dry Run" in response.text
+    assert "Source Test Result" in response.text
     assert "SAP Basis Consultant" in response.text
-    assert "Forced disabled source execution" in response.text
+    assert "Tested while the daily-run entry was disabled" in response.text
     assert "No packages, seen state, materials, digests, or run records were written." in response.text
 
 

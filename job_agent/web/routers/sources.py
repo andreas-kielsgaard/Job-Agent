@@ -3,7 +3,7 @@ from __future__ import annotations
 from urllib.parse import urlencode
 
 from fastapi import APIRouter, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from job_agent.services.recipe_calibration_service import capture_recipe_calibration
 from job_agent.services.recipe_preview_service import explain_recipe
@@ -68,7 +68,7 @@ def source_detail(request: Request, source_id: str, message: str = "", warning: 
     best_artifact_dir = generation_status.best_artifact.artifact_dir if generation_status.best_artifact else ""
     recipe_explanation = explain_recipe(source.recipe_path, root=execution_source_service().root) if source.recipe_path else None
     source_status = _source_page_status(source, execution_entry, go_live_readiness, _recipe_preview_url(source))
-    return templates.TemplateResponse(
+    response = templates.TemplateResponse(
         request,
         "source_detail.html",
         {
@@ -92,6 +92,8 @@ def source_detail(request: Request, source_id: str, message: str = "", warning: 
             "recipe_editor_url": _recipe_editor_url(source, best_artifact_dir),
         },
     )
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 @router.post("/sources/{source_id}/registry/update")
@@ -263,6 +265,56 @@ def source_dry_run(request: Request, source_id: str, force_disabled: bool = Fals
             "result": result,
             "force_disabled": force_disabled,
         },
+    )
+
+
+@router.get("/sources/{source_id}/test-run", response_class=HTMLResponse)
+def source_test_run(request: Request, source_id: str) -> HTMLResponse:
+    source = _registry_source_or_404(source_id)
+    execution_entry = execution_source_service().find_by_source_id(source.id)
+    response = templates.TemplateResponse(
+        request,
+        "source_test_run.html",
+        {
+            "request": request,
+            "source": source,
+            "execution_entry": execution_entry,
+            "force_disabled": bool(execution_entry and not bool(execution_entry.get("enabled", True))),
+        },
+    )
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+@router.post("/sources/{source_id}/test-run")
+def run_source_test(source_id: str) -> JSONResponse:
+    source = _registry_source_or_404(source_id)
+    execution_entry = execution_source_service().find_by_source_id(source.id)
+    force_disabled = bool(execution_entry and not bool(execution_entry.get("enabled", True)))
+    result = SourceDryRunService(execution_source_service().root).dry_run(
+        source.id,
+        force_disabled=force_disabled,
+    )
+    readiness = source_execution_readiness_service().save_from_dry_run(result)
+    return JSONResponse(
+        {
+            "ok": result.status not in {"not_found", "disabled", "failing"},
+            "source_id": result.source_id,
+            "source_name": result.source_name,
+            "source_type": result.source_type,
+            "source_enabled": result.source_enabled,
+            "forced_disabled": result.forced_disabled,
+            "status": result.status,
+            "job_count": result.job_count,
+            "warning_count": result.warning_count,
+            "warnings": result.warnings,
+            "jobs": [_dry_run_job_mapping(job) for job in result.jobs[:12]],
+            "readiness_status": readiness.readiness_status,
+            "readiness_summary": readiness.readiness_summary,
+            "readiness_blockers": readiness.blockers,
+            "readiness_warnings": readiness.warnings,
+            "source_url": source.url,
+        }
     )
 
 
@@ -439,6 +491,7 @@ def _recipe_preview_url(source) -> str:
         "input_path_or_url": source.url,
         "source_mode": "configured",
         "selected_source_id": source.id,
+        "auto_run": "1",
     }
     return f"/recipe-preview?{urlencode(params)}"
 
@@ -467,14 +520,14 @@ def _source_page_status(source, execution_entry, readiness, recipe_preview_url: 
     execution_enabled = bool(execution_entry and execution_entry.get("enabled", True))
     status = {
         "title": "Ready for review",
-        "summary": "This source is configured, but it still needs a saved recipe preview and dry run before automation.",
+        "summary": "This source is configured, but it still needs a saved recipe review and source test before the daily run can use it.",
         "badge": source.status_label,
         "badge_class": source.status_badge,
         "primary_action": None,
         "secondary_action": {"type": "link", "label": "Edit settings", "href": "#source-settings"},
         "preview_label": _status_label(source.health.health_status),
         "dry_run_label": _status_label(readiness.readiness_status),
-        "automation_label": "Enabled" if execution_enabled else "Prepared but off" if execution_entry else "Not prepared",
+        "automation_label": "Included" if execution_enabled else "Prepared but off" if execution_entry else "Not included",
         "blockers": [],
     }
     if source.status == "archived":
@@ -518,10 +571,10 @@ def _source_page_status(source, execution_entry, readiness, recipe_preview_url: 
         status.update(
             {
                 "title": "Not ready yet",
-                "summary": "The recipe has not passed a saved preview. Run recipe preview first.",
+                "summary": "The recipe has not passed a saved review. Run the recipe review first.",
                 "badge": "Needs preview",
                 "badge_class": "medium",
-                "primary_action": {"type": "link", "label": "Run recipe preview", "href": recipe_preview_url},
+                "primary_action": {"type": "link", "label": "Run recipe review", "href": recipe_preview_url},
                 "blockers": [source.health.health_summary],
             }
         )
@@ -529,12 +582,12 @@ def _source_page_status(source, execution_entry, readiness, recipe_preview_url: 
         status.update(
             {
                 "title": "Preview passed",
-                "summary": "Extraction looks usable. Prepare automation when you want this source included in scheduled checks.",
+                "summary": "Extraction looks usable. Prepare this source before adding it to the daily run.",
                 "badge": "Preview passed",
                 "badge_class": "high",
                 "primary_action": {
                     "type": "post",
-                    "label": "Prepare automation",
+                    "label": "Prepare daily-run entry",
                     "action": f"/sources/{source.id}/execution/create",
                 },
             }
@@ -542,14 +595,14 @@ def _source_page_status(source, execution_entry, readiness, recipe_preview_url: 
     elif readiness.readiness_status != "ready":
         status.update(
             {
-                "title": "Needs a dry run",
-                "summary": "Recipe preview passed. Now prove the configured source can run end-to-end without saving jobs.",
-                "badge": "Needs dry run",
+                "title": "Needs a source test",
+                "summary": "Recipe review passed. Now test this configured source the way the daily run would use it, without saving jobs.",
+                "badge": "Needs source test",
                 "badge_class": "medium",
                 "primary_action": {
-                    "type": "post",
-                    "label": "Run dry run and save result",
-                    "action": f"/sources/{source.id}/dry-run-readiness",
+                    "type": "link",
+                    "label": "Test source without saving jobs",
+                    "href": f"/sources/{source.id}/test-run",
                 },
                 "blockers": list(readiness.blockers[:3]),
             }
@@ -558,12 +611,12 @@ def _source_page_status(source, execution_entry, readiness, recipe_preview_url: 
         status.update(
             {
                 "title": "Ready to enable",
-                "summary": "Preview and dry-run checks passed. Automatic job checks are still off until you enable them.",
+                "summary": "Recipe review and source test passed. This source is still excluded from the daily run until you include it.",
                 "badge": "Ready",
                 "badge_class": "high",
                 "primary_action": {
                     "type": "post",
-                    "label": "Enable automatic checks",
+                    "label": "Include in daily run",
                     "action": f"/sources/{source.id}/enable-when-ready",
                 },
             }
@@ -571,8 +624,8 @@ def _source_page_status(source, execution_entry, readiness, recipe_preview_url: 
     else:
         status.update(
             {
-                "title": "Running automatically",
-                "summary": "This source is enabled for scheduled job checks.",
+                "title": "Included in daily run",
+                "summary": "This source is enabled for the daily run.",
                 "badge": "Enabled",
                 "badge_class": "high",
                 "primary_action": {
@@ -640,6 +693,24 @@ def _status_label(status: str) -> str:
         "blocked": "Blocked",
         "no_data": "No data",
     }.get(str(status or "").strip(), str(status or "Unknown").replace("_", " ").title())
+
+
+def _dry_run_job_mapping(job) -> dict[str, object]:
+    return {
+        "title": job.title,
+        "url": job.url,
+        "source": job.source,
+        "source_id": job.source_id,
+        "location": job.location,
+        "remote": job.remote,
+        "rate": job.rate,
+        "workload": job.workload,
+        "posted_date": job.posted_date,
+        "start_date": job.start_date,
+        "languages": job.languages,
+        "description_preview": job.description_preview,
+        "extraction_notes": job.extraction_notes,
+    }
 
 
 def _registry_source_or_404(source_id: str):

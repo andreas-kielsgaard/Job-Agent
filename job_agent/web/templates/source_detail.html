@@ -48,14 +48,14 @@
       <p>{{ source.health.health_summary }}</p>
     </div>
     <div>
-      <span>Dry run</span>
+      <span>Source test</span>
       <strong>{{ source_status.dry_run_label }}</strong>
       <p>{{ go_live_readiness.readiness_summary }}</p>
     </div>
     <div>
-      <span>Automatic checks</span>
+      <span>Daily run</span>
       <strong>{{ source_status.automation_label }}</strong>
-      <p>{% if execution_entry and execution_entry.enabled %}This source is included in scheduled runs.{% elif execution_entry %}Automation is prepared but disabled.{% else %}Automation has not been prepared.{% endif %}</p>
+      <p>{% if execution_entry and execution_entry.enabled %}This source is included in the daily run.{% elif execution_entry %}Daily-run entry is prepared but disabled.{% else %}This source is not included in the daily run.{% endif %}</p>
     </div>
   </div>
   {% if source_status.blockers %}
@@ -188,7 +188,7 @@
         <button type="submit" class="button light">Capture one page</button>
       </div>
     </form>
-    <p class="muted">This fetches only the saved source URL once. It does not follow every listing or enable automatic checks.</p>
+    <p class="muted">This fetches only the saved source URL once. It does not follow every listing or include the source in the daily run.</p>
     {% else %}
     <p class="muted">Save a source URL before capturing calibration evidence.</p>
     {% endif %}
@@ -282,13 +282,13 @@
 
 {% if source.recipe_path %}
 <div class="panel" id="automation">
-  <h2>Automation</h2>
-  <p class="muted">Automatic checks are off until recipe preview and dry-run checks pass, and you explicitly enable them.</p>
+  <h2>Daily Run</h2>
+  <p class="muted">The daily run is the scheduled job search across enabled sources. This source is excluded until recipe review and the source test pass, and you explicitly include it.</p>
   <div class="grid">
-    <div class="stat"><span>Automatic checks</span><strong>{{ source_status.automation_label }}</strong></div>
-    <div class="stat"><span>Dry run</span><strong>{{ source_status.dry_run_label }}</strong></div>
-    <div class="stat"><span>Dry-run jobs</span><strong>{{ go_live_readiness.dry_run_job_count }}</strong></div>
-    <div class="stat"><span>Last dry run</span><strong>{{ go_live_readiness.last_checked_at or "Never" }}</strong></div>
+    <div class="stat"><span>Daily run</span><strong>{{ source_status.automation_label }}</strong></div>
+    <div class="stat"><span>Source test</span><strong>{{ source_status.dry_run_label }}</strong></div>
+    <div class="stat"><span>Jobs found in test</span><strong>{{ go_live_readiness.dry_run_job_count }}</strong></div>
+    <div class="stat"><span>Last source test</span><strong>{{ go_live_readiness.last_checked_at or "Never" }}</strong></div>
   </div>
   <p><strong>Summary:</strong> {{ go_live_readiness.readiness_summary }}</p>
   {% if go_live_readiness.sample_titles %}
@@ -306,22 +306,20 @@
     <p class="muted">Restore this source before running checks.</p>
     {% elif not execution_entry %}
     <form method="post" action="/sources/{{ source.id }}/execution/create" class="inline-form">
-      <button type="submit" class="button">Prepare automation</button>
+      <button type="submit" class="button">Prepare daily-run entry</button>
     </form>
     {% else %}
-    <form method="post" action="/sources/{{ source.id }}/dry-run-readiness" class="inline-form">
-      <button type="submit" class="button light">Run dry run and save result</button>
-    </form>
+    <a class="button light" href="/sources/{{ source.id }}/test-run">Test source without saving jobs</a>
     {% if execution_entry.enabled %}
     <form method="post" action="/sources/{{ source.id }}/run-now" class="inline-form">
       <button type="submit" class="button">Run this source now</button>
     </form>
     <form method="post" action="/sources/{{ source.id }}/execution/disable" class="inline-form">
-      <button type="submit" class="button light">Disable automatic checks</button>
+      <button type="submit" class="button light">Remove from daily run</button>
     </form>
     {% elif go_live_readiness.readiness_status == "ready" %}
     <form method="post" action="/sources/{{ source.id }}/enable-when-ready" class="inline-form">
-      <button type="submit" class="button">Enable automatic checks</button>
+      <button type="submit" class="button">Include in daily run</button>
     </form>
     {% endif %}
     {% endif %}

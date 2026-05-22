@@ -1,13 +1,13 @@
 {% extends "base.html" %}
 {% block content %}
 <div class="row">
-  <h1 style="margin-right:auto;">Source Dry Run</h1>
+  <h1 style="margin-right:auto;">Source Test Result</h1>
   <a class="button light" href="/sources/{{ source.id }}">Back to source</a>
 </div>
 
 <div class="panel">
   <h2>{{ source.name }}</h2>
-  <p class="muted">Source dry run tests the configured execution source as the daily-run adapter would see it. Recipe preview tests a recipe directly against an input.</p>
+  <p class="muted">This tests the configured source the way the daily run would use it, without saving job packages, marking jobs as seen, or creating a run record.</p>
   <div class="grid">
     <div class="stat"><span>Source id</span><strong>{{ result.source_id }}</strong></div>
     <div class="stat"><span>Source type</span><strong>{{ result.source_type or "Not found" }}</strong></div>
@@ -17,7 +17,7 @@
     <div class="stat"><span>Warnings</span><strong>{{ result.warning_count }}</strong></div>
   </div>
   {% if result.forced_disabled %}
-  <p><span class="badge medium">Forced disabled source execution</span></p>
+  <p><span class="badge medium">Tested while the daily-run entry was disabled</span></p>
   {% endif %}
   <p class="muted">No packages, seen state, materials, digests, or run records were written.</p>
 </div>
@@ -25,7 +25,7 @@
 {% if result.status == "disabled" %}
 <div class="panel">
   <p>This execution source is disabled and was not run.</p>
-  <a class="button light" href="/sources/{{ source.id }}/dry-run?force_disabled=true">Force dry run disabled source</a>
+  <a class="button light" href="/sources/{{ source.id }}/dry-run?force_disabled=true">Test disabled source</a>
 </div>
 {% endif %}
 

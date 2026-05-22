@@ -1,12 +1,22 @@
 {% extends "base.html" %}
 {% block content %}
-<h1>Recipe Preview</h1>
+<div class="source-detail-header">
+  <div>
+    <p class="eyebrow">Recipe review</p>
+    <h1>Review Extraction</h1>
+    <p class="muted">Test whether a recipe can read a source page, follow the navigation it promises, and produce job-report fields.</p>
+  </div>
+  {% if selected_source_id %}
+  <a class="button light" href="/sources/{{ selected_source_id }}">Back to source</a>
+  {% endif %}
+</div>
+
 <div class="panel">
   <div class="row">
-    <p class="muted" style="margin-right:auto;">Run a selected recipe against a recruiter or job-board URL and inspect the extracted job data.</p>
+    <p class="muted" style="margin-right:auto;">A review is a bounded proof run. It samples detail-page and pagination behavior instead of scraping every posting.</p>
     <a class="button light" href="/api/debug/frontend-state" target="_blank" rel="noreferrer">Debug state</a>
   </div>
-  <form method="post" action="/recipe-preview" class="source-form">
+  <form method="post" action="/recipe-preview" class="source-form" id="recipe-review-form">
     <div class="source-mode-bar">
       <span class="source-mode-label">Source</span>
       <div class="segmented" role="radiogroup" aria-label="Source input">
@@ -39,14 +49,34 @@
         </select>
       </div>
     </div>
-    <div class="form-actions"><button type="submit">Preview recipe</button></div>
+    <div class="form-actions"><button type="submit">Run review</button></div>
   </form>
 </div>
 
+{% if auto_run and not preview %}
+<div class="panel running-panel" id="recipe-review-running">
+  <h2>Running review</h2>
+  <p class="muted">Fetching the source page, applying the recipe, checking one detail page, and proving pagination where configured. This may take a moment.</p>
+  <ol class="progress-steps">
+    <li class="active">Resolve source and recipe</li>
+    <li>Fetch listing page</li>
+    <li>Check detail page and pagination proof</li>
+    <li>Save review result for the source</li>
+  </ol>
+</div>
+<script>
+  window.addEventListener("DOMContentLoaded", () => {
+    window.setTimeout(() => {
+      document.getElementById("recipe-review-form").requestSubmit();
+    }, 120);
+  });
+</script>
+{% endif %}
+
 {% if saved_health and saved_health.health_status != "untested" %}
 <div class="panel">
-  <h2>Saved Review Result</h2>
-  <p class="muted">Previous saved preview result for this configured source and recipe. Running Preview recipe refreshes this result.</p>
+  <h2>Last Saved Review</h2>
+  <p class="muted">This is the latest review saved for the configured source. Running a new review refreshes it.</p>
   <div class="grid">
     <div class="stat"><span>Status</span><strong>{{ saved_health.health_status }}</strong></div>
     <div class="stat"><span>Last preview</span><strong>{{ saved_health.last_preview_at or "Never" }}</strong></div>
@@ -59,8 +89,8 @@
 {% endif %}
 
 <div class="tab-nav">
-  <a class="tab-link {{ 'active' if tab != 'explain' else '' }}" href="/recipe-preview?tab=execute{% if recipe_path %}&recipe_path={{ recipe_path|urlencode }}{% endif %}{% if selected_source_id %}&selected_source_id={{ selected_source_id|urlencode }}{% endif %}{% if source_mode %}&source_mode={{ source_mode|urlencode }}{% endif %}{% if input_path_or_url %}&input_path_or_url={{ input_path_or_url|urlencode }}{% endif %}">Execute</a>
-  <a class="tab-link {{ 'active' if tab == 'explain' else '' }}" href="/recipe-preview?tab=explain{% if recipe_path %}&recipe_path={{ recipe_path|urlencode }}{% endif %}{% if selected_source_id %}&selected_source_id={{ selected_source_id|urlencode }}{% endif %}{% if source_mode %}&source_mode={{ source_mode|urlencode }}{% endif %}{% if input_path_or_url %}&input_path_or_url={{ input_path_or_url|urlencode }}{% endif %}">Explain</a>
+  <a class="tab-link {{ 'active' if tab != 'explain' else '' }}" href="/recipe-preview?tab=execute{% if recipe_path %}&recipe_path={{ recipe_path|urlencode }}{% endif %}{% if selected_source_id %}&selected_source_id={{ selected_source_id|urlencode }}{% endif %}{% if source_mode %}&source_mode={{ source_mode|urlencode }}{% endif %}{% if input_path_or_url %}&input_path_or_url={{ input_path_or_url|urlencode }}{% endif %}">Run review</a>
+  <a class="tab-link {{ 'active' if tab == 'explain' else '' }}" href="/recipe-preview?tab=explain{% if recipe_path %}&recipe_path={{ recipe_path|urlencode }}{% endif %}{% if selected_source_id %}&selected_source_id={{ selected_source_id|urlencode }}{% endif %}{% if source_mode %}&source_mode={{ source_mode|urlencode }}{% endif %}{% if input_path_or_url %}&input_path_or_url={{ input_path_or_url|urlencode }}{% endif %}">Recipe rules</a>
 </div>
 
 {% if tab == "explain" %}
@@ -112,9 +142,10 @@
 {% if preview %}
 <div class="panel">
   <div class="row">
-    <h2 style="margin-right:auto;">{{ preview.recipe_source_name }}</h2>
+    <h2 style="margin-right:auto;">Review Result</h2>
     <span class="badge">{{ preview.recipe_status }}</span>
   </div>
+  <p class="muted">{{ preview.recipe_source_name }} against {{ preview.input_value }}.</p>
   <div class="grid">
     <div class="stat"><span>Input type</span><strong>{{ preview.input_type }}</strong></div>
     <div class="stat"><span>Mode used</span><strong>{{ preview.mode_used }}</strong></div>

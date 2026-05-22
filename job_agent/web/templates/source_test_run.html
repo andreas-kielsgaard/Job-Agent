@@ -1,0 +1,133 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="source-detail-header">
+  <div>
+    <p class="eyebrow">Source test</p>
+    <h1>Test Source Without Saving Jobs</h1>
+    <p class="muted">{{ source.name }}</p>
+  </div>
+  <a class="button light" href="/sources/{{ source.id }}">Back to source</a>
+</div>
+
+<div class="panel running-panel">
+  <h2 id="test-status-title">Starting source test</h2>
+  <p class="muted">This runs the configured source the way the daily run would, but does not save job packages, mark jobs as seen, or include the source in the daily run.</p>
+  {% if not execution_entry %}
+  <p><span class="badge low">No daily-run entry is prepared for this source yet.</span></p>
+  {% elif force_disabled %}
+  <p><span class="badge medium">Testing while the daily-run entry is disabled.</span></p>
+  {% endif %}
+  <ol class="progress-steps" id="source-test-steps">
+    <li class="active">Load daily-run entry</li>
+    <li>Fetch the source and follow configured recipe navigation</li>
+    <li>Extract jobs and warnings</li>
+    <li>Save readiness result</li>
+  </ol>
+</div>
+
+<div class="panel" id="source-test-result" hidden>
+  <h2>Source Test Result</h2>
+  <div class="grid">
+    <div class="stat"><span>Status</span><strong id="source-test-status">Unknown</strong></div>
+    <div class="stat"><span>Jobs found</span><strong id="source-test-jobs">0</strong></div>
+    <div class="stat"><span>Warnings</span><strong id="source-test-warnings">0</strong></div>
+    <div class="stat"><span>Readiness</span><strong id="source-test-readiness">Unknown</strong></div>
+  </div>
+  <p><strong>Summary:</strong> <span id="source-test-summary"></span></p>
+  <div id="source-test-blockers"></div>
+  <div class="action-row">
+    <a class="button" href="/sources/{{ source.id }}">Back to source</a>
+  </div>
+</div>
+
+<div class="panel" id="source-test-jobs-panel" hidden>
+  <h2>Jobs Found During Test</h2>
+  <p class="muted">These are shown so you can verify the source is reading real postings. They were not saved to your job list.</p>
+  <table>
+    <thead><tr><th>Job</th><th>Details</th><th>Description</th></tr></thead>
+    <tbody id="source-test-job-rows"></tbody>
+  </table>
+</div>
+
+<script>
+  function setStep(index, className) {
+    const steps = [...document.querySelectorAll("#source-test-steps li")];
+    steps.forEach((step, stepIndex) => {
+      if (stepIndex < index) step.className = "complete";
+      if (stepIndex === index) step.className = className;
+    });
+  }
+
+  function text(value) {
+    return value ? String(value) : "";
+  }
+
+  function escapeHtml(value) {
+    return text(value)
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#039;");
+  }
+
+  function renderFindings(data) {
+    document.getElementById("source-test-result").hidden = false;
+    document.getElementById("source-test-status").innerText = data.status || "unknown";
+    document.getElementById("source-test-jobs").innerText = data.job_count || 0;
+    document.getElementById("source-test-warnings").innerText = data.warning_count || 0;
+    document.getElementById("source-test-readiness").innerText = data.readiness_status || "unknown";
+    document.getElementById("source-test-summary").innerText = data.readiness_summary || "";
+    const blockers = [...(data.readiness_blockers || []), ...(data.readiness_warnings || []), ...(data.warnings || [])];
+    document.getElementById("source-test-blockers").innerHTML = blockers.length
+      ? `<ul>${blockers.map(item => `<li>${escapeHtml(item)}</li>`).join("")}</ul>`
+      : "";
+    if (data.jobs && data.jobs.length) {
+      document.getElementById("source-test-jobs-panel").hidden = false;
+      document.getElementById("source-test-job-rows").innerHTML = data.jobs.map(job => `
+        <tr>
+          <td><strong>${escapeHtml(job.title)}</strong><br>${job.url ? `<a href="${escapeHtml(job.url)}" target="_blank" rel="noreferrer">${escapeHtml(job.url)}</a>` : ""}</td>
+          <td>
+            <div>Location: ${escapeHtml(job.location)}</div>
+            <div>Remote: ${escapeHtml(job.remote)}</div>
+            <div>Rate: ${escapeHtml(job.rate)}</div>
+            <div>Workload: ${escapeHtml(job.workload)}</div>
+            <div>Posted: ${escapeHtml(job.posted_date)}</div>
+            <div>Languages: ${escapeHtml((job.languages || []).join(", ") || "Not listed")}</div>
+          </td>
+          <td>${escapeHtml(job.description_preview)}</td>
+        </tr>
+      `).join("");
+    }
+  }
+
+  async function runSourceTest() {
+    const title = document.getElementById("test-status-title");
+    try {
+      setStep(0, "active");
+      await new Promise(resolve => setTimeout(resolve, 200));
+      setStep(1, "active");
+      const response = await fetch("/sources/{{ source.id }}/test-run", { method: "POST" });
+      setStep(2, "active");
+      const data = await response.json();
+      setStep(3, "active");
+      await new Promise(resolve => setTimeout(resolve, 150));
+      setStep(4, data.ok ? "complete" : "failed");
+      title.innerText = data.ok ? "Source test completed" : "Source test needs review";
+      renderFindings(data);
+    } catch (error) {
+      setStep(3, "failed");
+      title.innerText = "Source test failed";
+      renderFindings({
+        status: "failed",
+        readiness_status: "blocked",
+        readiness_summary: error.message || "The source test could not be completed.",
+        readiness_blockers: [error.message || "Unknown error"],
+        jobs: [],
+      });
+    }
+  }
+
+  window.addEventListener("DOMContentLoaded", runSourceTest);
+</script>
+{% endblock %}

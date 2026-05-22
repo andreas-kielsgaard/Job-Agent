@@ -8,7 +8,7 @@
 <div class="panel"><span class="badge low">{{ warning }}</span></div>
 {% endif %}
 <div class="panel">
-  <p class="muted">Sources are reviewed job origins. Recipe-backed sources can be previewed, dry-run, and later enabled for daily runs after readiness checks pass.</p>
+  <p class="muted">Sources are reviewed job origins. Recipe-backed sources can be reviewed, tested without saving jobs, and later included in the daily run after readiness checks pass.</p>
   <div class="grid">
     <div class="stat"><span>Active sources</span><strong>{{ sources|length }}</strong></div>
     <div class="stat"><span>Recipe-backed</span><strong>{{ sources|selectattr("recipe_path")|list|length }}</strong></div>
@@ -82,7 +82,7 @@
       <a class="button light" href="/recipe-preview?recipe_path={{ source.recipe_path|urlencode }}&input_path_or_url={{ source.url|urlencode }}&source_mode=configured&selected_source_id={{ source.id|urlencode }}">Preview</a>
       {% endif %}
       {% if execution %}
-      <a class="button light" href="/sources/{{ source.id }}/dry-run{% if not execution.enabled %}?force_disabled=true{% endif %}">Dry run</a>
+      <a class="button light" href="/sources/{{ source.id }}/test-run">Test source</a>
       {% endif %}
       <form method="post" action="/sources/{{ source.id }}/archive" class="inline-form">
         <button type="submit" class="button light">Archive</button>
