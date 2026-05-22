@@ -10,11 +10,16 @@ from job_agent.services.job_board_recipe_service import (
     DetailRecipe,
     JobBoardRecipe,
     ListingRecipe,
+    PaginationLink,
+    PaginationRecipe,
+    PatternsRecipe,
     RejectRecipe,
     check_recipe_against_html,
     enrich_jobs_with_detail_pages,
+    extract_job_detail_from_html,
     extract_jobs_with_recipe,
     extract_jobs_with_recipe_from_url,
+    find_pagination_links,
     load_job_board_recipe,
 )
 from job_agent.sources import extract_generic_jobs_from_html
@@ -134,6 +139,46 @@ def test_detail_max_detail_pages_limits_fetches(monkeypatch: pytest.MonkeyPatch)
     assert calls == ["https://example.com/jobs/sap-abap"]
 
 
+def test_source_run_detail_policy_can_enrich_all_retained_jobs(monkeypatch: pytest.MonkeyPatch) -> None:
+    detail_pages = {
+        "https://example.com/jobs/sap-abap": "<main><section class='detail-description'>ABAP detail text with enough useful context for a report.</section></main>",
+        "https://example.com/jobs/sap-basis": "<main><section class='detail-description'>Basis detail text with enough useful context for a report.</section></main>",
+    }
+
+    class FakeResponse:
+        def __init__(self, text: str, url: str) -> None:
+            self.text = text
+            self.url = url
+
+        def raise_for_status(self) -> None:
+            return None
+
+    def fake_listing_fetch(url: str, timeout_seconds: int):
+        return HTML, "https://example.com/jobs", []
+
+    calls = []
+
+    def fake_detail_fetch(url: str, *args, **kwargs):
+        calls.append(url)
+        return FakeResponse(detail_pages[url], url)
+
+    recipe = _recipe(detail=DetailRecipe(follow=True, description_selector=".detail-description", max_detail_pages=1))
+    monkeypatch.setattr("job_agent.services.job_board_recipe_service._fetch_static_html", fake_listing_fetch)
+    monkeypatch.setattr("job_agent.services.job_board_recipe_service.requests.get", fake_detail_fetch)
+
+    result = extract_jobs_with_recipe_from_url(
+        "https://example.com/jobs",
+        recipe,
+        use_recipe_detail_limit=False,
+        detail_page_limit=None,
+    )
+
+    assert calls == ["https://example.com/jobs/sap-abap", "https://example.com/jobs/sap-basis"]
+    assert result.detail_fetch_count == 2
+    assert result.detail_enriched_count == 2
+    assert all(job.description.startswith(("ABAP detail", "Basis detail")) for job in result.jobs)
+
+
 def test_failed_detail_fetch_continues(monkeypatch: pytest.MonkeyPatch) -> None:
     class FakeError(Exception):
         pass
@@ -160,6 +205,185 @@ def test_detail_follow_true_without_selectors_returns_warning() -> None:
     warnings = enrich_jobs_with_detail_pages(jobs, recipe)
 
     assert warnings == ["detail.follow is true, but no detail selectors are configured."]
+
+
+def test_detail_json_ld_extracts_full_posting_fields_from_saved_page_shape() -> None:
+    html = """
+    <html><head><link rel="canonical" href="https://example.com/job/sap-eam/"></head>
+    <body>
+      <main class="job-single"><h1>SAP EAM / PM Migration Consultant</h1></main>
+      <script type="application/ld+json">
+      {
+        "@context": "https://schema.org/",
+        "@type": "JobPosting",
+        "title": "SAP EAM / PM Migration Consultant",
+        "description": "<p>SAP EAM migration role
+        with validation, mapping, blueprinting, S/4HANA PM, Fiori and integration responsibilities.</p>",
+        "datePosted": "2026-05-13",
+        "employmentType": "Contract",
+        "jobLocation": {"@type": "Place", "address": {"@type": "PostalAddress", "addressCountry": "Sweden"}}
+      }
+      </script>
+    </body></html>
+    """
+    recipe = _recipe(detail=DetailRecipe(follow=True, use_json_ld=True))
+
+    job = extract_job_detail_from_html(html, "https://example.com/jobs", recipe)
+
+    assert job.title == "SAP EAM / PM Migration Consultant"
+    assert job.url == "https://example.com/job/sap-eam/"
+    assert job.location == "Sweden"
+    assert job.workload == "Contract"
+    assert job.posted_date == "2026-05-13"
+    assert "S/4HANA PM" in job.description
+
+
+def test_detail_patterns_extract_whitehall_detail_text_fields() -> None:
+    html = """
+    <html><head><link rel="canonical" href="https://www.whitehallresources.com/job/sap-mobile-developer-31782/"></head>
+    <body>
+      <div class="job-single">
+        <div class="left-col">
+          <div class="job-type">Contract</div>
+          <h1>SAP Mobile Developer</h1>
+          <div class="job-details"><div class="job-location">Madrid</div></div>
+          <p>
+            Additional Information * Location: Remote * Start: ASAP *
+            Duration: Until December 2026 * Languages: English (B2+ required) * Rate:
+          </p>
+        </div>
+      </div>
+      <script type="application/ld+json">
+      {
+        "@context": "https://schema.org/",
+        "@type": "JobPosting",
+        "title": "SAP Mobile Developer",
+        "description": "<p>SAP Mobile Developer MDK implementation role.</p>",
+        "datePosted": "2026-05-01",
+        "employmentType": "CONTRACTOR",
+        "jobLocation": {
+          "@type": "Place",
+          "address": {"@type": "PostalAddress", "addressCountry": "Spain"}
+        }
+      }
+      </script>
+    </body></html>
+    """
+    recipe = _recipe(
+        detail=DetailRecipe(
+            follow=True,
+            use_json_ld=True,
+            title_selector=".job-single h1",
+            location_selector=".job-single .job-location",
+            workload_selector=".job-single .job-type",
+        ),
+        patterns=PatternsRecipe(
+            remote_regex=r"\b(?P<remote>Remote|Hybrid|Office based)\b",
+            start_date_regex=r"Start:\s*(?P<start_date>[^*\n\r]+?)(?=\s+\*|\s+Duration:|$)",
+            language_regex=r"(?:Languages?:\s*|Fluent in\s+)(?P<language>English(?:\s*\([^)]*\))?)",
+        ),
+    )
+
+    job = extract_job_detail_from_html(html, "https://www.whitehallresources.com/sap-jobs/", recipe)
+
+    assert job.title == "SAP Mobile Developer"
+    assert job.location == "Madrid"
+    assert job.remote == "Remote"
+    assert job.workload == "Contract"
+    assert job.posted_date == "2026-05-01"
+    assert job.start_date == "ASAP"
+    assert job.languages == ["English (B2+ required)"]
+
+
+def test_recipe_detects_pagination_links_without_fetching_pages() -> None:
+    html = """
+    <nav class="pagination">
+      <span class="page-numbers current">1</span>
+      <a class="page-numbers" href="/sap-jobs/page/2/">2</a>
+      <a class="page-numbers" href="/sap-jobs/page/3/">3</a>
+      <a class="next page-numbers" href="/sap-jobs/page/2/">Next &raquo;</a>
+    </nav>
+    """
+    recipe = _recipe(
+        pagination=PaginationRecipe(
+            page_link_selector="a.page-numbers",
+            next_selector="a.next.page-numbers",
+            max_pages=3,
+        )
+    )
+
+    links = find_pagination_links(html, "https://example.com/sap-jobs/", recipe)
+
+    assert [link.url for link in links] == [
+        "https://example.com/sap-jobs/page/2/",
+        "https://example.com/sap-jobs/page/3/",
+    ]
+    assert links[0].is_next is True
+    assert links[1].is_next is False
+
+
+def test_recipe_can_proof_fetch_one_pagination_page(monkeypatch: pytest.MonkeyPatch) -> None:
+    page_1 = """
+    <div class="job-card"><h2><a class="job-link" href="/jobs/sap-abap">SAP ABAP Consultant</a></h2><p class="summary">ABAP listing one with useful context.</p></div>
+    <a class="page-numbers" href="https://example.com/jobs/page/2/">2</a>
+    <a class="next page-numbers" href="https://example.com/jobs/page/2/">Next</a>
+    """
+    page_2 = """
+    <div class="job-card"><h2><a class="job-link" href="/jobs/sap-basis">SAP Basis Consultant</a></h2><p class="summary">Basis listing two with useful context.</p></div>
+    """
+    calls = []
+
+    def fake_fetch(url: str, timeout_seconds: int):
+        calls.append(url)
+        if url.endswith("/page/2/"):
+            return page_2, url, []
+        return page_1, "https://example.com/jobs", []
+
+    recipe = _recipe(
+        pagination=PaginationRecipe(
+            page_link_selector="a.page-numbers",
+            next_selector="a.next.page-numbers",
+            max_pages=4,
+            request_delay_seconds=0,
+        )
+    )
+    monkeypatch.setattr("job_agent.services.job_board_recipe_service._fetch_static_html", fake_fetch)
+
+    result = extract_jobs_with_recipe_from_url(
+        "https://example.com/jobs",
+        recipe,
+        fetch_pagination=True,
+        pagination_page_limit=2,
+    )
+
+    assert calls == ["https://example.com/jobs", "https://example.com/jobs/page/2/"]
+    assert [job.title for job in result.jobs] == ["SAP ABAP Consultant", "SAP Basis Consultant"]
+    assert result.pagination_fetch_count == 1
+
+
+def test_pagination_detection_reads_embedded_json_html_fragments() -> None:
+    html = """
+    <script type="application/json">
+    {"initialPagination":"<div class='paginator'><a href='/projects?pagenr=2#list'>2</a><a class='next' href='/projects?pagenr=2#list'>next</a></div>"}
+    </script>
+    """
+    recipe = _recipe(
+        pagination=PaginationRecipe(
+            page_link_selector=".paginator a",
+            next_selector=".paginator a.next",
+            max_pages=18,
+        )
+    )
+
+    links = find_pagination_links(html, "https://www.freelancermap.com/projects", recipe)
+
+    assert links == [
+        PaginationLink(
+            label="2",
+            url="https://www.freelancermap.com/projects?pagenr=2#list",
+            is_next=True,
+        )
+    ]
 
 
 def test_recipe_rejects_cta_services_and_category_links() -> None:
@@ -333,6 +557,8 @@ def _recipe(
     card_selector: str = ".job-card",
     detail: DetailRecipe | None = None,
     mode: str = "static_html",
+    pagination: PaginationRecipe | None = None,
+    patterns: PatternsRecipe | None = None,
 ) -> JobBoardRecipe:
     return JobBoardRecipe(
         source_name="Test Board",
@@ -354,4 +580,6 @@ def _recipe(
             url_contains=["/services", "/about", "/contact"],
         ),
         detail=detail or DetailRecipe(),
+        pagination=pagination or PaginationRecipe(),
+        patterns=patterns or PatternsRecipe(),
     )

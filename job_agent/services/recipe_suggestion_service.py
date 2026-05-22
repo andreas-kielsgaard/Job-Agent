@@ -270,6 +270,12 @@ def load_recipe_suggestion_evidence(
         "capture_url": report_url,
         "capture_mode": report_mode,
         "top_candidates": candidates,
+        "observed_pagination_links": selector_report.get("observed_pagination_links", [])[:10]
+        if isinstance(selector_report, dict)
+        else [],
+        "observed_application_entries": selector_report.get("observed_application_entries", [])[:10]
+        if isinstance(selector_report, dict)
+        else [],
         "visible_text_sample": visible_text,
         "candidate_elements_sample": candidate_html,
         "summary": summary,
@@ -293,10 +299,11 @@ def build_recipe_suggestion_prompt(evidence: RecipeSuggestionEvidence) -> str:
         "You suggest constrained Job-Agent recipe YAML from local calibration artifacts only.\n"
         "Return only strict JSON with keys: suggested_recipe_yaml, explanation, confidence, "
         "assumptions, warnings, selected_strategy.\n"
-        "The YAML may use only this schema: source_name, start_url, mode, listing, accept, reject, "
+        "The YAML may use only this schema: source_name, start_url, mode, listing, pagination, accept, reject, "
         "patterns, limits, detail. Do not include Python code, browser scripts, arbitrary adapters, "
-        "pagination, login/session/cookie handling, hidden endpoint assumptions, or network/API discovery.\n"
-        "Use detail.follow only when the evidence clearly justifies bounded detail-page enrichment.\n"
+        "login/session/cookie handling, hidden endpoint assumptions, or network/API discovery.\n"
+        "Include pagination selectors when visible evidence shows page/next links. Use detail.follow only when "
+        "the evidence clearly justifies job-detail enrichment.\n"
         "Prefer selectors and regex patterns visible in the local evidence. If automation is not recommended, "
         "choose selected_strategy not_recommended and explain why.\n\n"
         f"Evidence JSON:\n{json.dumps(evidence.prompt_payload, ensure_ascii=False, indent=2)}"
@@ -321,9 +328,10 @@ def build_recipe_refinement_prompt(evidence: RecipeSuggestionEvidence, attempt: 
         "the deterministic validation report below.\n"
         "Return only strict JSON with keys: suggested_recipe_yaml, explanation, confidence, "
         "assumptions, warnings, selected_strategy.\n"
-        "The YAML may use only this schema: source_name, start_url, mode, listing, accept, reject, "
+        "The YAML may use only this schema: source_name, start_url, mode, listing, pagination, accept, reject, "
         "patterns, limits, detail. Do not include Python code, browser scripts, arbitrary adapters, "
-        "pagination, login/session/cookie handling, hidden endpoint assumptions, or network/API discovery.\n"
+        "login/session/cookie handling, hidden endpoint assumptions, or network/API discovery.\n"
+        "Include pagination selectors when visible evidence shows page/next links.\n"
         "Do not assume access to any page beyond the saved local artifact.\n\n"
         f"Evidence JSON:\n{json.dumps(evidence.prompt_payload, ensure_ascii=False, indent=2)}\n\n"
         f"Previous suggested YAML:\n{attempt.suggested_recipe_yaml}\n\n"
@@ -427,6 +435,21 @@ def _recipe_schema_summary() -> dict:
             "start_date_regex",
             "language_regex",
             "work_type_regex",
+        ],
+        "pagination_fields": ["page_link_selector", "next_selector", "max_pages", "request_delay_seconds"],
+        "detail_fields": [
+            "follow",
+            "use_json_ld",
+            "title_selector",
+            "description_selector",
+            "location_selector",
+            "remote_selector",
+            "rate_selector",
+            "workload_selector",
+            "posted_date_selector",
+            "start_date_selector",
+            "language_selector",
+            "request_delay_seconds",
         ],
     }
 

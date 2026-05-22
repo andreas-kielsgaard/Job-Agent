@@ -2,13 +2,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from fastapi import Request
 from fastapi.templating import Jinja2Templates
 
 from job_agent.application_status_store import ApplicationStatusStore
 from job_agent.config import ROOT
 from job_agent.run_store import RunStore
-from job_agent.services.cv_reference_service import CvReferenceService
 from job_agent.services.approved_recipe_adoption_service import ApprovedRecipeAdoptionService
+from job_agent.services.cv_reference_service import CvReferenceService
 from job_agent.services.execution_source_service import ExecutionSourceService
 from job_agent.services.material_service import MaterialService
 from job_agent.services.package_index_service import PackageIndexService
@@ -21,7 +22,15 @@ from job_agent.services.source_execution_readiness_service import SourceExecutio
 from job_agent.services.source_registry_service import SourceRegistryService
 
 WEB_DIR = Path(__file__).resolve().parent
-templates = Jinja2Templates(directory=WEB_DIR / "templates")
+
+
+def template_context(request: Request) -> dict[str, str]:
+    from job_agent.web.runtime import compute_app_version, runtime
+
+    return {"asset_version": runtime.app_version or compute_app_version(runtime.root)}
+
+
+templates = Jinja2Templates(directory=WEB_DIR / "templates", context_processors=[template_context])
 _current_root = ROOT
 
 

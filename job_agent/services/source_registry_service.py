@@ -8,8 +8,8 @@ from urllib.parse import urlparse
 
 from job_agent.config import ROOT
 from job_agent.io.yaml_store import read_yaml, write_yaml
-from job_agent.services.source_health_service import SourceHealthRecord, SourceHealthService
 from job_agent.services.package_index_service import PackageIndexService
+from job_agent.services.source_health_service import SourceHealthRecord, SourceHealthService
 
 REGISTRY_PATH = Path("sources/source-registry.yaml")
 VALID_KINDS = {"manual", "local_yaml", "generic_html", "recipe", "experimental_recipe"}
@@ -73,7 +73,8 @@ class SourceRegistryService:
         self.ensure_registry()
         data = read_yaml(self.path, {"sources": []})
         raw_sources = data.get("sources", []) if isinstance(data, dict) else []
-        entries = [self._entry_from_mapping(item) for item in raw_sources if isinstance(item, dict)]
+        source_mappings = self._merged_source_mappings(raw_sources)
+        entries = [self._entry_from_mapping(item) for item in source_mappings]
         stats = self._stats_by_source(entries)
         health = SourceHealthService(self.root).load_all()
         for entry in entries:
@@ -139,6 +140,34 @@ class SourceRegistryService:
             recipe_state=self._infer_recipe_state(recipe_path, _list_value(data.get("tags")), status),
         )
 
+    def _merged_source_mappings(self, raw_sources: list[Any]) -> list[dict[str, Any]]:
+        mappings: list[dict[str, Any]] = []
+        seen_ids: set[str] = set()
+
+        for item in raw_sources:
+            if not isinstance(item, dict):
+                continue
+            source_id = _mapping_source_id(item)
+            if source_id in seen_ids:
+                continue
+            seen_ids.add(source_id)
+            mappings.append(item)
+
+        for item in _default_sources():
+            source_id = _mapping_source_id(item)
+            if source_id in seen_ids:
+                continue
+            seen_ids.add(source_id)
+            mappings.append(item)
+
+        for item in _recipe_source_mappings(self.root, seen_ids):
+            source_id = _mapping_source_id(item)
+            if source_id in seen_ids:
+                continue
+            seen_ids.add(source_id)
+            mappings.append(item)
+        return mappings
+
     def _infer_recipe_state(self, recipe_path: str, tags: list[str], status: str) -> str:
         if not recipe_path:
             return "none"
@@ -201,15 +230,15 @@ def _default_sources() -> list[dict[str, Any]]:
         },
         {
             "id": "whitehall-sap-contract",
-            "name": "Whitehall Resources SAP Contract Jobs",
+            "name": "Whitehall Resources SAP Jobs",
             "kind": "experimental_recipe",
             "status": "experimental",
-            "url": "https://www.whitehallresources.com/sap-jobs/contract/",
+            "url": "https://www.whitehallresources.com/sap-jobs/",
             "recipe_path": "sources/recipes/experimental/whitehall-sap-contract.yaml",
             "added_at": "2026-05-09",
             "enabled": False,
-            "notes": "Live-calibrated experimental recipe using saved Whitehall job-item listing blocks. Not connected to daily runs.",
-            "tags": ["sap", "contract", "recipe", "live-calibrated"],
+            "notes": "Live-calibrated experimental recipe using saved Whitehall SAP job-item listing blocks. Not connected to daily runs.",
+            "tags": ["sap", "recipe", "live-calibrated"],
         },
         {
             "id": "montreal-associates-jobs",
@@ -224,6 +253,46 @@ def _default_sources() -> list[dict[str, Any]]:
             "tags": ["sap", "recipe", "partial"],
         },
     ]
+
+
+def _recipe_source_mappings(root: Path, existing_ids: set[str]) -> list[dict[str, Any]]:
+    recipes_root = root / "sources" / "recipes"
+    if not recipes_root.exists():
+        return []
+
+    mappings: list[dict[str, Any]] = []
+    for path in sorted(recipes_root.rglob("*.yaml")):
+        relative = path.relative_to(root).as_posix()
+        if "/examples/" in f"/{relative}":
+            continue
+        data = read_yaml(path, {})
+        if not isinstance(data, dict):
+            continue
+        start_url = str(data.get("start_url") or "").strip()
+        if not start_url:
+            continue
+        source_id = _slug(path.stem)
+        if source_id in existing_ids:
+            continue
+        mappings.append(
+            {
+                "id": source_id,
+                "name": str(data.get("source_name") or path.stem.replace("-", " ").title()).strip(),
+                "kind": "experimental_recipe" if "/experimental/" in f"/{relative}" else "recipe",
+                "status": "experimental" if "/experimental/" in f"/{relative}" else "needs_review",
+                "url": start_url,
+                "recipe_path": relative,
+                "added_at": "",
+                "enabled": False,
+                "notes": "Discovered from a recipe file; review before enabling daily-run execution.",
+                "tags": ["recipe"],
+            }
+        )
+    return mappings
+
+
+def _mapping_source_id(data: dict[str, Any]) -> str:
+    return _slug(str(data.get("id") or data.get("name") or "source"))
 
 
 def _stats_from_packages(packages: list[dict[str, Any]]) -> SourceStats:

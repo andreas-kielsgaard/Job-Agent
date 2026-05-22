@@ -134,7 +134,16 @@ class RecipeHtmlAdapter(SourceAdapter):
             from .services.job_board_recipe_service import extract_jobs_with_recipe_from_url, load_job_board_recipe
 
             recipe = load_job_board_recipe(self.root / recipe_path)
-            result = extract_jobs_with_recipe_from_url(url, recipe)
+            max_results = _positive_int(self.source.get("max_results"), recipe.limits.max_cards)
+            result = extract_jobs_with_recipe_from_url(
+                url,
+                recipe,
+                use_recipe_detail_limit=False,
+                detail_page_limit=None,
+                fetch_pagination=True,
+                pagination_page_limit=recipe.pagination.max_pages,
+                job_limit=max_results,
+            )
         except (OSError, ValueError) as exc:
             return SourceRunResult(warnings=[SourceWarning(source_name, f"Recipe extraction failed: {exc}", url)])
 

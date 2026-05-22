@@ -46,7 +46,7 @@ def test_preview_includes_whitehall_fields_and_rejects_application_anchors() -> 
     result = preview_recipe(
         "tests/fixtures/recipes/experimental/whitehall-sap-contract.yaml",
         "tests/fixtures/real_sources/whitehall-sap-contract.html",
-        base_url="https://www.whitehallresources.com/sap-jobs/contract/",
+        base_url="https://www.whitehallresources.com/sap-jobs/",
     )
 
     assert result.extracted_job_count == 3

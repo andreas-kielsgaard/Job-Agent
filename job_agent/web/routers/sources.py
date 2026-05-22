@@ -5,6 +5,9 @@ from urllib.parse import urlencode
 from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
+from job_agent.services.recipe_suggestion_service import suggest_recipe_from_artifact, suggest_recipe_with_refinement
+from job_agent.services.single_source_run_service import SingleSourceRunService
+from job_agent.services.source_dry_run_service import SourceDryRunService
 from job_agent.web.dependencies import (
     approved_recipe_adoption_service,
     execution_source_service,
@@ -16,9 +19,6 @@ from job_agent.web.dependencies import (
     source_registry_service,
     templates,
 )
-from job_agent.services.source_dry_run_service import SourceDryRunService
-from job_agent.services.single_source_run_service import SingleSourceRunService
-from job_agent.services.recipe_suggestion_service import suggest_recipe_from_artifact, suggest_recipe_with_refinement
 
 router = APIRouter()
 
@@ -288,9 +288,8 @@ def _recipe_preview_url(source) -> str:
     params = {
         "recipe_path": source.recipe_path,
         "input_path_or_url": source.url,
-        "base_url": source.url,
-        "mode": "default",
-        "source_id": source.id,
+        "source_mode": "configured",
+        "selected_source_id": source.id,
     }
     return f"/recipe-preview?{urlencode(params)}"
 

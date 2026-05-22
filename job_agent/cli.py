@@ -65,6 +65,11 @@ def main() -> None:
         default="",
         help="Optional source registry id. When provided, save this preview result to source-health.yaml.",
     )
+    recipe.add_argument(
+        "--detail-input",
+        default="",
+        help="Optional local HTML file for one job detail page sample.",
+    )
     calibrate = subparsers.add_parser(
         "calibrate-recipe",
         help="Capture one public page and report candidate regions for manual recipe calibration.",
@@ -175,6 +180,7 @@ def main() -> None:
             rendered=args.rendered,
             static=args.static,
             source_id=args.source_id,
+            detail_input=args.detail_input,
         )
     if args.command == "calibrate-recipe":
         calibrate_recipe(
@@ -299,9 +305,17 @@ def test_recipe(
     rendered: bool = False,
     static: bool = False,
     source_id: str = "",
+    detail_input: str = "",
 ) -> None:
     try:
-        preview = preview_recipe(recipe_path, url_or_html_path, base_url=base_url, rendered=rendered, static=static)
+        preview = preview_recipe(
+            recipe_path,
+            url_or_html_path,
+            base_url=base_url,
+            rendered=rendered,
+            static=static,
+            detail_input_value=detail_input,
+        )
         saved_source_id = source_id.strip()
         if source_id.strip():
             from .services.source_health_service import SourceHealthService
@@ -336,6 +350,64 @@ def _print_recipe_preview(preview: RecipePreviewResult) -> None:
     _safe_print(f"Generic labels: {preview.generic_labels}")
     _safe_print(f"Unique URLs: {preview.unique_urls}")
     _safe_print(f"Average description length: {preview.average_description_length}")
+    if preview.request_notes:
+        _safe_print("")
+        _safe_print("Request budget:")
+        for note in preview.request_notes:
+            _safe_print(f"- {note}")
+    if preview.field_coverage:
+        _safe_print("")
+        _safe_print("Listing field coverage:")
+        for field in preview.field_coverage:
+            _safe_print(f"- {field.label}: {field.present_count}/{field.total_count}")
+    if preview.capability_checks:
+        _safe_print("")
+        _safe_print("Capability checks:")
+        for check in preview.capability_checks:
+            expected = "expected" if check.expected else "not expected"
+            _safe_print(f"- {check.label}: {check.status} ({expected}) - {check.detail}")
+    if preview.field_checks:
+        _safe_print("")
+        _safe_print("Report field expectations:")
+        for field in preview.field_checks:
+            expected = "expected" if field.expected else "not expected"
+            _safe_print(f"- {field.label}: {field.status} ({expected}) {field.present_count}/{field.total_count}")
+    _safe_print("")
+    _safe_print(
+        "Detail follow: "
+        f"{'yes' if preview.detail_follow_enabled else 'no'} "
+        f"(max {preview.detail_max_pages}, delay {preview.detail_request_delay_seconds:g}s)"
+    )
+    _safe_print(
+        "Pagination: "
+        f"{'configured' if preview.pagination_configured else 'not configured'}, "
+        f"{preview.pagination_link_count} link(s) found, max pages {preview.pagination_max_pages}"
+    )
+    for link in preview.pagination_links[:8]:
+        marker = "next" if link.is_next else "page"
+        _safe_print(f"- {link.label} [{marker}] {link.url}")
+    if preview.detail_attempts:
+        _safe_print("")
+        _safe_print("Detail proof:")
+        for attempt in preview.detail_attempts:
+            _safe_print(
+                f"- {attempt.status} {attempt.url}; found: {', '.join(attempt.found_fields) or 'none'}; "
+                f"missing: {', '.join(attempt.missing_fields) or 'none'}"
+            )
+    if preview.detail_sample:
+        _safe_print("")
+        _safe_print("Detail sample:")
+        _safe_print(f"   Title: {preview.detail_sample.title}")
+        _safe_print(f"   URL: {preview.detail_sample.url}")
+        _safe_print(f"   Location: {preview.detail_sample.location}")
+        _safe_print(f"   Rate/pay: {preview.detail_sample.rate}")
+        _safe_print(f"   Workload/work type: {preview.detail_sample.workload}")
+        _safe_print(f"   Posted date: {preview.detail_sample.posted_date}")
+        _safe_print(f"   Description: {preview.detail_sample.description_preview}")
+        if preview.detail_field_coverage:
+            _safe_print("   Detail field coverage:")
+            for field in preview.detail_field_coverage:
+                _safe_print(f"   - {field.label}: {field.present_count}/{field.total_count}")
     for warning in preview.warnings:
         _safe_print(f"Warning: {warning}")
     for index, job in enumerate(preview.jobs[:10], start=1):

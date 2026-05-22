@@ -1,33 +1,8 @@
 {% extends "base.html" %}
 {% block content %}
-<h1>Job Board Compatibility</h1>
-<div class="panel">
-  <p class="muted">Check whether one public recruiter or job-board page can be read by the current generic extractor. This only fetches the provided URL; rendering uses the same page in Playwright.</p>
-  <form method="post" action="/compatibility" class="grid">
-    <div style="grid-column: 1 / -1;">
-      <label>Public job-board URL</label>
-      <input name="url" value="{{ url or '' }}" placeholder="https://example.com/jobs">
-    </div>
-    <label class="check"><input type="checkbox" name="render" {% if render %}checked{% endif %}> Compare with Playwright-rendered page</label>
-    <div><button type="submit">Run check</button></div>
-  </form>
-</div>
-
-{% if report %}
-<div class="panel">
-  <h2>Recommendation</h2>
-  <p><span class="badge">{{ report.recommendation }}</span></p>
-  <p>{{ report.recommendation_reason }}</p>
-  <ul>
-    {% for boundary in report.boundaries %}
-    <li>{{ boundary }}</li>
-    {% endfor %}
-  </ul>
-</div>
-
-{% for quality in [report.normal_html, report.rendered_page] if quality %}
-<div class="panel">
-  <h2>{{ quality.label }}</h2>
+{% macro quality_block(quality) %}
+<div class="quality-block">
+  <h3>{{ quality.label }}</h3>
   <div class="grid">
     <div class="stat"><span>Candidate postings</span><strong>{{ quality.candidate_count }}</strong></div>
     <div class="stat"><span>Useful titles</span><strong>{{ quality.useful_title_count }}</strong></div>
@@ -63,6 +38,109 @@
   </table>
   {% endif %}
 </div>
-{% endfor %}
+{% endmacro %}
+
+<h1>Job Board Compatibility</h1>
+<div class="panel">
+  <div class="row">
+    <p class="muted" style="margin-right:auto;">Check whether a recruiter or job-board URL can be read by the generic extractor and, optionally, by a selected recipe.</p>
+    <a class="button light" href="/api/debug/frontend-state" target="_blank" rel="noreferrer">Debug state</a>
+  </div>
+  <form method="post" action="/compatibility" class="source-form">
+    <div class="source-mode-bar">
+      <span class="source-mode-label">Source</span>
+      <div class="segmented" role="radiogroup" aria-label="Source input">
+        <label class="choice"><input type="radio" name="source_mode" value="configured" {% if source_mode != "custom" %}checked{% endif %}><span>Configured source</span></label>
+        <label class="choice"><input type="radio" name="source_mode" value="custom" {% if source_mode == "custom" %}checked{% endif %}><span>Paste source URL</span></label>
+      </div>
+    </div>
+    <div class="form-grid source-fields">
+      <div>
+        <label>Configured source</label>
+        <select name="selected_source_id" class="source-select">
+          <option value="">Select source</option>
+          <option value="__custom__" {% if source_mode == "custom" %}selected{% endif %}>Non-configured URL</option>
+          {% for source in sources %}
+          <option value="{{ source.id }}" data-url="{{ source.url }}" data-recipe="{{ source.recipe_path }}" {% if selected_source_id == source.id %}selected{% endif %}>{{ source.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div>
+        <label>Source URL</label>
+        <input class="source-url-input" name="url" value="{{ url or '' }}" placeholder="https://example.com/jobs" {% if source_mode != "custom" %}readonly{% endif %}>
+      </div>
+      <div>
+        <label>Recipe</label>
+        <select name="recipe_path">
+          <option value="">Generic extractor only</option>
+          {% for option in recipe_options %}
+          <option value="{{ option.value }}" {% if recipe_path == option.value %}selected{% endif %}>{{ option.label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div>
+        <label>Rendering</label>
+        <label class="check inline-check"><input type="checkbox" name="render" {% if render %}checked{% endif %}> Compare rendered page</label>
+      </div>
+    </div>
+    <div class="form-actions"><button type="submit">Run check</button></div>
+  </form>
+</div>
+
+{% if report %}
+<div class="panel">
+  <h2>Recommendation</h2>
+  <p><span class="badge">{{ report.recommendation }}</span></p>
+  <p>{{ report.recommendation_reason }}</p>
+  <p class="muted">Input type: {{ report.input_type }}</p>
+  <ul>
+    {% for boundary in report.boundaries %}
+    <li>{{ boundary }}</li>
+    {% endfor %}
+  </ul>
+</div>
+
+{% if report.findings %}
+<div class="panel">
+  <h2>Recipe Compatibility</h2>
+  <table>
+    <thead><tr><th>Capability</th><th>Status</th><th>Evidence</th></tr></thead>
+    <tbody>
+      {% for finding in report.findings %}
+      <tr>
+        <td>{{ finding.label }}</td>
+        <td><span class="badge {{ 'high' if finding.status == 'pass' else 'low' if finding.status == 'fail' else '' }}">{{ finding.status }}</span></td>
+        <td>{{ finding.detail }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% if report.recipe_preview and report.recipe_preview.request_notes %}
+  <ul>
+    {% for note in report.recipe_preview.request_notes %}
+    <li>{{ note }}</li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+</div>
+{% endif %}
+
+{% if report.recipe_preview %}
+<details class="panel diagnostic-panel">
+  <summary>Generic extractor baseline</summary>
+  <p class="muted">Comparison only: this runs the generic extractor on the same input. Recipe compatibility above is the selected recipe result.</p>
+  {% for quality in [report.normal_html, report.rendered_page] if quality %}
+    {{ quality_block(quality) }}
+  {% endfor %}
+</details>
+{% else %}
+<div class="panel">
+  <h2>Generic Extractor Check</h2>
+  <p class="muted">This is the baseline compatibility check when no recipe is selected.</p>
+  {% for quality in [report.normal_html, report.rendered_page] if quality %}
+    {{ quality_block(quality) }}
+  {% endfor %}
+</div>
+{% endif %}
 {% endif %}
 {% endblock %}

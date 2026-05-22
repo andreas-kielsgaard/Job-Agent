@@ -13,6 +13,7 @@ from job_agent.web.routers import (
     ai_edit,
     compatibility,
     dashboard,
+    debug,
     files,
     health,
     jobs,
@@ -49,6 +50,7 @@ def create_app() -> FastAPI:
     app.include_router(postings.router)
     app.include_router(compatibility.router)
     app.include_router(recipe_preview.router)
+    app.include_router(debug.router)
     app.include_router(sources.router)
     app.include_router(setup.router)
     app.include_router(files.router)

@@ -101,10 +101,40 @@ a:hover {
   margin-bottom: 18px;
 }
 
+.diagnostic-panel summary {
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.diagnostic-panel summary + .muted {
+  margin-top: 12px;
+}
+
+.quality-block + .quality-block {
+  border-top: 1px solid var(--line);
+  margin-top: 18px;
+  padding-top: 18px;
+}
+
+.quality-block h3 {
+  margin-top: 0;
+}
+
 .grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: 14px;
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 16px 18px;
+  align-items: end;
+}
+
+.form-actions {
+  margin-top: 18px;
 }
 
 .row {
@@ -183,6 +213,83 @@ label {
 
 .check input {
   width: auto;
+}
+
+.source-mode-bar {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.source-mode-label {
+  font-weight: 700;
+}
+
+.source-fields {
+  align-items: start;
+}
+
+.segmented {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+}
+
+.segmented .choice {
+  display: inline-flex !important;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 7px;
+  width: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 10px;
+  margin: 0;
+  background: #fbfcfd;
+  white-space: nowrap;
+}
+
+.segmented .choice input[type="radio"] {
+  width: 16px !important;
+  height: 16px;
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 0;
+}
+
+.segmented .choice span {
+  display: inline-block;
+}
+
+.readonly-control,
+input[readonly],
+select:disabled {
+  background: #f5f7fa;
+  color: #475467;
+  cursor: default;
+  opacity: 1;
+}
+
+select:disabled {
+  color: #344054;
+}
+
+.field-note {
+  margin: 6px 0 0;
+  font-size: 13px;
+}
+
+.inline-check {
+  min-height: 38px;
+  margin: 0;
+}
+
+.hidden {
+  display: none !important;
 }
 
 table {
@@ -278,6 +385,10 @@ td {
 }
 
 @media (max-width: 760px) {
+  .source-mode-bar {
+    grid-template-columns: 1fr;
+  }
+
   .triage-card {
     grid-template-columns: auto minmax(0, 1fr);
   }
@@ -374,6 +485,35 @@ td {
 .tabs {
   display: grid;
   gap: 12px;
+}
+
+.tab-nav {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.tab-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 38px;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #fff;
+  color: var(--text);
+  font-weight: 700;
+}
+
+.tab-link:hover {
+  text-decoration: none;
+  background: var(--accent-soft);
+}
+
+.tab-link.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: #115e59;
 }
 
 .log {

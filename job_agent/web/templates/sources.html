@@ -71,7 +71,7 @@
         <td>
           <a class="button light" href="/sources/{{ source.id }}">Detail</a>
           {% if source.recipe_path %}
-          <a class="button light" href="/recipe-preview?recipe_path={{ source.recipe_path|urlencode }}&input_path_or_url={{ source.url|urlencode }}&base_url={{ source.url|urlencode }}&mode=default&source_id={{ source.id|urlencode }}">Preview</a>
+          <a class="button light" href="/recipe-preview?recipe_path={{ source.recipe_path|urlencode }}&input_path_or_url={{ source.url|urlencode }}&source_mode=configured&selected_source_id={{ source.id|urlencode }}">Preview</a>
           {% endif %}
         </td>
       </tr>

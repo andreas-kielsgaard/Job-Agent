@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{{ title or "Job Agent" }}</title>
-    <link rel="stylesheet" href="/static/app.css">
+    <link rel="stylesheet" href="/static/app.css?v={{ asset_version }}">
     <script>
       function copyText(id) {
         const el = document.getElementById(id);
@@ -100,6 +100,152 @@
       function toggleAll(source, selector) {
         document.querySelectorAll(selector).forEach(box => box.checked = source.checked);
       }
+
+      function refreshSourceForms() {
+        document.querySelectorAll(".source-form").forEach((form) => {
+          const mode = form.querySelector('input[name="source_mode"]:checked')?.value || "configured";
+          const isCustom = mode === "custom";
+          const sourceSelect = form.querySelector('select[name="selected_source_id"]');
+          const urlInput = form.querySelector(".source-url-input");
+
+          if (sourceSelect) {
+            ensureCustomSourceOption(sourceSelect);
+            if (isCustom) {
+              if (sourceSelect.value && sourceSelect.value !== "__custom__") {
+                sourceSelect.dataset.lastConfiguredValue = sourceSelect.value;
+              }
+              sourceSelect.value = "__custom__";
+              sourceSelect.disabled = true;
+              sourceSelect.classList.add("readonly-control");
+            } else {
+              sourceSelect.disabled = false;
+              sourceSelect.classList.remove("readonly-control");
+              if (sourceSelect.value === "__custom__") {
+                sourceSelect.value = sourceSelect.dataset.lastConfiguredValue || "";
+              }
+              applySelectedSource(sourceSelect);
+            }
+          }
+
+          if (urlInput) {
+            urlInput.readOnly = !isCustom;
+            urlInput.classList.toggle("readonly-control", !isCustom);
+            if (isCustom) {
+              urlInput.placeholder = "https://example.com/jobs";
+            } else {
+              const selected = sourceSelect?.selectedOptions[0];
+              urlInput.value = selected?.dataset.url || "";
+              urlInput.placeholder = "Select a configured source";
+            }
+          }
+        });
+      }
+
+      function ensureCustomSourceOption(select) {
+        if (select.querySelector('option[value="__custom__"]')) return;
+        const option = document.createElement("option");
+        option.value = "__custom__";
+        option.textContent = "Non-configured URL";
+        select.insertBefore(option, select.options[1] || null);
+      }
+
+      function normalizeOptionText(value) {
+        return (value || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+      }
+
+      function applySelectedSource(select) {
+        const form = select.closest("form");
+        const option = select.selectedOptions[0];
+        if (!form || !option) return;
+        const recipe = option.dataset.recipe || "";
+        const url = option.dataset.url || "";
+        const recipeSelect = form.querySelector('select[name="recipe_path"]');
+        const urlInput = form.querySelector(".source-url-input");
+        const mode = form.querySelector('input[name="source_mode"]:checked')?.value || "configured";
+        if (urlInput && mode !== "custom") {
+          urlInput.value = url;
+        }
+        if (recipeSelect && recipe) {
+          recipeSelect.value = recipe;
+        } else if (recipeSelect && select.value) {
+          const sourceText = normalizeOptionText(option.textContent);
+          const match = [...recipeSelect.options].find((recipeOption) => {
+            const recipeText = normalizeOptionText(recipeOption.textContent);
+            return recipeOption.value && sourceText && (recipeText.includes(sourceText) || sourceText.includes(recipeText));
+          });
+          if (match) recipeSelect.value = match.value;
+        }
+      }
+
+      function debugFeatureName() {
+        if (window.location.pathname.startsWith("/compatibility")) return "compatibility_browser";
+        if (window.location.pathname.startsWith("/recipe-preview")) return "recipe_preview_browser";
+        return "";
+      }
+
+      function collectSourceFormDebug() {
+        return [...document.querySelectorAll(".source-form")].map((form) => {
+          const sourceSelect = form.querySelector('select[name="selected_source_id"]');
+          const recipeSelect = form.querySelector('select[name="recipe_path"]');
+          const urlInput = form.querySelector(".source-url-input");
+          const mode = form.querySelector('input[name="source_mode"]:checked')?.value || "";
+          return {
+            action: form.getAttribute("action") || "",
+            source_mode: mode,
+            selected_source_id: sourceSelect?.value || "",
+            selected_source_label: sourceSelect?.selectedOptions[0]?.textContent.trim() || "",
+            source_dropdown_disabled: Boolean(sourceSelect?.disabled),
+            source_url_value: urlInput?.value || "",
+            source_url_readonly: Boolean(urlInput?.readOnly),
+            recipe_path: recipeSelect?.value || "",
+            recipe_label: recipeSelect?.selectedOptions[0]?.textContent.trim() || "",
+            submit_label: form.querySelector('button[type="submit"]')?.textContent.trim() || ""
+          };
+        });
+      }
+
+      function sendFrontendDebug(action) {
+        const feature = debugFeatureName();
+        if (!feature) return;
+        const payload = {
+          feature,
+          action,
+          page_url: window.location.href,
+          page_path: window.location.pathname,
+          title: document.title,
+          stylesheet_href: document.querySelector('link[rel="stylesheet"]')?.href || "",
+          source_forms: collectSourceFormDebug(),
+          active_tab: document.querySelector(".tab-link.active")?.textContent.trim() || "",
+          visible_headings: [...document.querySelectorAll("h1, h2")].map((heading) => heading.textContent.trim()).slice(0, 20)
+        };
+        fetch("/api/debug/frontend-state", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+          keepalive: true
+        }).catch(() => {});
+      }
+
+      document.addEventListener("DOMContentLoaded", () => {
+        refreshSourceForms();
+        document.querySelectorAll('input[name="source_mode"]').forEach((input) => {
+          input.addEventListener("change", () => {
+            refreshSourceForms();
+            sendFrontendDebug("source_mode_changed");
+          });
+        });
+        document.querySelectorAll('select[name="selected_source_id"]').forEach((select) => {
+          select.addEventListener("change", () => {
+            applySelectedSource(select);
+            sendFrontendDebug("source_selected");
+          });
+          if (select.value) applySelectedSource(select);
+        });
+        document.querySelectorAll(".source-form").forEach((form) => {
+          form.addEventListener("submit", () => sendFrontendDebug("form_submitted"));
+        });
+        sendFrontendDebug("page_loaded");
+      });
     </script>
   </head>
   <body>

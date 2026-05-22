@@ -19,7 +19,7 @@ EXPERIMENTS = [
     (
         Path("tests/fixtures/recipes/experimental/whitehall-sap-contract.yaml"),
         Path("tests/fixtures/real_sources/whitehall-sap-contract.html"),
-        "https://www.whitehallresources.com/sap-jobs/contract/",
+        "https://www.whitehallresources.com/sap-jobs/",
         {"SAP Integration Architect", "SAP SD Consultant \u2013 Italian Speaking", "SAP ABAP Developer \u2013 S/4HANA"},
     ),
     (
@@ -113,7 +113,7 @@ def test_whitehall_rejects_apply_anchor_and_extracts_compact_block_fields() -> N
     recipe = load_job_board_recipe(Path("tests/fixtures/recipes/experimental/whitehall-sap-contract.yaml"))
     html = Path("tests/fixtures/real_sources/whitehall-sap-contract.html").read_text(encoding="utf-8")
 
-    jobs = extract_jobs_with_recipe(html, "https://www.whitehallresources.com/sap-jobs/contract/", recipe)
+    jobs = extract_jobs_with_recipe(html, "https://www.whitehallresources.com/sap-jobs/", recipe)
 
     assert "View Job" not in {job.title for job in jobs}
     assert "Apply Now" not in {job.title for job in jobs}

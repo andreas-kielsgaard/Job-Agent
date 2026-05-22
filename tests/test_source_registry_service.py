@@ -15,8 +15,50 @@ def test_default_source_registry_creation_and_listing(project_root: Path) -> Non
     names = {source.name for source in sources}
     assert "Manual Intake" in names
     assert "Eursap Jobs" in names
-    assert "Whitehall Resources SAP Contract Jobs" in names
+    assert "Whitehall Resources SAP Jobs" in names
     assert "Montreal Associates Job Search" in names
+
+
+def test_existing_partial_registry_is_augmented_with_builtin_sources(project_root: Path) -> None:
+    registry = project_root / "sources" / "source-registry.yaml"
+    registry.write_text(
+        "sources:\n"
+        "  - id: manual-intake\n"
+        "    name: Manual Intake\n"
+        "    kind: manual\n"
+        "    status: active\n",
+        encoding="utf-8",
+    )
+
+    sources = SourceRegistryService(project_root).list_sources()
+
+    ids = {source.id for source in sources}
+    assert "manual-intake" in ids
+    assert "eursap-jobs" in ids
+    assert "whitehall-sap-contract" in ids
+    assert "montreal-associates-jobs" in ids
+    assert "eursap-jobs" not in registry.read_text(encoding="utf-8")
+
+
+def test_registry_discovers_recipe_files_not_listed_in_registry(project_root: Path) -> None:
+    recipe = project_root / "sources" / "recipes" / "experimental" / "acme-jobs.yaml"
+    recipe.parent.mkdir(parents=True, exist_ok=True)
+    recipe.write_text(
+        "source_name: Acme Jobs\n"
+        "start_url: https://example.com/jobs\n"
+        "listing:\n"
+        "  card_selector: article\n"
+        "  title_selector: h2\n"
+        "  link_selector: a\n",
+        encoding="utf-8",
+    )
+
+    source = SourceRegistryService(project_root).get_source("acme-jobs")
+
+    assert source is not None
+    assert source.name == "Acme Jobs"
+    assert source.url == "https://example.com/jobs"
+    assert source.recipe_path == "sources/recipes/experimental/acme-jobs.yaml"
 
 
 def test_source_registry_normalizes_missing_and_invalid_fields(project_root: Path) -> None:

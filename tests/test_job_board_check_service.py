@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from job_agent.services import job_board_check_service
@@ -70,3 +72,74 @@ def test_checker_prefers_recipe_when_rendered_page_is_better(monkeypatch: pytest
 def test_validate_public_url_rejects_localhost() -> None:
     with pytest.raises(ValueError, match="Only public"):
         validate_public_url("http://localhost:8765/jobs")
+
+
+def test_checker_can_validate_recipe_against_local_listing_and_detail_sample(tmp_path: Path) -> None:
+    recipe_path = tmp_path / "recipe.yaml"
+    listing_path = tmp_path / "listing.html"
+    detail_path = tmp_path / "detail.html"
+    recipe_path.write_text(
+        """
+source_name: Whitehall Shape
+listing:
+  card_selector: .job-item
+  title_selector: h3 a
+  link_selector: h3 a
+  location_selector: .job-location
+  workload_selector: .job-type
+detail:
+  follow: true
+  use_json_ld: true
+  max_detail_pages: 5
+  request_delay_seconds: 1.0
+pagination:
+  page_link_selector: a.page-numbers
+  next_selector: a.next.page-numbers
+  max_pages: 4
+accept:
+  url_contains:
+    - /job/
+""",
+        encoding="utf-8",
+    )
+    listing_path.write_text(
+        """
+<div class="job-item">
+  <div class="job-type">Contract</div>
+  <h3><a href="https://example.com/job/sap-eam/">SAP EAM Consultant</a></h3>
+  <div class="job-location">Sweden</div>
+</div>
+<a class="page-numbers" href="https://example.com/sap-jobs/page/2/">2</a>
+<a class="next page-numbers" href="https://example.com/sap-jobs/page/2/">Next</a>
+""",
+        encoding="utf-8",
+    )
+    detail_path.write_text(
+        """
+<link rel="canonical" href="https://example.com/job/sap-eam/">
+<script type="application/ld+json">
+{"@context":"https://schema.org/","@type":"JobPosting","title":"SAP EAM Consultant","description":"<p>Full SAP EAM posting with migration, validation, mapping, S/4HANA PM and integration details.</p>","datePosted":"2026-05-13","employmentType":"Contract","jobLocation":{"@type":"Place","address":{"@type":"PostalAddress","addressCountry":"Sweden"}}}
+</script>
+""",
+        encoding="utf-8",
+    )
+
+    report = check_job_board_compatibility(
+        str(listing_path),
+        render=False,
+        recipe_path=recipe_path,
+        base_url="https://example.com/sap-jobs/",
+        detail_input_value=detail_path,
+    )
+
+    assert report.input_type == "local HTML"
+    assert report.recommendation == "selected recipe looks compatible"
+    findings = {finding.label: finding.status for finding in report.findings}
+    assert findings["Listing cards"] == "pass"
+    assert findings["Job URLs"] == "pass"
+    assert findings["Detail navigation"] == "pass"
+    assert findings["Pagination detection"] == "pass"
+    assert findings["Detail sample fields"] == "pass"
+    assert findings["Field: Title"] == "pass"
+    assert findings["Field: Location"] == "pass"
+    assert report.recipe_preview.detail_sample.posted_date == "2026-05-13"

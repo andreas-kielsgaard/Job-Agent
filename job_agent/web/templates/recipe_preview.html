@@ -2,43 +2,104 @@
 {% block content %}
 <h1>Recipe Preview</h1>
 <div class="panel">
-  <p class="muted">Manually inspect what one experimental recipe extracts. This does not enable daily-run use or add the recipe to configured sources.</p>
-  <form method="post" action="/recipe-preview" class="grid">
-    <div>
-      <label>Recipe path</label>
-      <input name="recipe_path" value="{{ recipe_path or '' }}" placeholder="sources/recipes/experimental/eursap-jobs.yaml">
+  <div class="row">
+    <p class="muted" style="margin-right:auto;">Run a selected recipe against a recruiter or job-board URL and inspect the extracted job data.</p>
+    <a class="button light" href="/api/debug/frontend-state" target="_blank" rel="noreferrer">Debug state</a>
+  </div>
+  <form method="post" action="/recipe-preview" class="source-form">
+    <div class="source-mode-bar">
+      <span class="source-mode-label">Source</span>
+      <div class="segmented" role="radiogroup" aria-label="Source input">
+        <label class="choice"><input type="radio" name="source_mode" value="configured" {% if source_mode != "custom" %}checked{% endif %}><span>Configured source</span></label>
+        <label class="choice"><input type="radio" name="source_mode" value="custom" {% if source_mode == "custom" %}checked{% endif %}><span>Paste source URL</span></label>
+      </div>
     </div>
-    <div>
-      <label>Input path or public URL</label>
-      <input name="input_path_or_url" value="{{ input_path_or_url or '' }}" placeholder="output/recipe-calibration/.../page.html">
+    <div class="form-grid source-fields">
+      <div>
+        <label>Configured source</label>
+        <select name="selected_source_id" class="source-select">
+          <option value="">Select source</option>
+          <option value="__custom__" {% if source_mode == "custom" %}selected{% endif %}>Non-configured URL</option>
+          {% for source in sources %}
+          <option value="{{ source.id }}" data-url="{{ source.url }}" data-recipe="{{ source.recipe_path }}" {% if selected_source_id == source.id or source_id == source.id %}selected{% endif %}>{{ source.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div>
+        <label>Source URL</label>
+        <input class="source-url-input" name="input_path_or_url" value="{{ input_path_or_url or '' }}" placeholder="https://example.com/jobs" {% if source_mode != "custom" %}readonly{% endif %}>
+      </div>
+      <div>
+        <label>Recipe</label>
+        <select name="recipe_path">
+          <option value="">Select recipe</option>
+          {% for option in recipe_options %}
+          <option value="{{ option.value }}" {% if recipe_path == option.value %}selected{% endif %}>{{ option.label }}</option>
+          {% endfor %}
+        </select>
+      </div>
     </div>
-    <div>
-      <label>Base URL for local HTML</label>
-      <input name="base_url" value="{{ base_url or '' }}" placeholder="https://example.com/jobs">
-    </div>
-    <div>
-      <label>Source id for health save</label>
-      <input name="source_id" value="{{ source_id or '' }}" placeholder="eursap-jobs">
-    </div>
-    <div>
-      <label>Mode</label>
-      <select name="mode">
-        <option value="default" {% if mode == "default" %}selected{% endif %}>Use recipe default</option>
-        <option value="static" {% if mode == "static" %}selected{% endif %}>Force static</option>
-        <option value="rendered" {% if mode == "rendered" %}selected{% endif %}>Force rendered</option>
-      </select>
-    </div>
-    <div><button type="submit">Preview recipe</button></div>
+    <div class="form-actions"><button type="submit">Preview recipe</button></div>
   </form>
 </div>
 
+<div class="tab-nav">
+  <a class="tab-link {{ 'active' if tab != 'explain' else '' }}" href="/recipe-preview?tab=execute{% if recipe_path %}&recipe_path={{ recipe_path|urlencode }}{% endif %}{% if selected_source_id %}&selected_source_id={{ selected_source_id|urlencode }}{% endif %}{% if source_mode %}&source_mode={{ source_mode|urlencode }}{% endif %}{% if input_path_or_url %}&input_path_or_url={{ input_path_or_url|urlencode }}{% endif %}">Execute</a>
+  <a class="tab-link {{ 'active' if tab == 'explain' else '' }}" href="/recipe-preview?tab=explain{% if recipe_path %}&recipe_path={{ recipe_path|urlencode }}{% endif %}{% if selected_source_id %}&selected_source_id={{ selected_source_id|urlencode }}{% endif %}{% if source_mode %}&source_mode={{ source_mode|urlencode }}{% endif %}{% if input_path_or_url %}&input_path_or_url={{ input_path_or_url|urlencode }}{% endif %}">Explain</a>
+</div>
+
+{% if tab == "explain" %}
+<div class="panel">
+  <h2>What This Recipe Does</h2>
+  {% if recipe_explanation %}
+  <div class="grid">
+    <div class="stat"><span>Recipe</span><strong>{{ recipe_explanation.source_name }}</strong></div>
+    <div class="stat"><span>Default mode</span><strong>{{ recipe_explanation.mode_label }}</strong></div>
+    <div class="stat"><span>Listing cap</span><strong>{{ recipe_explanation.max_cards }} jobs</strong></div>
+    <div class="stat"><span>Detail follow</span><strong>{{ "yes" if recipe_explanation.detail_follow else "no" }}</strong></div>
+    <div class="stat"><span>Review detail proof</span><strong>1 page</strong></div>
+    <div class="stat"><span>Detail delay</span><strong>{{ recipe_explanation.detail_delay }}s</strong></div>
+    <div class="stat"><span>Pagination</span><strong>{{ "configured" if recipe_explanation.pagination_configured else "not configured" }}</strong></div>
+    <div class="stat"><span>Run pagination cap</span><strong>{{ recipe_explanation.pagination_max_pages }} pages</strong></div>
+  </div>
+  {% if recipe_explanation.start_url %}
+  <p class="muted">Default source URL: <a href="{{ recipe_explanation.start_url }}" target="_blank" rel="noreferrer">{{ recipe_explanation.start_url }}</a></p>
+  {% endif %}
+  <h3>Listing Extraction</h3>
+  <table>
+    <thead><tr><th>Report field</th><th>Recipe source</th></tr></thead>
+    <tbody>
+      {% for field in recipe_explanation.listing_fields %}
+      <tr><td>{{ field.label }}</td><td>{{ field.detail }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <h3>Detail Pages And Pagination</h3>
+  <table>
+    <thead><tr><th>Capability</th><th>Recipe behavior</th></tr></thead>
+    <tbody>
+      {% for item in recipe_explanation.navigation_fields %}
+      <tr><td>{{ item.label }}</td><td>{{ item.detail }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <h3>Filters And Limits</h3>
+  <ul>
+    {% for note in recipe_explanation.filter_notes %}
+    <li>{{ note }}</li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="muted">Select a recipe to see its extraction rules, navigation behavior, and request limits.</p>
+  {% endif %}
+</div>
+{% else %}
 {% if preview %}
 <div class="panel">
   <div class="row">
     <h2 style="margin-right:auto;">{{ preview.recipe_source_name }}</h2>
     <span class="badge">{{ preview.recipe_status }}</span>
   </div>
-  <p class="muted">{{ preview.recipe_path }}</p>
   <div class="grid">
     <div class="stat"><span>Input type</span><strong>{{ preview.input_type }}</strong></div>
     <div class="stat"><span>Mode used</span><strong>{{ preview.mode_used }}</strong></div>
@@ -49,6 +110,13 @@
     <div class="stat"><span>Avg description length</span><strong>{{ preview.average_description_length }}</strong></div>
   </div>
   <p class="muted">Base URL: {{ preview.base_url }}</p>
+  {% if preview.request_notes %}
+  <ul>
+    {% for note in preview.request_notes %}
+    <li>{{ note }}</li>
+    {% endfor %}
+  </ul>
+  {% endif %}
   {% if health_saved %}
   <p><span class="badge high">Source health saved</span></p>
   {% endif %}
@@ -60,6 +128,163 @@
   </ul>
   {% endif %}
 </div>
+
+{% if preview.run_steps %}
+<div class="panel">
+  <h2>Run Trace</h2>
+  <table>
+    <thead><tr><th>Step</th><th>Status</th><th>What happened</th></tr></thead>
+    <tbody>
+      {% for step in preview.run_steps %}
+      <tr>
+        <td>{{ step.phase }}</td>
+        <td><span class="badge {{ 'completed' if step.status == 'completed' else 'warning' if step.status == 'warning' else '' }}">{{ step.status }}</span></td>
+        <td>{{ step.detail }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+<div class="panel">
+  <h2>Recipe Capabilities</h2>
+  <div class="grid">
+    <div class="stat"><span>Detail follow</span><strong>{{ "yes" if preview.detail_follow_enabled else "no" }}</strong></div>
+    <div class="stat"><span>Preview detail proof</span><strong>{{ preview.detail_fetch_count }} attempted</strong></div>
+    <div class="stat"><span>Detail fields found</span><strong>{{ preview.detail_enriched_count }}</strong></div>
+    <div class="stat"><span>Detail delay</span><strong>{{ preview.detail_request_delay_seconds }}s</strong></div>
+    <div class="stat"><span>Pagination configured</span><strong>{{ "yes" if preview.pagination_configured else "no" }}</strong></div>
+    <div class="stat"><span>Pagination links found</span><strong>{{ preview.pagination_link_count }}</strong></div>
+    <div class="stat"><span>Pagination proof</span><strong>{{ preview.pagination_fetch_count }} fetched</strong></div>
+  </div>
+  <p class="muted">Actual configured source runs enrich all retained jobs and may follow configured pagination up to {{ preview.pagination_max_pages }} page(s); this preview samples navigation to prove the recipe works.</p>
+  {% if preview.capability_checks %}
+  <table>
+    <thead><tr><th>Capability</th><th>Status</th><th>Expectation</th><th>Evidence</th></tr></thead>
+    <tbody>
+      {% for check in preview.capability_checks %}
+      <tr>
+        <td>{{ check.label }}</td>
+        <td><span class="badge {{ 'high' if check.status == 'pass' else 'low' if check.status == 'fail' else '' }}">{{ check.status }}</span></td>
+        <td>{{ "expected" if check.expected else "not expected" }}</td>
+        <td>{{ check.detail }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+  {% if preview.pagination_links %}
+  <table>
+    <thead><tr><th>Page</th><th>Kind</th><th>URL</th></tr></thead>
+    <tbody>
+      {% for link in preview.pagination_links[:8] %}
+      <tr>
+        <td>{{ link.label }}</td>
+        <td>{{ "next" if link.is_next else "page" }}</td>
+        <td><a href="{{ link.url }}" target="_blank" rel="noreferrer">{{ link.url }}</a></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</div>
+
+<div class="panel">
+  <h2>Report Field Expectations</h2>
+  {% if preview.field_checks %}
+  <table>
+    <thead><tr><th>Report field</th><th>Status</th><th>Expected</th><th>Found</th><th>Source</th><th>Sample</th></tr></thead>
+    <tbody>
+      {% for field in preview.field_checks %}
+      <tr>
+        <td>{{ field.label }}</td>
+        <td><span class="badge {{ 'high' if field.status == 'pass' else 'low' if field.status == 'fail' else '' }}">{{ field.status }}</span></td>
+        <td>{{ "yes" if field.expected else "no" }}</td>
+        <td>{{ field.present_count }} / {{ field.total_count }}</td>
+        <td>{{ field.source or "observation" }}</td>
+        <td>{{ field.sample_value }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <table>
+    <thead><tr><th>Report field</th><th>Found</th></tr></thead>
+    <tbody>
+      {% for field in preview.field_coverage %}
+      <tr><td>{{ field.label }}</td><td>{{ field.present_count }} / {{ field.total_count }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</div>
+
+{% if preview.detail_attempts %}
+<div class="panel">
+  <h2>Detail Page Proof</h2>
+  <table>
+    <thead><tr><th>URL</th><th>Status</th><th>Found fields</th><th>Missing expected fields</th></tr></thead>
+    <tbody>
+      {% for attempt in preview.detail_attempts %}
+      <tr>
+        <td><a href="{{ attempt.url }}" target="_blank" rel="noreferrer">{{ attempt.url }}</a></td>
+        <td><span class="badge {{ 'high' if attempt.status == 'completed' else 'low' if attempt.status == 'failed' else '' }}">{{ attempt.status }}</span></td>
+        <td>{{ attempt.found_fields|join(", ") or "none" }}</td>
+        <td>{{ attempt.missing_fields|join(", ") or "none" }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+{% if preview.application_entries %}
+<div class="panel">
+  <h2>Application Entrypoints</h2>
+  <p class="muted">Observed only. The current recipe model does not yet extract or submit application forms.</p>
+  <table>
+    <thead><tr><th>Label</th><th>Kind</th><th>URL or action</th></tr></thead>
+    <tbody>
+      {% for entry in preview.application_entries[:8] %}
+      <tr>
+        <td>{{ entry.label }}</td>
+        <td>{{ entry.kind }}</td>
+        <td>{% if entry.url %}<a href="{{ entry.url }}" target="_blank" rel="noreferrer">{{ entry.url }}</a>{% else %}{{ entry.detail }}{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+{% if preview.detail_sample %}
+<div class="panel">
+  <h2>Detail Sample Extraction</h2>
+  <p class="muted">{{ preview.detail_sample_input }}</p>
+  <table>
+    <thead><tr><th>Report field</th><th>Found</th></tr></thead>
+    <tbody>
+      {% for field in preview.detail_field_coverage %}
+      <tr><td>{{ field.label }}</td><td>{{ field.present_count }} / {{ field.total_count }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p><strong>{{ preview.detail_sample.title }}</strong></p>
+  <div class="grid">
+    <div>Location: {{ preview.detail_sample.location }}</div>
+    <div>Remote: {{ preview.detail_sample.remote }}</div>
+    <div>Rate: {{ preview.detail_sample.rate }}</div>
+    <div>Workload: {{ preview.detail_sample.workload }}</div>
+    <div>Posted: {{ preview.detail_sample.posted_date }}</div>
+    <div>Start: {{ preview.detail_sample.start_date }}</div>
+    <div>Language: {{ preview.detail_sample.languages|join(", ") or "Not listed" }}</div>
+  </div>
+  {% if preview.detail_sample.description_preview %}
+  <p>{{ preview.detail_sample.description_preview }}</p>
+  {% endif %}
+</div>
+{% endif %}
 
 <div class="panel">
   <h2>Extracted Jobs</h2>
@@ -99,5 +324,6 @@
   <p class="muted">No jobs extracted.</p>
   {% endif %}
 </div>
+{% endif %}
 {% endif %}
 {% endblock %}

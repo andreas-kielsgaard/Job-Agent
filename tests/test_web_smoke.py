@@ -166,16 +166,17 @@ def test_compatibility_route_renders_report(monkeypatch: pytest.MonkeyPatch, cli
     }
     monkeypatch.setattr(
         "job_agent.web.routers.compatibility.check_job_board_compatibility",
-        lambda url, render: type(
+        lambda url, render, **kwargs: type(
             "Report",
             (),
             {
                 "url": url,
+                "input_type": "public URL",
                 "normal_html": type(
                     "Quality",
                     (),
                     {
-                        "label": "Normal HTML",
+                        "label": "Generic baseline (initial HTML)",
                         "candidate_count": 0,
                         "useful_title_count": 0,
                         "generic_title_count": 0,
@@ -191,6 +192,8 @@ def test_compatibility_route_renders_report(monkeypatch: pytest.MonkeyPatch, cli
                 "recommendation": "manual intake recommended",
                 "recommendation_reason": "No candidates.",
                 "boundaries": ["Fetched only the provided URL with a polite timeout."],
+                "findings": [],
+                "recipe_preview": None,
                 "as_dict": lambda self: report,
             },
         )(),
@@ -200,23 +203,25 @@ def test_compatibility_route_renders_report(monkeypatch: pytest.MonkeyPatch, cli
 
     assert response.status_code == 200
     assert "manual intake recommended" in response.text
-    assert "Normal HTML" in response.text
+    assert "Generic Extractor Check" in response.text
+    assert "Generic baseline (initial HTML)" in response.text
 
 
 def test_recipe_preview_route_renders_preview(monkeypatch: pytest.MonkeyPatch, client: TestClient) -> None:
-    from job_agent.services.recipe_preview_service import PreviewJob, RecipePreviewResult
+    from job_agent.services.recipe_preview_service import PreviewJob, PreviewRunStep, RecipePreviewResult
 
-    def fake_preview(recipe_path, input_value, base_url, rendered, static, root):
+    def fake_preview(recipe_path, input_value, base_url, rendered, static, detail_input_value, root):
         assert recipe_path == "sources/recipes/experimental/eursap-jobs.yaml"
-        assert input_value == "output/recipe-calibration/page.html"
-        assert base_url == "https://eursap.eu/jobs"
+        assert input_value == "https://eursap.eu/jobs"
+        assert base_url == ""
         assert rendered is False
-        assert static is True
+        assert static is False
+        assert detail_input_value == ""
         return RecipePreviewResult(
             recipe_source_name="Eursap Jobs (experimental)",
             recipe_path=recipe_path,
             recipe_status="experimental",
-            input_type="local artifact",
+            input_type="public URL",
             input_value=input_value,
             base_url=base_url,
             mode_used="local_fixture_html",
@@ -241,6 +246,13 @@ def test_recipe_preview_route_renders_preview(monkeypatch: pytest.MonkeyPatch, c
                 )
             ],
             warnings=[],
+            run_steps=[
+                PreviewRunStep(
+                    phase="Listing selectors applied",
+                    status="completed",
+                    detail="Extracted 1 jobs from the configured recipe.",
+                )
+            ],
         )
 
     monkeypatch.setattr("job_agent.web.routers.recipe_preview.preview_recipe", fake_preview)
@@ -249,10 +261,8 @@ def test_recipe_preview_route_renders_preview(monkeypatch: pytest.MonkeyPatch, c
         "/recipe-preview",
         data={
             "recipe_path": "sources/recipes/experimental/eursap-jobs.yaml",
-            "input_path_or_url": "output/recipe-calibration/page.html",
-            "base_url": "https://eursap.eu/jobs",
-            "mode": "static",
-            "source_id": "eursap-jobs",
+            "input_path_or_url": "https://eursap.eu/jobs",
+            "source_mode": "custom",
         },
         follow_redirects=False,
     )
@@ -262,7 +272,36 @@ def test_recipe_preview_route_renders_preview(monkeypatch: pytest.MonkeyPatch, c
     assert "SAP Basis Consultant" in response.text
     assert "Remote Work" in response.text
     assert "Recipe extracted job ID: 34235" in response.text
-    assert "Source health saved" in response.text
+    assert "Run Trace" in response.text
+    assert "Extracted 1 jobs from the configured recipe." in response.text
+
+
+def test_frontend_debug_state_records_browser_snapshots(client: TestClient, project_root: Path) -> None:
+    response = client.post(
+        "/api/debug/frontend-state",
+        json={
+            "feature": "compatibility_browser",
+            "action": "page_loaded",
+            "page_url": "http://testserver/compatibility",
+            "source_forms": [
+                {
+                    "source_mode": "configured",
+                    "selected_source_id": "whitehall-sap-contract",
+                    "source_url_value": "https://www.whitehallresources.com/sap-jobs/",
+                    "source_url_readonly": True,
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    payload = client.get("/api/debug/frontend-state").json()
+
+    assert payload["latest_by_feature"]["compatibility_browser"]["action"] == "page_loaded"
+    assert payload["latest_by_feature"]["compatibility_browser"]["state"]["browser"]["source_forms"][0][
+        "selected_source_id"
+    ] == "whitehall-sap-contract"
+    assert (project_root / "output" / "debug" / "frontend-state.json").exists()
 
 
 def test_source_overview_and_detail_routes_render(client: TestClient) -> None:
@@ -273,7 +312,7 @@ def test_source_overview_and_detail_routes_render(client: TestClient) -> None:
     assert "Source value" in overview.text
     assert "Manual Intake" in overview.text
     assert "Eursap Jobs" in overview.text
-    assert "Whitehall Resources SAP Contract Jobs" in overview.text
+    assert "Whitehall Resources SAP Jobs" in overview.text
     assert "Montreal Associates Job Search" in overview.text
 
     detail = client.get("/sources/eursap-jobs")
@@ -287,7 +326,7 @@ def test_source_overview_and_detail_routes_render(client: TestClient) -> None:
     assert "Create disabled execution entry" in detail.text
     assert "No run data yet" in detail.text
     assert "/recipe-preview" in detail.text
-    assert "source_id=eursap-jobs" in detail.text
+    assert "selected_source_id=eursap-jobs" in detail.text
     assert "Contact tracking not implemented yet" in detail.text
 
 

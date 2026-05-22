@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
@@ -19,6 +20,14 @@ PUBLIC_URL_MESSAGE = (
     "Do not use login, session, captcha, private-network, or protected URLs."
 )
 
+
+@dataclass
+class CompatibilityFinding:
+    label: str
+    status: str
+    detail: str
+
+
 @dataclass
 class CompatibilityReport:
     url: str
@@ -27,34 +36,78 @@ class CompatibilityReport:
     recommendation: str
     recommendation_reason: str
     boundaries: list[str] = field(default_factory=list)
+    input_type: str = "public URL"
+    recipe_preview: Any | None = None
+    findings: list[CompatibilityFinding] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
         return {
             "url": self.url,
+            "input_type": self.input_type,
             "normal_html": quality_as_dict(self.normal_html),
             "rendered_page": quality_as_dict(self.rendered_page) if self.rendered_page else None,
             "recommendation": self.recommendation,
             "recommendation_reason": self.recommendation_reason,
             "boundaries": self.boundaries,
+            "findings": [finding.__dict__ for finding in self.findings],
         }
 
 
-def check_job_board_compatibility(url: str, render: bool = True, timeout_seconds: int = 15) -> CompatibilityReport:
-    normalized_url = validate_public_url(url)
-    normal_html = _extract_from_http(normalized_url, timeout_seconds=timeout_seconds)
-    rendered_page = _extract_from_playwright(normalized_url, timeout_seconds=timeout_seconds) if render else None
+def check_job_board_compatibility(
+    url: str,
+    render: bool = True,
+    timeout_seconds: int = 15,
+    recipe_path: str | Path = "",
+    base_url: str = "",
+    detail_input_value: str | Path = "",
+    root: Path | None = None,
+) -> CompatibilityReport:
+    value = str(url).strip()
+    if _is_public_url(value):
+        normalized_url = validate_public_url(value)
+        input_type = "public URL"
+        normal_html = _extract_from_http(normalized_url, timeout_seconds=timeout_seconds)
+        rendered_page = _extract_from_playwright(normalized_url, timeout_seconds=timeout_seconds) if render else None
+        boundaries = [
+            "Fetched only the provided URL with a polite timeout.",
+            "No login, session, cookie, captcha, bot-protection bypass, endpoint discovery, or site scanning.",
+            "Playwright rendering, when enabled, navigates only to the same provided page.",
+        ]
+    else:
+        normalized_url = value
+        input_type = "local HTML"
+        normal_html = _extract_from_local_html(value, base_url=base_url, root=root)
+        rendered_page = None
+        boundaries = [
+            "Used the provided local HTML file; no network request was made for the listing page.",
+            "No login, session, cookie, captcha, bot-protection bypass, endpoint discovery, or site scanning.",
+            "Playwright rendering is skipped for local compatibility checks.",
+        ]
     recommendation, reason = _recommend(normal_html, rendered_page)
+    recipe_preview = None
+    findings: list[CompatibilityFinding] = []
+    if str(recipe_path).strip():
+        from job_agent.services.recipe_preview_service import preview_recipe
+
+        recipe_preview = preview_recipe(
+            recipe_path,
+            value,
+            base_url=base_url,
+            detail_input_value=detail_input_value,
+            root=root,
+        )
+        findings = _recipe_findings(recipe_preview)
+        recommendation, reason = _recommend_recipe(recipe_preview, findings)
     return CompatibilityReport(
         url=normalized_url,
         normal_html=normal_html,
         rendered_page=rendered_page,
         recommendation=recommendation,
         recommendation_reason=reason,
-        boundaries=[
-            "Fetched only the provided URL with a polite timeout.",
-            "No login, session, cookie, captcha, bot-protection bypass, endpoint discovery, or site scanning.",
-            "Playwright rendering, when enabled, navigates only to the same provided page.",
-        ],
+        boundaries=boundaries,
+        input_type=input_type,
+        recipe_preview=recipe_preview,
+        findings=findings,
     )
 
 
@@ -69,8 +122,30 @@ def validate_public_url(url: str) -> str:
     return value
 
 
+def _is_public_url(value: str) -> bool:
+    parsed = urlparse(value)
+    return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
+
+
+def _extract_from_local_html(value: str, base_url: str, root: Path | None) -> ExtractionQuality:
+    quality = ExtractionQuality(label="Generic baseline (local HTML)")
+    path = Path(value)
+    if not path.is_absolute():
+        path = (root or Path.cwd()) / path
+    if not path.exists():
+        raise ValueError(f"Local HTML file not found: {path}")
+    html = path.read_text(encoding="utf-8")
+    resolved_base_url = base_url.strip()
+    quality.final_url = resolved_base_url
+    jobs = extract_generic_jobs_from_html(html, base_url=resolved_base_url, source_name="Compatibility check")
+    quality.candidates = [candidate_quality(job) for job in jobs]
+    if not jobs:
+        quality.warnings.append("No plausible job links were found in the local HTML.")
+    return quality
+
+
 def _extract_from_http(url: str, timeout_seconds: int) -> ExtractionQuality:
-    quality = ExtractionQuality(label="Normal HTML")
+    quality = ExtractionQuality(label="Generic baseline (initial HTML)")
     try:
         response = requests.get(
             url,
@@ -92,7 +167,7 @@ def _extract_from_http(url: str, timeout_seconds: int) -> ExtractionQuality:
 
 
 def _extract_from_playwright(url: str, timeout_seconds: int) -> ExtractionQuality:
-    quality = ExtractionQuality(label="Playwright-rendered page")
+    quality = ExtractionQuality(label="Generic baseline (rendered page)")
     try:
         from playwright.sync_api import Error as PlaywrightError
         from playwright.sync_api import sync_playwright
@@ -154,6 +229,105 @@ def _recommend(
     return (
         "manual intake recommended",
         "The generic extractor did not find visible public job-posting candidates on the provided page.",
+    )
+
+
+def _recipe_findings(preview: Any) -> list[CompatibilityFinding]:
+    findings = []
+    if getattr(preview, "capability_checks", None):
+        for check in preview.capability_checks:
+            if not (check.expected or check.observed):
+                continue
+            if check.capability == "pagination_navigation" and preview.input_type != "public URL" and check.status == "skipped":
+                continue
+            findings.append(CompatibilityFinding(check.label, _compatibility_status(check.status), check.detail))
+    else:
+        findings.extend(
+            [
+                CompatibilityFinding(
+                    "Listing cards",
+                    "pass" if preview.extracted_job_count else "fail",
+                    f"{preview.extracted_job_count} jobs extracted with {preview.useful_titles} useful titles.",
+                ),
+                CompatibilityFinding(
+                    "Job URLs",
+                    "pass" if preview.unique_urls else "fail",
+                    f"{preview.unique_urls} unique job detail URL(s) found.",
+                ),
+            ]
+        )
+
+    if getattr(preview, "field_checks", None):
+        for check in preview.field_checks:
+            if check.source == "detail" and preview.detail_sample_input:
+                continue
+            if not check.expected and check.status != "observed":
+                continue
+            findings.append(
+                CompatibilityFinding(
+                    f"Field: {check.label}",
+                    _compatibility_status(check.status),
+                    check.detail,
+                )
+            )
+
+    if preview.detail_sample_input:
+        detail_description = next(
+            (field for field in preview.detail_field_coverage if field.field == "description"),
+            None,
+        )
+        detail_title = next((field for field in preview.detail_field_coverage if field.field == "title"), None)
+        ok = bool(
+            preview.detail_sample
+            and detail_description
+            and detail_description.present_count
+            and detail_title
+            and detail_title.present_count
+        )
+        if ok:
+            for finding in findings:
+                if finding.label == "Detail navigation" and finding.status == "fail":
+                    finding.status = "pass"
+                    finding.detail = "Detail sample supplied for this local check proved the recipe can parse a job-specific page."
+        findings.append(
+            CompatibilityFinding(
+                "Detail sample fields",
+                "pass" if ok else "fail",
+                "Detail sample produced a title and usable description."
+                if ok
+                else "Detail sample did not produce both a title and usable description.",
+            )
+        )
+    return findings
+
+
+def _compatibility_status(status: str) -> str:
+    if status == "pass":
+        return "pass"
+    if status == "fail":
+        return "fail"
+    if status == "skipped":
+        return "warn"
+    if status in {"observed", "not_expected"}:
+        return "info"
+    return status or "warn"
+
+
+def _recommend_recipe(preview: Any, findings: list[CompatibilityFinding]) -> tuple[str, str]:
+    failed = [finding for finding in findings if finding.status == "fail"]
+    if failed:
+        return (
+            "recipe needs calibration",
+            f"Recipe compatibility failed: {', '.join(finding.label for finding in failed)}.",
+        )
+    if any(finding.status == "warn" for finding in findings):
+        return (
+            "recipe partially compatible",
+            "The recipe extracts listing jobs, but one or more capabilities or observed fields still need review.",
+        )
+    return (
+        "selected recipe looks compatible",
+        "The recipe identified listing jobs, job detail navigation, pagination, and the supplied detail sample fields.",
     )
 
 

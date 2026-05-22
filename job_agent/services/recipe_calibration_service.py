@@ -20,6 +20,8 @@ from job_agent.services.job_board_recipe_service import (
     _fetch_static_html,
     _selectors,
     check_recipe_against_html,
+    discover_application_entries,
+    discover_pagination_links,
     extract_jobs_with_recipe,
     load_job_board_recipe,
 )
@@ -123,6 +125,8 @@ def capture_recipe_calibration(
     soup = BeautifulSoup(html, "html.parser")
     visible_text = soup.get_text("\n", strip=True)
     candidates = discover_candidate_elements(html, max_candidates=max_candidates)
+    pagination_observations = discover_pagination_links(html, final_url)
+    application_entries = discover_application_entries(html, final_url)
     audit = audit_recipe_selectors(html, final_url, recipe) if recipe else None
     quality = check_recipe_against_html(html, final_url, recipe) if recipe else None
     jobs = extract_jobs_with_recipe(html, final_url, recipe) if recipe else []
@@ -137,6 +141,8 @@ def capture_recipe_calibration(
         "capture_mode": capture_mode,
         "recipe_path": recipe_path or "",
         "candidates": [asdict(candidate) for candidate in candidates],
+        "observed_pagination_links": [asdict(link) for link in pagination_observations],
+        "observed_application_entries": [asdict(entry) for entry in application_entries],
         "selector_audit": asdict(audit) if audit else None,
         "quality": quality_as_dict(quality) if quality else None,
     }
@@ -144,7 +150,7 @@ def capture_recipe_calibration(
     selector_report_path.write_text(json.dumps(selector_report, indent=2), encoding="utf-8")
     summary_path = artifact_dir / "summary.md"
     summary_path.write_text(
-        _summary_markdown(final_url, capture_mode, candidates, audit, jobs, fetch_warnings),
+        _summary_markdown(final_url, capture_mode, candidates, audit, jobs, fetch_warnings, pagination_observations, application_entries),
         encoding="utf-8",
     )
     return RecipeCalibrationResult(
@@ -330,6 +336,8 @@ def _summary_markdown(
     audit: SelectorAudit | None,
     jobs: list[Any],
     warnings: list[str],
+    pagination_links: list[Any] | None = None,
+    application_entries: list[Any] | None = None,
 ) -> str:
     lines = [
         "# Recipe Calibration Summary",
@@ -337,6 +345,8 @@ def _summary_markdown(
         f"URL: {url}",
         f"Capture mode: {capture_mode}",
         f"Candidate regions: {len(candidates)}",
+        f"Pagination-looking links: {len(pagination_links or [])}",
+        f"Application entrypoints: {len(application_entries or [])}",
     ]
     if audit:
         lines.extend(
