@@ -107,6 +107,7 @@ class SourceWarning:
 class SourceRunResult:
     jobs: list[Job] = field(default_factory=list)
     warnings: list[SourceWarning] = field(default_factory=list)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass

@@ -667,9 +667,18 @@ def test_source_test_run_view_and_api_save_readiness(monkeypatch: pytest.MonkeyP
         def __init__(self, root):
             pass
 
-        def dry_run(self, source_id, *, force_disabled=False):
+        def dry_run(self, source_id, *, force_disabled=False, progress_callback=None):
             assert source_id == "eursap-jobs"
             assert force_disabled is True
+            if progress_callback:
+                progress_callback(
+                    {
+                        "phase": "Listing page request",
+                        "status": "running",
+                        "detail": "Fetching listing page.",
+                        "capability": "listing",
+                    }
+                )
             return SourceDryRunResult(
                 source_id="eursap-jobs",
                 source_name="Eursap Jobs",
@@ -677,15 +686,44 @@ def test_source_test_run_view_and_api_save_readiness(monkeypatch: pytest.MonkeyP
                 source_enabled=False,
                 forced_disabled=True,
                 status="success",
-                job_count=1,
+                job_count=13,
+                recipe_path="sources/recipes/experimental/eursap-jobs.yaml",
+                recipe_source_name="Eursap Jobs (experimental)",
+                mode_used="static_html",
+                run_steps=[
+                    {
+                        "phase": "Pagination detection",
+                        "status": "completed",
+                        "detail": "Proof fetched 1 pagination page.",
+                        "capability": "pagination",
+                    }
+                ],
+                pagination_configured=True,
+                pagination_fetch_count=1,
+                pagination_fetch_attempts=["https://eursap.eu/jobs/page/2"],
+                detail_follow_enabled=True,
+                detail_fetch_count=13,
+                detail_enriched_count=13,
+                detail_attempts=[
+                    {
+                        "url": "https://eursap.eu/jobs/sap-basis",
+                        "status": "completed",
+                        "found_fields": ["description"],
+                        "missing_fields": [],
+                        "detail": "Found detail fields: description.",
+                    }
+                ],
                 jobs=[
                     DryRunJobPreview(
-                        title="SAP Basis Consultant",
-                        url="https://eursap.eu/jobs/sap-basis",
+                        title=f"SAP Basis Consultant {index}",
+                        url=f"https://eursap.eu/jobs/sap-basis-{index}",
                         source="Eursap Jobs",
                         source_id="eursap-jobs",
                         location="Remote",
+                        description="Detailed SAP Basis role with enough text to verify full extracted descriptions.",
+                        description_preview="Detailed SAP Basis role.",
                     )
+                    for index in range(13)
                 ],
             )
 
@@ -693,16 +731,24 @@ def test_source_test_run_view_and_api_save_readiness(monkeypatch: pytest.MonkeyP
 
     view = client.get("/sources/eursap-jobs/test-run")
     response = client.post("/sources/eursap-jobs/test-run")
+    stream_response = client.post("/sources/eursap-jobs/test-run/stream")
 
     assert view.status_code == 200
     assert "Test Source Without Saving Jobs" in view.text
-    assert "fetch(&#34;/sources/eursap-jobs/test-run&#34;" in view.text or 'fetch("/sources/eursap-jobs/test-run"' in view.text
+    assert "/sources/eursap-jobs/test-run/stream" in view.text
     assert response.status_code == 200
     payload = response.json()
     assert payload["status"] == "success"
-    assert payload["job_count"] == 1
-    assert payload["jobs"][0]["title"] == "SAP Basis Consultant"
+    assert payload["job_count"] == 13
+    assert len(payload["jobs"]) == 13
+    assert payload["jobs"][0]["title"] == "SAP Basis Consultant 0"
+    assert payload["jobs"][0]["description"].startswith("Detailed SAP Basis role")
+    assert payload["pagination_fetch_attempts"] == ["https://eursap.eu/jobs/page/2"]
+    assert payload["detail_fetch_count"] == 13
     assert payload["readiness_status"] in {"ready", "blocked", "warning"}
+    assert stream_response.status_code == 200
+    assert '"type": "progress"' in stream_response.text
+    assert '"type": "complete"' in stream_response.text
 
 
 def test_source_dry_run_route_renders_result(monkeypatch: pytest.MonkeyPatch, client: TestClient) -> None:

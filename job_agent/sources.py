@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 from time import perf_counter
+from typing import Any
 from urllib.parse import urljoin
 
 import requests
@@ -31,6 +32,7 @@ class SourceProgressEvent:
 
 
 SourceProgressCallback = Callable[[SourceProgressEvent], None]
+SourceFetchProgressCallback = Callable[[dict[str, Any]], None]
 
 
 @dataclass
@@ -49,13 +51,14 @@ class SourceAdapter(ABC):
         self.root = root
 
     @abstractmethod
-    def fetch(self) -> SourceRunResult:
+    def fetch(self, progress_callback: SourceFetchProgressCallback | None = None) -> SourceRunResult:
         raise NotImplementedError
 
 
 class LocalYamlAdapter(SourceAdapter):
-    def fetch(self) -> SourceRunResult:
+    def fetch(self, progress_callback: SourceFetchProgressCallback | None = None) -> SourceRunResult:
         path = self.root / self.source["path"]
+        _emit_fetch_progress(progress_callback, "Local YAML read", "running", f"Reading {path}.")
         with path.open("r", encoding="utf-8") as handle:
             data = yaml.safe_load(handle) or {}
         jobs = []
@@ -67,6 +70,7 @@ class LocalYamlAdapter(SourceAdapter):
             item.setdefault("source_confidence", "high")
             item.setdefault("freshness_confidence", "explicit" if item.get("posted_date") else "unknown")
             jobs.append(Job.from_mapping(item))
+        _emit_fetch_progress(progress_callback, "Local YAML parsed", "completed", f"Loaded {len(jobs)} job(s).")
         return SourceRunResult(jobs=jobs)
 
 
@@ -78,17 +82,19 @@ class GenericHtmlAdapter(SourceAdapter):
     whole page.
     """
 
-    def fetch(self) -> SourceRunResult:
+    def fetch(self, progress_callback: SourceFetchProgressCallback | None = None) -> SourceRunResult:
         url = self.source.get("url", "")
         source_name = self.source.get("name", "Generic HTML")
         if not url:
             return SourceRunResult(warnings=[SourceWarning(source_name, "Source has no URL.")])
 
         try:
+            _emit_fetch_progress(progress_callback, "Listing page request", "running", f"Fetching {url}.", "listing")
             response = requests.get(url, timeout=20, headers={"User-Agent": "Mozilla/5.0"})
             response.raise_for_status()
         except requests.RequestException as exc:
             return SourceRunResult(warnings=[SourceWarning(source_name, f"Fetch failed: {exc}", url)])
+        _emit_fetch_progress(progress_callback, "Listing page fetched", "completed", f"Fetched {response.url}.", "listing")
 
         jobs = extract_generic_jobs_from_html(
             response.text,
@@ -97,6 +103,7 @@ class GenericHtmlAdapter(SourceAdapter):
             source_id=self.source.get("source_id", ""),
             max_results=self.source.get("max_results", 25),
         )
+        _emit_fetch_progress(progress_callback, "Generic extraction", "completed", f"Found {len(jobs)} plausible job link(s).")
         if not jobs:
             return SourceRunResult(
                 warnings=[
@@ -121,7 +128,7 @@ class WhitehallResourcesAdapter(GenericHtmlAdapter):
 class RecipeHtmlAdapter(SourceAdapter):
     """Opt-in recipe-backed source adapter for configured daily-run sources."""
 
-    def fetch(self) -> SourceRunResult:
+    def fetch(self, progress_callback: SourceFetchProgressCallback | None = None) -> SourceRunResult:
         source_name = self.source.get("name", "Recipe HTML")
         url = self.source.get("url", "")
         recipe_path = self.source.get("recipe_path", "")
@@ -134,6 +141,12 @@ class RecipeHtmlAdapter(SourceAdapter):
             from .services.job_board_recipe_service import extract_jobs_with_recipe_from_url, load_job_board_recipe
 
             recipe = load_job_board_recipe(self.root / recipe_path)
+            _emit_fetch_progress(
+                progress_callback,
+                "Recipe selected",
+                "completed",
+                f"Using {recipe.source_name} from {recipe_path}.",
+            )
             max_results = _positive_int(self.source.get("max_results"), recipe.limits.max_cards)
             result = extract_jobs_with_recipe_from_url(
                 url,
@@ -143,6 +156,13 @@ class RecipeHtmlAdapter(SourceAdapter):
                 fetch_pagination=True,
                 pagination_page_limit=recipe.pagination.max_pages,
                 job_limit=max_results,
+                progress_callback=lambda step: _emit_fetch_progress(
+                    progress_callback,
+                    step.phase,
+                    step.status,
+                    step.detail,
+                    step.capability,
+                ),
             )
         except (OSError, ValueError) as exc:
             return SourceRunResult(warnings=[SourceWarning(source_name, f"Recipe extraction failed: {exc}", url)])
@@ -156,7 +176,18 @@ class RecipeHtmlAdapter(SourceAdapter):
             if not job.application_url:
                 job.application_url = job.url
         warnings = [SourceWarning(source_name, warning, result.base_url) for warning in result.warnings]
-        return SourceRunResult(jobs=jobs, warnings=warnings)
+        return SourceRunResult(
+            jobs=jobs,
+            warnings=warnings,
+            metadata=_recipe_result_metadata(
+                source=self.source,
+                recipe_path=recipe_path,
+                recipe=recipe,
+                result=result,
+                retained_job_count=len(jobs),
+                max_results=max_results,
+            ),
+        )
 
 
 def load_sources(root: Path = ROOT) -> list[dict]:
@@ -294,8 +325,84 @@ def adapter_for_source(source: dict, root: Path = ROOT) -> SourceAdapter:
     return UnsupportedSourceAdapter(source, root)
 
 
+def _recipe_result_metadata(
+    *,
+    source: dict,
+    recipe_path: str,
+    recipe: Any,
+    result: Any,
+    retained_job_count: int,
+    max_results: int,
+) -> dict[str, Any]:
+    return {
+        "adapter": "recipe_html",
+        "recipe_path": recipe_path,
+        "recipe_source_name": recipe.source_name,
+        "base_url": result.base_url,
+        "mode_used": result.mode_used,
+        "configured_source_url": source.get("url", ""),
+        "retained_job_count": retained_job_count,
+        "job_limit": max_results,
+        "run_steps": [
+            {
+                "phase": step.phase,
+                "status": step.status,
+                "detail": step.detail,
+                "capability": step.capability,
+            }
+            for step in result.steps
+        ],
+        "pagination_configured": bool(recipe.pagination.page_link_selector or recipe.pagination.next_selector),
+        "pagination_link_count": len(result.pagination_links),
+        "pagination_max_pages": recipe.pagination.max_pages,
+        "pagination_fetch_count": result.pagination_fetch_count,
+        "pagination_fetch_attempts": list(result.pagination_fetch_attempts),
+        "detail_follow_enabled": recipe.detail.follow,
+        "detail_fetch_limit": result.detail_fetch_limit,
+        "detail_fetch_count": result.detail_fetch_count,
+        "detail_enriched_count": result.detail_enriched_count,
+        "detail_request_delay_seconds": recipe.detail.request_delay_seconds,
+        "detail_attempts": [
+            {
+                "url": attempt.url,
+                "status": attempt.status,
+                "found_fields": list(attempt.found_fields),
+                "missing_fields": list(attempt.missing_fields),
+                "detail": attempt.detail,
+            }
+            for attempt in result.detail_attempts
+        ],
+        "field_checks": [
+            {
+                "field": check.field,
+                "label": check.label,
+                "scope": check.scope,
+                "expected": check.expected,
+                "status": check.status,
+                "present_count": check.present_count,
+                "total_count": check.total_count,
+                "sample_value": check.sample_value,
+                "source": check.source,
+                "detail": check.detail,
+            }
+            for check in result.field_checks
+        ],
+        "capability_checks": [
+            {
+                "capability": check.capability,
+                "label": check.label,
+                "expected": check.expected,
+                "observed": check.observed,
+                "status": check.status,
+                "detail": check.detail,
+            }
+            for check in result.capability_checks
+        ],
+    }
+
+
 class UnsupportedSourceAdapter(SourceAdapter):
-    def fetch(self) -> SourceRunResult:
+    def fetch(self, progress_callback: SourceFetchProgressCallback | None = None) -> SourceRunResult:
         return SourceRunResult(
             warnings=[
                 SourceWarning(
@@ -305,6 +412,17 @@ class UnsupportedSourceAdapter(SourceAdapter):
                 )
             ]
         )
+
+
+def _emit_fetch_progress(
+    callback: SourceFetchProgressCallback | None,
+    phase: str,
+    status: str,
+    detail: str,
+    capability: str = "",
+) -> None:
+    if callback:
+        callback({"phase": phase, "status": status, "detail": detail, "capability": capability})
 
 
 JOB_HINTS = ("job", "career", "vacancy", "contract", "sap", "abap", "consultant")

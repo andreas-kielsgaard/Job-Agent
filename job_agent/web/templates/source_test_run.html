@@ -12,17 +12,21 @@
 <div class="panel running-panel">
   <h2 id="test-status-title">Starting source test</h2>
   <p class="muted">This runs the configured source the way the daily run would, but does not save job packages, mark jobs as seen, or include the source in the daily run.</p>
+  <p class="muted" id="source-test-running-note">Preparing the configured source and recipe.</p>
   {% if not execution_entry %}
   <p><span class="badge low">No daily-run entry is prepared for this source yet.</span></p>
   {% elif force_disabled %}
   <p><span class="badge medium">Testing while the daily-run entry is disabled.</span></p>
   {% endif %}
   <ol class="progress-steps" id="source-test-steps">
-    <li class="active">Load daily-run entry</li>
-    <li>Fetch the source and follow configured recipe navigation</li>
-    <li>Extract jobs and warnings</li>
-    <li>Save readiness result</li>
+    <li class="active">Resolve configured source and selected recipe</li>
+    <li>Fetch the listing page</li>
+    <li>Collect jobs from listing and pagination pages</li>
+    <li>Open configured job detail pages with recipe delay</li>
+    <li>Build verification report and save readiness</li>
   </ol>
+  <h3>Live Run Log</h3>
+  <ol class="progress-steps" id="source-test-live-log"></ol>
 </div>
 
 <div class="panel" id="source-test-result" hidden>
@@ -40,9 +44,26 @@
   </div>
 </div>
 
+<div class="panel" id="source-test-trace-panel" hidden>
+  <h2>What The Recipe Did</h2>
+  <p class="muted" id="source-test-recipe-summary"></p>
+  <div class="grid">
+    <div class="stat"><span>Recipe</span><strong id="source-test-recipe-name">Unknown</strong></div>
+    <div class="stat"><span>Mode</span><strong id="source-test-mode">Unknown</strong></div>
+    <div class="stat"><span>Pagination pages fetched</span><strong id="source-test-pagination-count">0</strong></div>
+    <div class="stat"><span>Detail pages opened</span><strong id="source-test-detail-count">0</strong></div>
+    <div class="stat"><span>Detail pages with fields</span><strong id="source-test-detail-enriched">0</strong></div>
+  </div>
+  <h3>Step Execution</h3>
+  <ol class="progress-steps" id="source-test-run-steps"></ol>
+  <div id="source-test-pagination"></div>
+  <div id="source-test-detail-attempts"></div>
+  <div id="source-test-field-checks"></div>
+</div>
+
 <div class="panel" id="source-test-jobs-panel" hidden>
   <h2>Jobs Found During Test</h2>
-  <p class="muted">These are shown so you can verify the source is reading real postings. They were not saved to your job list.</p>
+  <p class="muted" id="source-test-jobs-note">These are shown so you can verify the source is reading real postings. They were not saved to your job list.</p>
   <table>
     <thead><tr><th>Job</th><th>Details</th><th>Description</th></tr></thead>
     <tbody id="source-test-job-rows"></tbody>
@@ -50,12 +71,46 @@
 </div>
 
 <script>
+  const runningMessages = [
+    "Fetching the listing page.",
+    "Applying listing selectors and collecting job URLs.",
+    "Following configured pagination with the recipe delay.",
+    "Opening job detail pages with the recipe delay.",
+    "Preparing the verification report."
+  ];
+
+  let runTimer = null;
+
   function setStep(index, className) {
     const steps = [...document.querySelectorAll("#source-test-steps li")];
     steps.forEach((step, stepIndex) => {
+      step.className = "";
       if (stepIndex < index) step.className = "complete";
       if (stepIndex === index) step.className = className;
     });
+  }
+
+  function finishSteps(ok) {
+    const steps = [...document.querySelectorAll("#source-test-steps li")];
+    steps.forEach((step, index) => {
+      step.className = index === steps.length - 1 ? (ok ? "complete" : "failed") : "complete";
+    });
+  }
+
+  function startRunTimer() {
+    const note = document.getElementById("source-test-running-note");
+    const startedAt = Date.now();
+    runTimer = window.setInterval(() => {
+      const elapsed = Math.max(1, Math.round((Date.now() - startedAt) / 1000));
+      const messageIndex = Math.min(runningMessages.length - 1, Math.floor(elapsed / 4));
+      note.innerText = `${runningMessages[messageIndex]} Elapsed: ${elapsed}s. The result trace below will show the actual pages and fields after the server finishes.`;
+    }, 1000);
+  }
+
+  function stopRunTimer(message) {
+    if (runTimer) window.clearInterval(runTimer);
+    runTimer = null;
+    document.getElementById("source-test-running-note").innerText = message;
   }
 
   function text(value) {
@@ -71,6 +126,33 @@
       .replaceAll("'", "&#039;");
   }
 
+  function statusClass(status) {
+    const value = text(status).toLowerCase();
+    if (["completed", "pass", "success", "observed"].includes(value)) return "complete";
+    if (["running", "warning", "empty", "skipped", "not_expected"].includes(value)) return "active";
+    if (["failed", "fail", "failing"].includes(value)) return "failed";
+    return "";
+  }
+
+  function stepIndexForEvent(event) {
+    const capability = text(event.capability).toLowerCase();
+    const phase = text(event.phase).toLowerCase();
+    if (capability === "detail" || phase.includes("detail")) return 3;
+    if (capability === "pagination" || phase.includes("pagination")) return 2;
+    if (capability === "listing" || phase.includes("listing")) return 1;
+    if (phase.includes("report") || phase.includes("readiness") || phase.includes("extracted")) return 4;
+    return 0;
+  }
+
+  function appendLiveEvent(event) {
+    const list = document.getElementById("source-test-live-log");
+    const item = document.createElement("li");
+    item.className = statusClass(event.status);
+    item.innerHTML = `<strong>${escapeHtml(event.phase)}</strong><div>${escapeHtml(event.detail)}</div>`;
+    list.appendChild(item);
+    setStep(stepIndexForEvent(event), statusClass(event.status) === "failed" ? "failed" : "active");
+  }
+
   function renderFindings(data) {
     document.getElementById("source-test-result").hidden = false;
     document.getElementById("source-test-status").innerText = data.status || "unknown";
@@ -82,9 +164,87 @@
     document.getElementById("source-test-blockers").innerHTML = blockers.length
       ? `<ul>${blockers.map(item => `<li>${escapeHtml(item)}</li>`).join("")}</ul>`
       : "";
-    if (data.jobs && data.jobs.length) {
-      document.getElementById("source-test-jobs-panel").hidden = false;
-      document.getElementById("source-test-job-rows").innerHTML = data.jobs.map(job => `
+    renderTrace(data);
+    renderJobs(data);
+  }
+
+  function renderTrace(data) {
+    const hasTrace = (data.run_steps || []).length
+      || (data.pagination_fetch_attempts || []).length
+      || (data.detail_attempts || []).length
+      || (data.field_checks || []).length;
+    if (!hasTrace) return;
+
+    document.getElementById("source-test-trace-panel").hidden = false;
+    document.getElementById("source-test-recipe-name").innerText = data.recipe_source_name || data.recipe_path || "Generic extractor";
+    document.getElementById("source-test-mode").innerText = data.mode_used || "unknown";
+    document.getElementById("source-test-pagination-count").innerText = data.pagination_fetch_count || 0;
+    document.getElementById("source-test-detail-count").innerText = data.detail_fetch_count || 0;
+    document.getElementById("source-test-detail-enriched").innerText = data.detail_enriched_count || 0;
+    document.getElementById("source-test-recipe-summary").innerText = [
+      data.recipe_path ? `Using ${data.recipe_path}.` : "",
+      data.pagination_configured ? `Pagination is configured up to ${data.pagination_max_pages || 1} page(s).` : "Pagination is not configured.",
+      data.detail_follow_enabled ? `Detail pages are configured with ${data.detail_request_delay_seconds || 0}s delay.` : "Detail pages are not configured."
+    ].filter(Boolean).join(" ");
+
+    document.getElementById("source-test-run-steps").innerHTML = (data.run_steps || []).map(step => `
+      <li class="${statusClass(step.status)}">
+        <strong>${escapeHtml(step.phase)}</strong>
+        <div>${escapeHtml(step.detail)}</div>
+      </li>
+    `).join("");
+
+    const paginationUrls = data.pagination_fetch_attempts || [];
+    document.getElementById("source-test-pagination").innerHTML = paginationUrls.length
+      ? `<h3>Pagination Pages Fetched</h3><ul>${paginationUrls.map(url => `<li><a href="${escapeHtml(url)}" target="_blank" rel="noreferrer">${escapeHtml(url)}</a></li>`).join("")}</ul>`
+      : `<h3>Pagination Pages Fetched</h3><p class="muted">No additional pagination page was fetched in this run.</p>`;
+
+    const attempts = data.detail_attempts || [];
+    document.getElementById("source-test-detail-attempts").innerHTML = attempts.length
+      ? `<h3>Detail Pages Opened</h3>
+        <table>
+          <thead><tr><th>Detail URL</th><th>Status</th><th>Fields found</th><th>Missing expected fields</th></tr></thead>
+          <tbody>${attempts.map(attempt => `
+            <tr>
+              <td><a href="${escapeHtml(attempt.url)}" target="_blank" rel="noreferrer">${escapeHtml(attempt.url)}</a><br><span class="muted">${escapeHtml(attempt.detail)}</span></td>
+              <td><span class="badge ${statusClass(attempt.status)}">${escapeHtml(attempt.status)}</span></td>
+              <td>${escapeHtml((attempt.found_fields || []).join(", ") || "none")}</td>
+              <td>${escapeHtml((attempt.missing_fields || []).join(", ") || "none")}</td>
+            </tr>
+          `).join("")}</tbody>
+        </table>`
+      : `<h3>Detail Pages Opened</h3><p class="muted">No job detail page was opened in this run.</p>`;
+
+    const checks = data.field_checks || [];
+    document.getElementById("source-test-field-checks").innerHTML = checks.length
+      ? `<h3>Job Report Fields</h3>
+        <table>
+          <thead><tr><th>Field</th><th>Expected</th><th>Status</th><th>Found</th><th>Sample</th></tr></thead>
+          <tbody>${checks.map(check => `
+            <tr>
+              <td>${escapeHtml(check.label || check.field)}</td>
+              <td>${check.expected ? "Yes" : "No"}</td>
+              <td><span class="badge ${statusClass(check.status)}">${escapeHtml(check.status)}</span></td>
+              <td>${escapeHtml(`${check.present_count || 0}/${check.total_count || 0}`)}</td>
+              <td>${escapeHtml(check.sample_value || "")}</td>
+            </tr>
+          `).join("")}</tbody>
+        </table>`
+      : "";
+  }
+
+  function renderJobs(data) {
+    if (!data.jobs || !data.jobs.length) return;
+    document.getElementById("source-test-jobs-panel").hidden = false;
+    document.getElementById("source-test-jobs-note").innerText =
+      `Showing all ${data.jobs.length} job(s) returned by this source test. They were not saved to your job list.`;
+    document.getElementById("source-test-job-rows").innerHTML = data.jobs.map(job => {
+      const fullDescription = job.description || "";
+      const preview = job.description_preview || fullDescription;
+      const fullDescriptionBlock = fullDescription && fullDescription !== preview
+        ? `<details><summary>Show full extracted description (${fullDescription.length} chars)</summary><p>${escapeHtml(fullDescription)}</p></details>`
+        : "";
+      return `
         <tr>
           <td><strong>${escapeHtml(job.title)}</strong><br>${job.url ? `<a href="${escapeHtml(job.url)}" target="_blank" rel="noreferrer">${escapeHtml(job.url)}</a>` : ""}</td>
           <td>
@@ -93,12 +253,17 @@
             <div>Rate: ${escapeHtml(job.rate)}</div>
             <div>Workload: ${escapeHtml(job.workload)}</div>
             <div>Posted: ${escapeHtml(job.posted_date)}</div>
+            <div>Start: ${escapeHtml(job.start_date)}</div>
             <div>Languages: ${escapeHtml((job.languages || []).join(", ") || "Not listed")}</div>
+            ${(job.extraction_notes || []).length ? `<div class="muted">Notes: ${escapeHtml(job.extraction_notes.join("; "))}</div>` : ""}
           </td>
-          <td>${escapeHtml(job.description_preview)}</td>
+          <td>
+            <p>${escapeHtml(preview)}</p>
+            ${fullDescriptionBlock}
+          </td>
         </tr>
-      `).join("");
-    }
+      `;
+    }).join("");
   }
 
   async function runSourceTest() {
@@ -106,18 +271,16 @@
     try {
       setStep(0, "active");
       await new Promise(resolve => setTimeout(resolve, 200));
-      setStep(1, "active");
-      const response = await fetch("/sources/{{ source.id }}/test-run", { method: "POST" });
-      setStep(2, "active");
-      const data = await response.json();
-      setStep(3, "active");
-      await new Promise(resolve => setTimeout(resolve, 150));
-      setStep(4, data.ok ? "complete" : "failed");
+      startRunTimer();
+      const data = await runStreamingSourceTest();
+      finishSteps(data.ok);
       title.innerText = data.ok ? "Source test completed" : "Source test needs review";
+      stopRunTimer(data.ok ? "Run completed. The trace below shows the recipe steps, pagination fetches, and detail-page attempts." : "Run finished with issues. Review the trace and warnings below.");
       renderFindings(data);
     } catch (error) {
-      setStep(3, "failed");
+      finishSteps(false);
       title.innerText = "Source test failed";
+      stopRunTimer("The source test could not be completed.");
       renderFindings({
         status: "failed",
         readiness_status: "blocked",
@@ -126,6 +289,43 @@
         jobs: [],
       });
     }
+  }
+
+  async function runStreamingSourceTest() {
+    const response = await fetch("/sources/{{ source.id }}/test-run/stream", { method: "POST", cache: "no-store" });
+    if (!response.body) {
+      const fallback = await fetch("/sources/{{ source.id }}/test-run", { method: "POST", cache: "no-store" });
+      return await fallback.json();
+    }
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let finalData = null;
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const chunks = buffer.split("\n\n");
+      buffer = chunks.pop() || "";
+      for (const chunk of chunks) {
+        const line = chunk.split("\n").find(item => item.startsWith("data:"));
+        if (!line) continue;
+        const event = JSON.parse(line.slice(5).trim());
+        if (event.type === "progress") {
+          appendLiveEvent(event.event || {});
+        } else if (event.type === "complete") {
+          finalData = event.data;
+        } else if (event.type === "error") {
+          throw new Error(event.message || "Source test failed.");
+        }
+      }
+    }
+
+    if (!finalData) {
+      throw new Error("Source test finished without returning a result.");
+    }
+    return finalData;
   }
 
   window.addEventListener("DOMContentLoaded", runSourceTest);

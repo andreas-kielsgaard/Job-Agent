@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 import time
+from collections.abc import Callable
 from dataclasses import MISSING, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -197,6 +198,24 @@ class RecipeExtractionResult:
     pagination_fetch_attempts: list[str] = field(default_factory=list)
 
 
+def _record_recipe_step(
+    steps: list[RecipeRunStep] | None,
+    progress_callback: Callable[[RecipeRunStep], None] | None,
+    step: RecipeRunStep,
+) -> None:
+    if steps is not None:
+        steps.append(step)
+    _emit_recipe_step(progress_callback, step)
+
+
+def _emit_recipe_step(
+    progress_callback: Callable[[RecipeRunStep], None] | None,
+    step: RecipeRunStep,
+) -> None:
+    if progress_callback:
+        progress_callback(step)
+
+
 def load_job_board_recipe(path: Path) -> JobBoardRecipe:
     with path.open("r", encoding="utf-8") as handle:
         data = yaml.safe_load(handle) or {}
@@ -372,42 +391,59 @@ def extract_jobs_with_recipe_from_url(
     fetch_pagination: bool = False,
     pagination_page_limit: int | None = None,
     job_limit: int | None = None,
+    progress_callback: Callable[[RecipeRunStep], None] | None = None,
 ) -> RecipeExtractionResult:
     normalized_url = validate_public_url(url)
     use_rendered = recipe.mode == "rendered_html" if rendered is None else rendered
     mode_used = "rendered_html" if use_rendered else "static_html"
-    steps = [
+    steps: list[RecipeRunStep] = []
+    _record_recipe_step(
+        steps,
+        progress_callback,
         RecipeRunStep(
             phase="Recipe loaded",
             status="completed",
             detail=f"{recipe.source_name} uses {recipe.mode}; listing selector {recipe.listing.card_selector}.",
-        )
-    ]
+        ),
+    )
+    _emit_recipe_step(
+        progress_callback,
+        RecipeRunStep(
+            phase="Listing page request",
+            status="running",
+            detail=f"Fetching {normalized_url} with {mode_used}.",
+            capability="listing",
+        ),
+    )
     html, final_url, warnings = (
         _fetch_rendered_html(normalized_url, timeout_seconds)
         if use_rendered
         else _fetch_static_html(normalized_url, timeout_seconds)
     )
-    steps.append(
+    _record_recipe_step(
+        steps,
+        progress_callback,
         RecipeRunStep(
             phase="Listing page fetched",
             status="completed",
             detail=f"Fetched {final_url} with {mode_used}.",
             capability="listing",
-        )
+        ),
     )
     jobs = extract_jobs_with_recipe(html, base_url=final_url, recipe=recipe)
     jobs = _limited_jobs(jobs, job_limit)
     pagination_links = find_pagination_links(html, final_url, recipe)
     observed_pagination_links = discover_pagination_links(html, final_url)
     application_entries = discover_application_entries(html, final_url)
-    steps.append(
+    _record_recipe_step(
+        steps,
+        progress_callback,
         RecipeRunStep(
             phase="Listing selectors applied",
             status="completed" if jobs else "warning",
             detail=f"Extracted {len(jobs)} unique job(s) from the first listing page.",
             capability="listing",
-        )
+        ),
     )
 
     pagination_fetch_attempts: list[str] = []
@@ -421,17 +457,21 @@ def extract_jobs_with_recipe_from_url(
             max_pages=page_limit,
             existing_jobs=jobs,
             job_limit=job_limit,
+            progress_callback=progress_callback,
+            step_collector=steps,
         )
         warnings.extend(page_warnings)
         pagination_fetch_attempts.extend(fetched_urls)
         jobs = fetched_jobs
-    steps.append(
+    _record_recipe_step(
+        steps,
+        progress_callback,
         RecipeRunStep(
             phase="Pagination detection",
             status="completed" if pagination_links else "skipped",
             detail=_pagination_trace_detail(recipe, pagination_links, observed_pagination_links, pagination_fetch_attempts),
             capability="pagination",
-        )
+        ),
     )
 
     detail_limit = recipe.detail.max_detail_pages if use_recipe_detail_limit else detail_page_limit
@@ -440,16 +480,20 @@ def extract_jobs_with_recipe_from_url(
         recipe,
         timeout_seconds=timeout_seconds,
         detail_page_limit=detail_limit,
+        progress_callback=progress_callback,
+        step_collector=steps,
     )
     warnings.extend(detail_warnings)
     detail_enriched_count = sum(1 for attempt in detail_attempts if attempt.found_fields)
-    steps.append(
+    _record_recipe_step(
+        steps,
+        progress_callback,
         RecipeRunStep(
             phase="Detail page enrichment",
             status="completed" if detail_enriched_count else "skipped" if not recipe.detail.follow else "warning",
             detail=_detail_trace_detail(recipe, detail_limit, detail_attempts),
             capability="detail",
-        )
+        ),
     )
 
     result = RecipeExtractionResult(
@@ -491,6 +535,8 @@ def _enrich_jobs_with_detail_pages_with_trace(
     recipe: JobBoardRecipe,
     timeout_seconds: int = 15,
     detail_page_limit: int | None = None,
+    progress_callback: Callable[[RecipeRunStep], None] | None = None,
+    step_collector: list[RecipeRunStep] | None = None,
 ) -> tuple[list[str], list[DetailPageAttempt]]:
     if not recipe.detail.follow:
         return [], []
@@ -506,7 +552,25 @@ def _enrich_jobs_with_detail_pages_with_trace(
         if _should_reject(job.title, job.url, job.description, recipe):
             continue
         if index and recipe.detail.request_delay_seconds:
+            _emit_recipe_step(
+                progress_callback,
+                RecipeRunStep(
+                    phase="Detail request delay",
+                    status="running",
+                    detail=f"Waiting {recipe.detail.request_delay_seconds:g}s before opening the next detail page.",
+                    capability="detail",
+                ),
+            )
             time.sleep(recipe.detail.request_delay_seconds)
+        _emit_recipe_step(
+            progress_callback,
+            RecipeRunStep(
+                phase="Detail page request",
+                status="running",
+                detail=f"Opening detail page for {job.title}: {job.url}",
+                capability="detail",
+            ),
+        )
         try:
             response = requests.get(
                 job.url,
@@ -523,6 +587,16 @@ def _enrich_jobs_with_detail_pages_with_trace(
                     missing_fields=expected_fields,
                     detail=str(exc),
                 )
+            )
+            _record_recipe_step(
+                step_collector,
+                progress_callback,
+                RecipeRunStep(
+                    phase="Detail page failed",
+                    status="failed",
+                    detail=f"Could not open {job.url}: {exc}",
+                    capability="detail",
+                ),
             )
             continue
 
@@ -543,6 +617,20 @@ def _enrich_jobs_with_detail_pages_with_trace(
                     else "No configured detail selectors or structured data fields produced values."
                 ),
             )
+        )
+        _record_recipe_step(
+            step_collector,
+            progress_callback,
+            RecipeRunStep(
+                phase="Detail page read",
+                status="completed" if found_fields else "warning",
+                detail=(
+                    f"Opened {job.url}; found fields: {', '.join(found_fields)}."
+                    if found_fields
+                    else f"Opened {job.url}; no configured detail fields produced values."
+                ),
+                capability="detail",
+            ),
         )
     return warnings, attempts
 
@@ -677,6 +765,8 @@ def _fetch_pagination_job_pages(
     max_pages: int | None,
     existing_jobs: list[Job],
     job_limit: int | None,
+    progress_callback: Callable[[RecipeRunStep], None] | None = None,
+    step_collector: list[RecipeRunStep] | None = None,
 ) -> tuple[list[str], list[Job], list[str]]:
     if not pagination_links or not max_pages or max_pages <= 1:
         return [], existing_jobs, []
@@ -691,7 +781,25 @@ def _fetch_pagination_job_pages(
         if job_limit is not None and len(jobs) >= job_limit:
             break
         if index and recipe.pagination.request_delay_seconds:
+            _emit_recipe_step(
+                progress_callback,
+                RecipeRunStep(
+                    phase="Pagination delay",
+                    status="running",
+                    detail=f"Waiting {recipe.pagination.request_delay_seconds:g}s before fetching the next pagination page.",
+                    capability="pagination",
+                ),
+            )
             time.sleep(recipe.pagination.request_delay_seconds)
+        _emit_recipe_step(
+            progress_callback,
+            RecipeRunStep(
+                phase="Pagination page request",
+                status="running",
+                detail=f"Fetching pagination page {page_url}.",
+                capability="pagination",
+            ),
+        )
         try:
             html, final_url, fetch_warnings = (
                 _fetch_rendered_html(page_url, timeout_seconds)
@@ -700,10 +808,21 @@ def _fetch_pagination_job_pages(
             )
         except ValueError as exc:
             warnings.append(f"Pagination fetch failed for {page_url}: {exc}")
+            _record_recipe_step(
+                step_collector,
+                progress_callback,
+                RecipeRunStep(
+                    phase="Pagination page failed",
+                    status="failed",
+                    detail=f"Could not fetch {page_url}: {exc}",
+                    capability="pagination",
+                ),
+            )
             continue
         warnings.extend(fetch_warnings)
         fetched_urls.append(final_url)
         page_jobs = extract_jobs_with_recipe(html, base_url=final_url, recipe=recipe)
+        before_count = len(jobs)
         for job in page_jobs:
             if job.url in seen_urls:
                 continue
@@ -711,6 +830,16 @@ def _fetch_pagination_job_pages(
             jobs.append(job)
             if job_limit is not None and len(jobs) >= job_limit:
                 break
+        _record_recipe_step(
+            step_collector,
+            progress_callback,
+            RecipeRunStep(
+                phase="Pagination page fetched",
+                status="completed",
+                detail=f"Fetched {final_url}; added {len(jobs) - before_count} new job(s).",
+                capability="pagination",
+            ),
+        )
     return warnings, jobs, fetched_urls
 
 

@@ -113,6 +113,9 @@ def test_recipe_html_adapter_extracts_jobs_from_recipe(monkeypatch: pytest.Monke
     assert result.jobs[0].url == "https://example.com/jobs/sap-abap"
     assert result.jobs[0].location == "Remote"
     assert result.jobs[0].source_confidence == "recipe"
+    assert result.metadata["recipe_path"].endswith("test-recipe.yaml")
+    assert result.metadata["recipe_source_name"] == "Test Recipe"
+    assert result.metadata["run_steps"][0]["phase"] == "Recipe loaded"
 
 
 def test_recipe_html_adapter_returns_warning_for_invalid_recipe_path(project_root: Path) -> None:

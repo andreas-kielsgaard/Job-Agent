@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -7,6 +8,8 @@ from job_agent.config import ROOT
 from job_agent.models import Job
 from job_agent.services.execution_source_service import ExecutionSourceService
 from job_agent.sources import adapter_for_source
+
+DryRunProgressCallback = Callable[[dict], None]
 
 
 @dataclass
@@ -22,6 +25,7 @@ class DryRunJobPreview:
     posted_date: str = "Not listed"
     start_date: str = "Not listed"
     languages: list[str] = field(default_factory=list)
+    description: str = ""
     description_preview: str = ""
     extraction_notes: list[str] = field(default_factory=list)
 
@@ -38,6 +42,24 @@ class SourceDryRunResult:
     warning_count: int = 0
     warnings: list[str] = field(default_factory=list)
     jobs: list[DryRunJobPreview] = field(default_factory=list)
+    recipe_path: str = ""
+    recipe_source_name: str = ""
+    base_url: str = ""
+    mode_used: str = ""
+    run_steps: list[dict] = field(default_factory=list)
+    pagination_configured: bool = False
+    pagination_link_count: int = 0
+    pagination_max_pages: int = 1
+    pagination_fetch_count: int = 0
+    pagination_fetch_attempts: list[str] = field(default_factory=list)
+    detail_follow_enabled: bool = False
+    detail_fetch_limit: int | None = None
+    detail_fetch_count: int = 0
+    detail_enriched_count: int = 0
+    detail_request_delay_seconds: float = 0.0
+    detail_attempts: list[dict] = field(default_factory=list)
+    field_checks: list[dict] = field(default_factory=list)
+    capability_checks: list[dict] = field(default_factory=list)
 
 
 class SourceDryRunService:
@@ -45,7 +67,13 @@ class SourceDryRunService:
         self.root = root
         self.execution_sources = ExecutionSourceService(root)
 
-    def dry_run(self, source_id: str, *, force_disabled: bool = False) -> SourceDryRunResult:
+    def dry_run(
+        self,
+        source_id: str,
+        *,
+        force_disabled: bool = False,
+        progress_callback: DryRunProgressCallback | None = None,
+    ) -> SourceDryRunResult:
         source_id = source_id.strip()
         source = self.execution_sources.find_by_source_id(source_id)
         if not source:
@@ -54,6 +82,12 @@ class SourceDryRunService:
         source_name = str(source.get("name") or source_id)
         source_type = str(source.get("type") or "")
         enabled = bool(source.get("enabled", True))
+        _emit_progress(
+            progress_callback,
+            "Source resolved",
+            "completed",
+            f"Resolved {source_name} ({source_type or 'unknown type'}).",
+        )
         if not enabled and not force_disabled:
             return SourceDryRunResult(
                 source_id=source_id,
@@ -64,7 +98,9 @@ class SourceDryRunService:
             )
 
         try:
-            result = adapter_for_source(source, self.root).fetch()
+            adapter = adapter_for_source(source, self.root)
+            _emit_progress(progress_callback, "Source adapter selected", "completed", adapter.__class__.__name__)
+            result = adapter.fetch(progress_callback=progress_callback) if progress_callback else adapter.fetch()
         except Exception as exc:
             return SourceDryRunResult(
                 source_id=source_id,
@@ -79,6 +115,13 @@ class SourceDryRunService:
 
         warnings = [f"{warning.source}: {warning.message}" for warning in result.warnings]
         jobs = [_job_preview(job) for job in result.jobs]
+        metadata = result.metadata or {}
+        _emit_progress(
+            progress_callback,
+            "Source test extracted jobs",
+            "completed" if jobs else "warning",
+            f"Extracted {len(jobs)} job(s) and {len(warnings)} warning(s).",
+        )
         return SourceDryRunResult(
             source_id=source_id,
             source_name=source_name,
@@ -90,6 +133,24 @@ class SourceDryRunService:
             warning_count=len(warnings),
             warnings=warnings,
             jobs=jobs,
+            recipe_path=str(metadata.get("recipe_path") or source.get("recipe_path") or ""),
+            recipe_source_name=str(metadata.get("recipe_source_name") or ""),
+            base_url=str(metadata.get("base_url") or source.get("url") or ""),
+            mode_used=str(metadata.get("mode_used") or ""),
+            run_steps=list(metadata.get("run_steps") or []),
+            pagination_configured=bool(metadata.get("pagination_configured", False)),
+            pagination_link_count=_int(metadata.get("pagination_link_count")),
+            pagination_max_pages=_int(metadata.get("pagination_max_pages")) or 1,
+            pagination_fetch_count=_int(metadata.get("pagination_fetch_count")),
+            pagination_fetch_attempts=[str(item) for item in metadata.get("pagination_fetch_attempts") or []],
+            detail_follow_enabled=bool(metadata.get("detail_follow_enabled", False)),
+            detail_fetch_limit=_optional_int(metadata.get("detail_fetch_limit")),
+            detail_fetch_count=_int(metadata.get("detail_fetch_count")),
+            detail_enriched_count=_int(metadata.get("detail_enriched_count")),
+            detail_request_delay_seconds=float(metadata.get("detail_request_delay_seconds") or 0.0),
+            detail_attempts=list(metadata.get("detail_attempts") or []),
+            field_checks=list(metadata.get("field_checks") or []),
+            capability_checks=list(metadata.get("capability_checks") or []),
         )
 
 
@@ -104,6 +165,7 @@ def _status(jobs: list[DryRunJobPreview], warnings: list[str]) -> str:
 
 
 def _job_preview(job: Job) -> DryRunJobPreview:
+    description = " ".join(job.description.split())
     return DryRunJobPreview(
         title=job.title,
         url=job.url,
@@ -116,6 +178,32 @@ def _job_preview(job: Job) -> DryRunJobPreview:
         posted_date=job.posted_date,
         start_date=job.start_date,
         languages=list(job.languages),
-        description_preview=" ".join(job.description.split())[:240],
+        description=description,
+        description_preview=description[:320],
         extraction_notes=list(job.extraction_notes),
     )
+
+
+def _int(value) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _optional_int(value) -> int | None:
+    if value is None:
+        return None
+    parsed = _int(value)
+    return parsed if parsed else None
+
+
+def _emit_progress(
+    callback: DryRunProgressCallback | None,
+    phase: str,
+    status: str,
+    detail: str,
+    capability: str = "",
+) -> None:
+    if callback:
+        callback({"phase": phase, "status": status, "detail": detail, "capability": capability})

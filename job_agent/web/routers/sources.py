@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import json
+import queue
+import threading
 from urllib.parse import urlencode
 
 from fastapi import APIRouter, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 
 from job_agent.services.recipe_calibration_service import capture_recipe_calibration
 from job_agent.services.recipe_preview_service import explain_recipe
@@ -296,25 +299,46 @@ def run_source_test(source_id: str) -> JSONResponse:
         force_disabled=force_disabled,
     )
     readiness = source_execution_readiness_service().save_from_dry_run(result)
-    return JSONResponse(
-        {
-            "ok": result.status not in {"not_found", "disabled", "failing"},
-            "source_id": result.source_id,
-            "source_name": result.source_name,
-            "source_type": result.source_type,
-            "source_enabled": result.source_enabled,
-            "forced_disabled": result.forced_disabled,
-            "status": result.status,
-            "job_count": result.job_count,
-            "warning_count": result.warning_count,
-            "warnings": result.warnings,
-            "jobs": [_dry_run_job_mapping(job) for job in result.jobs[:12]],
-            "readiness_status": readiness.readiness_status,
-            "readiness_summary": readiness.readiness_summary,
-            "readiness_blockers": readiness.blockers,
-            "readiness_warnings": readiness.warnings,
-            "source_url": source.url,
-        }
+    return JSONResponse(_source_test_payload(source, result, readiness))
+
+
+@router.post("/sources/{source_id}/test-run/stream")
+def run_source_test_stream(source_id: str) -> StreamingResponse:
+    source = _registry_source_or_404(source_id)
+    execution_entry = execution_source_service().find_by_source_id(source.id)
+    force_disabled = bool(execution_entry and not bool(execution_entry.get("enabled", True)))
+
+    def stream_events():
+        events: queue.Queue[dict | None] = queue.Queue()
+
+        def progress(event: dict) -> None:
+            events.put({"type": "progress", "event": event})
+
+        def worker() -> None:
+            try:
+                result = SourceDryRunService(execution_source_service().root).dry_run(
+                    source.id,
+                    force_disabled=force_disabled,
+                    progress_callback=progress,
+                )
+                readiness = source_execution_readiness_service().save_from_dry_run(result)
+                events.put({"type": "complete", "data": _source_test_payload(source, result, readiness)})
+            except Exception as exc:
+                events.put({"type": "error", "message": str(exc)})
+            finally:
+                events.put(None)
+
+        threading.Thread(target=worker, daemon=True).start()
+        while True:
+            event = events.get()
+            if event is None:
+                break
+            yield f"data: {json.dumps(event)}\n\n"
+
+    return StreamingResponse(
+        stream_events(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-store"},
     )
 
 
@@ -696,6 +720,46 @@ def _status_label(status: str) -> str:
     }.get(str(status or "").strip(), str(status or "Unknown").replace("_", " ").title())
 
 
+def _source_test_payload(source, result, readiness) -> dict[str, object]:
+    return {
+        "ok": result.status not in {"not_found", "disabled", "failing"},
+        "source_id": result.source_id,
+        "source_name": result.source_name,
+        "source_type": result.source_type,
+        "source_enabled": result.source_enabled,
+        "forced_disabled": result.forced_disabled,
+        "status": result.status,
+        "job_count": result.job_count,
+        "warning_count": result.warning_count,
+        "warnings": result.warnings,
+        "jobs": [_dry_run_job_mapping(job) for job in result.jobs],
+        "jobs_returned": len(result.jobs),
+        "recipe_path": result.recipe_path,
+        "recipe_source_name": result.recipe_source_name,
+        "base_url": result.base_url,
+        "mode_used": result.mode_used,
+        "run_steps": result.run_steps,
+        "pagination_configured": result.pagination_configured,
+        "pagination_link_count": result.pagination_link_count,
+        "pagination_max_pages": result.pagination_max_pages,
+        "pagination_fetch_count": result.pagination_fetch_count,
+        "pagination_fetch_attempts": result.pagination_fetch_attempts,
+        "detail_follow_enabled": result.detail_follow_enabled,
+        "detail_fetch_limit": result.detail_fetch_limit,
+        "detail_fetch_count": result.detail_fetch_count,
+        "detail_enriched_count": result.detail_enriched_count,
+        "detail_request_delay_seconds": result.detail_request_delay_seconds,
+        "detail_attempts": result.detail_attempts,
+        "field_checks": result.field_checks,
+        "capability_checks": result.capability_checks,
+        "readiness_status": readiness.readiness_status,
+        "readiness_summary": readiness.readiness_summary,
+        "readiness_blockers": readiness.blockers,
+        "readiness_warnings": readiness.warnings,
+        "source_url": source.url,
+    }
+
+
 def _dry_run_job_mapping(job) -> dict[str, object]:
     return {
         "title": job.title,
@@ -709,6 +773,7 @@ def _dry_run_job_mapping(job) -> dict[str, object]:
         "posted_date": job.posted_date,
         "start_date": job.start_date,
         "languages": job.languages,
+        "description": job.description,
         "description_preview": job.description_preview,
         "extraction_notes": job.extraction_notes,
     }
