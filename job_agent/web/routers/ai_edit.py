@@ -3,21 +3,21 @@ from __future__ import annotations
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
-from job_agent.config import ROOT
 from job_agent.services.ai_edit_service import AiEditRequest, AiEditService
+from job_agent.web.dependencies import current_root
 
 router = APIRouter()
 
 
 @router.get("/api/ai-edit/context")
 def ai_edit_context(field_id: str, button_id: str, job_id: str = "", run_id: str = "") -> JSONResponse:
-    return JSONResponse(AiEditService(ROOT).context_payload(field_id, button_id, job_id, run_id))
+    return JSONResponse(AiEditService(current_root()).context_payload(field_id, button_id, job_id, run_id))
 
 
 @router.post("/api/ai-edit/generate")
 async def ai_edit_generate(request: Request) -> JSONResponse:
     data = await request.json()
-    service = AiEditService(ROOT)
+    service = AiEditService(current_root())
     ai_request = AiEditRequest(
         field_id=data.get("field_id", ""),
         button_id=data.get("button_id", data.get("field_id", "")),

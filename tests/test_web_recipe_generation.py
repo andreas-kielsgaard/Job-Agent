@@ -12,9 +12,6 @@ from job_agent.services.recipe_suggestion_service import (
     RecipeRefinementResult,
     RecipeSuggestionResult,
 )
-from job_agent.web.app import create_app
-from job_agent.web.dependencies import reset_root, set_root
-
 
 VALID_RECIPE_YAML = """source_name: Eursap Jobs
 start_url: https://eursap.eu/jobs
@@ -26,16 +23,6 @@ listing:
 limits:
   max_cards: 10
 """
-
-
-@pytest.fixture
-def client(project_root: Path, minimal_profile: Path):
-    set_root(project_root)
-    try:
-        with TestClient(create_app()) as test_client:
-            yield test_client
-    finally:
-        reset_root()
 
 
 def test_source_detail_displays_recipe_generation_panel_and_artifacts(client: TestClient, project_root: Path) -> None:

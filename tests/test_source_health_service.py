@@ -76,7 +76,7 @@ def test_missing_health_record_is_untested(project_root: Path) -> None:
 
 def test_preview_without_source_id_does_not_write_health(project_root: Path) -> None:
     preview = preview_recipe(
-        "sources/recipes/experimental/eursap-jobs.yaml",
+        "tests/fixtures/recipes/experimental/eursap-jobs.yaml",
         "tests/fixtures/real_sources/eursap-jobs.html",
         base_url="https://eursap.eu/jobs",
     )

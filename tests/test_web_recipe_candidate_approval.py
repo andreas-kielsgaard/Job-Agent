@@ -2,15 +2,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
 from fastapi.testclient import TestClient
 
 from job_agent.services.recipe_candidate_service import RecipeCandidateStore
 from job_agent.services.recipe_suggestion_service import RecipeSuggestionResult
 from job_agent.services.source_health_service import SourceHealthService
-from job_agent.web.app import create_app
-from job_agent.web.dependencies import reset_root, set_root
-
 
 VALID_RECIPE_YAML = """source_name: Eursap Jobs
 start_url: https://eursap.eu/jobs
@@ -26,16 +22,6 @@ accept:
 limits:
   max_cards: 10
 """
-
-
-@pytest.fixture
-def client(project_root: Path, minimal_profile: Path):
-    set_root(project_root)
-    try:
-        with TestClient(create_app()) as test_client:
-            yield test_client
-    finally:
-        reset_root()
 
 
 def test_candidate_detail_shows_approval_form_for_pending_candidate(client: TestClient, project_root: Path) -> None:

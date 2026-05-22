@@ -7,18 +7,6 @@ import pytest
 from fastapi.testclient import TestClient
 
 from job_agent.run_store import RunEvent, RunOptions, RunStore
-from job_agent.web.app import create_app
-from job_agent.web.dependencies import reset_root, set_root
-
-
-@pytest.fixture
-def client(project_root: Path, minimal_profile: Path):
-    set_root(project_root)
-    try:
-        with TestClient(create_app()) as test_client:
-            yield test_client
-    finally:
-        reset_root()
 
 
 def test_app_creation_health_and_basic_routes_use_temp_root(client: TestClient, project_root: Path) -> None:

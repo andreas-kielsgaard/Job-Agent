@@ -1,9 +1,17 @@
 from __future__ import annotations
 
+import hashlib
 import shutil
 from pathlib import Path
 
 import pytest
+from fastapi.testclient import TestClient
+
+from job_agent.web.app import create_app
+from job_agent.web.dependencies import reset_root, set_root
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+APP_STATE_PATHS = ("jobs", "sources", "output")
 
 
 @pytest.fixture(autouse=True)
@@ -17,6 +25,21 @@ def no_external_network(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.fixture(autouse=True)
 def no_claude_api(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+
+@pytest.fixture(autouse=True)
+def product_tests_do_not_mutate_repo_state(request: pytest.FixtureRequest):
+    if request.node.get_closest_marker("exploratory"):
+        yield
+        return
+    before = _snapshot_app_state()
+    yield
+    after = _snapshot_app_state()
+    changed = _changed_paths(before, after)
+    assert not changed, (
+        "Product tests must use project_root/tmp_path and leave repo app state untouched. "
+        f"Mutated paths: {', '.join(changed[:12])}"
+    )
 
 
 @pytest.fixture
@@ -34,6 +57,16 @@ def project_root(tmp_path: Path) -> Path:
     ]:
         (root / relative).mkdir(parents=True, exist_ok=True)
     return root
+
+
+@pytest.fixture
+def client(project_root: Path, minimal_profile: Path):
+    set_root(project_root)
+    try:
+        with TestClient(create_app()) as test_client:
+            yield test_client
+    finally:
+        reset_root()
 
 
 @pytest.fixture
@@ -123,3 +156,27 @@ def local_yaml_source_project(template_project: Path) -> Path:
         encoding="utf-8",
     )
     return template_project
+
+
+def _snapshot_app_state() -> dict[str, tuple[str, int, str]]:
+    snapshot: dict[str, tuple[str, int, str]] = {}
+    for relative in APP_STATE_PATHS:
+        path = REPO_ROOT / relative
+        if not path.exists():
+            continue
+        for item in sorted(path.rglob("*")):
+            item_relative = item.relative_to(REPO_ROOT).as_posix()
+            if item.is_dir():
+                snapshot[item_relative] = ("dir", 0, "")
+            elif item.is_file():
+                digest = hashlib.sha256(item.read_bytes()).hexdigest()
+                snapshot[item_relative] = ("file", item.stat().st_size, digest)
+    return snapshot
+
+
+def _changed_paths(
+    before: dict[str, tuple[str, int, str]],
+    after: dict[str, tuple[str, int, str]],
+) -> list[str]:
+    paths = sorted(set(before) | set(after))
+    return [path for path in paths if before.get(path) != after.get(path)]

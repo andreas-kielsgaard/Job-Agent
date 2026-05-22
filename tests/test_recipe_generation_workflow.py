@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import pytest
 from fastapi.testclient import TestClient
 
 from job_agent.cli import recipe_generation_status
@@ -12,9 +11,6 @@ from job_agent.services.recipe_candidate_service import RecipeCandidateStore
 from job_agent.services.recipe_generation_status_service import RecipeGenerationStatusService
 from job_agent.services.recipe_suggestion_service import RecipeSuggestionLlmClient, suggest_recipe_with_refinement
 from job_agent.services.source_health_service import SourceHealthService
-from job_agent.web.app import create_app
-from job_agent.web.dependencies import reset_root, set_root
-
 
 VALID_RECIPE_YAML = """source_name: Eursap Jobs
 start_url: https://eursap.eu/jobs
@@ -49,16 +45,6 @@ class FakeLlm(RecipeSuggestionLlmClient):
                 "selected_strategy": "selector_based",
             }
         )
-
-
-@pytest.fixture
-def client(project_root: Path, minimal_profile: Path):
-    set_root(project_root)
-    try:
-        with TestClient(create_app()) as test_client:
-            yield test_client
-    finally:
-        reset_root()
 
 
 def test_local_auto_recipe_workflow_end_to_end_without_execution_enablement(project_root: Path) -> None:

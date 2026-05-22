@@ -16,7 +16,10 @@ ignore = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q"
+addopts = "-q -m 'not exploratory'"
+markers = [
+  "exploratory: development-only probes for source recipes and feature exploration; excluded from the product verification suite.",
+]
 
 [tool.coverage.run]
 branch = true

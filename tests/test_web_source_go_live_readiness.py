@@ -12,18 +12,6 @@ from job_agent.services.source_dry_run_service import DryRunJobPreview, SourceDr
 from job_agent.services.source_execution_readiness_service import SourceExecutionReadinessService
 from job_agent.services.source_health_service import SourceHealthService
 from job_agent.services.source_registry_service import SourceRegistryService
-from job_agent.web.app import create_app
-from job_agent.web.dependencies import reset_root, set_root
-
-
-@pytest.fixture
-def client(project_root: Path, minimal_profile: Path):
-    set_root(project_root)
-    try:
-        with TestClient(create_app()) as test_client:
-            yield test_client
-    finally:
-        reset_root()
 
 
 def test_source_detail_shows_go_live_readiness_panel(client: TestClient) -> None:

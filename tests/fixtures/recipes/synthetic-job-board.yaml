@@ -1,0 +1,54 @@
+source_name: Synthetic Example Job Board
+start_url: https://example.com/jobs
+mode: static_html
+
+listing:
+  card_selector: .job-card
+  title_selector:
+    - .job-heading
+    - .job-title
+    - h2
+  link_selector:
+    - .job-link
+    - .job-title
+  company_selector: .company
+  location_selector: .location
+  rate_selector: .rate
+  workload_selector: .workload
+  posted_date_selector: .posted
+  description_selector: .summary
+
+accept:
+  url_contains:
+    - /jobs/
+
+detail:
+  follow: false
+  max_detail_pages: 5
+
+reject:
+  title_exact:
+    - Apply
+    - Apply now
+    - More info
+    - Services
+    - Job Search
+  title_contains:
+    - Upload SAP Job
+    - Improve my CV
+    - Job Search
+    - Services
+    - Consultants
+  url_contains:
+    - /services
+    - /about
+    - /contact
+    - /candidates
+    - /clients
+    - /category
+    - /blog
+
+limits:
+  max_cards: 25
+  min_title_length: 8
+  min_description_length: 0

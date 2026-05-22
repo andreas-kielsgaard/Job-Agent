@@ -2,24 +2,28 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from job_agent.services.extraction_quality import title_quality
 from job_agent.services.job_board_recipe_service import extract_jobs_with_recipe, load_job_board_recipe
 
+pytestmark = pytest.mark.exploratory
+
 EXPERIMENTS = [
     (
-        Path("sources/recipes/experimental/eursap-jobs.yaml"),
+        Path("tests/fixtures/recipes/experimental/eursap-jobs.yaml"),
         Path("tests/fixtures/real_sources/eursap-jobs.html"),
         "https://eursap.eu/jobs",
         {"SAP Basis Consultant", "SAP Commerce (Hybris) Developer"},
     ),
     (
-        Path("sources/recipes/experimental/whitehall-sap-contract.yaml"),
+        Path("tests/fixtures/recipes/experimental/whitehall-sap-contract.yaml"),
         Path("tests/fixtures/real_sources/whitehall-sap-contract.html"),
         "https://www.whitehallresources.com/sap-jobs/contract/",
         {"SAP Integration Architect", "SAP SD Consultant \u2013 Italian Speaking", "SAP ABAP Developer \u2013 S/4HANA"},
     ),
     (
-        Path("sources/recipes/experimental/montreal-associates-jobs.yaml"),
+        Path("tests/fixtures/recipes/experimental/montreal-associates-jobs.yaml"),
         Path("tests/fixtures/real_sources/montreal-associates-jobs.html"),
         "https://www.montrealassociates.com/uk/candidates/job-search/",
         {"SAP ABAP Consultant", "Business Analyst SAP CO (S4)"},
@@ -76,7 +80,7 @@ def test_experimental_recipes_reject_known_false_positive_labels_and_urls() -> N
 
 
 def test_rendered_experimental_recipe_runs_against_fixture_without_playwright() -> None:
-    recipe = load_job_board_recipe(Path("sources/recipes/experimental/montreal-associates-jobs.yaml"))
+    recipe = load_job_board_recipe(Path("tests/fixtures/recipes/experimental/montreal-associates-jobs.yaml"))
     html = Path("tests/fixtures/real_sources/montreal-associates-jobs.html").read_text(encoding="utf-8")
 
     jobs = extract_jobs_with_recipe(
@@ -90,7 +94,7 @@ def test_rendered_experimental_recipe_runs_against_fixture_without_playwright() 
 
 
 def test_eursap_pattern_extraction_returns_clean_fields() -> None:
-    recipe = load_job_board_recipe(Path("sources/recipes/experimental/eursap-jobs.yaml"))
+    recipe = load_job_board_recipe(Path("tests/fixtures/recipes/experimental/eursap-jobs.yaml"))
     html = Path("tests/fixtures/real_sources/eursap-jobs.html").read_text(encoding="utf-8")
 
     jobs = extract_jobs_with_recipe(html, "https://eursap.eu/jobs", recipe)
@@ -106,7 +110,7 @@ def test_eursap_pattern_extraction_returns_clean_fields() -> None:
 
 
 def test_whitehall_rejects_apply_anchor_and_extracts_compact_block_fields() -> None:
-    recipe = load_job_board_recipe(Path("sources/recipes/experimental/whitehall-sap-contract.yaml"))
+    recipe = load_job_board_recipe(Path("tests/fixtures/recipes/experimental/whitehall-sap-contract.yaml"))
     html = Path("tests/fixtures/real_sources/whitehall-sap-contract.html").read_text(encoding="utf-8")
 
     jobs = extract_jobs_with_recipe(html, "https://www.whitehallresources.com/sap-jobs/contract/", recipe)

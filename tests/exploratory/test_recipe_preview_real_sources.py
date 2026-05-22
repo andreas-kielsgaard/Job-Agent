@@ -1,13 +1,15 @@
 from __future__ import annotations
 
-from pathlib import Path
+import pytest
 
 from job_agent.services.recipe_preview_service import preview_recipe
+
+pytestmark = pytest.mark.exploratory
 
 
 def test_preview_result_includes_jobs_and_quality_summary() -> None:
     result = preview_recipe(
-        "sources/recipes/experimental/eursap-jobs.yaml",
+        "tests/fixtures/recipes/experimental/eursap-jobs.yaml",
         "tests/fixtures/real_sources/eursap-jobs.html",
         base_url="https://eursap.eu/jobs",
     )
@@ -26,7 +28,7 @@ def test_preview_result_includes_jobs_and_quality_summary() -> None:
 
 def test_preview_includes_eursap_pattern_fields() -> None:
     result = preview_recipe(
-        "sources/recipes/experimental/eursap-jobs.yaml",
+        "tests/fixtures/recipes/experimental/eursap-jobs.yaml",
         "tests/fixtures/real_sources/eursap-jobs.html",
         base_url="https://eursap.eu/jobs",
     )
@@ -42,7 +44,7 @@ def test_preview_includes_eursap_pattern_fields() -> None:
 
 def test_preview_includes_whitehall_fields_and_rejects_application_anchors() -> None:
     result = preview_recipe(
-        "sources/recipes/experimental/whitehall-sap-contract.yaml",
+        "tests/fixtures/recipes/experimental/whitehall-sap-contract.yaml",
         "tests/fixtures/real_sources/whitehall-sap-contract.html",
         base_url="https://www.whitehallresources.com/sap-jobs/contract/",
     )
@@ -58,19 +60,10 @@ def test_preview_includes_whitehall_fields_and_rejects_application_anchors() -> 
 
 def test_preview_handles_local_rendered_recipe_warning() -> None:
     result = preview_recipe(
-        "sources/recipes/experimental/montreal-associates-jobs.yaml",
+        "tests/fixtures/recipes/experimental/montreal-associates-jobs.yaml",
         "tests/fixtures/real_sources/montreal-associates-jobs.html",
         base_url="https://www.montrealassociates.com/uk/candidates/job-search/",
     )
 
     assert result.extracted_job_count == 2
     assert "Local fixture HTML ignores recipe mode: rendered_html." in result.warnings
-
-
-def test_experimental_recipes_are_not_connected_to_daily_sources() -> None:
-    source_config = Path("sources/recruiting-sites.yaml").read_text(encoding="utf-8")
-
-    assert "sources/recipes/experimental" not in source_config
-    assert "eursap-jobs.yaml" not in source_config
-    assert "whitehall-sap-contract.yaml" not in source_config
-    assert "montreal-associates-jobs.yaml" not in source_config

@@ -20,6 +20,7 @@ from job_agent.services.job_board_recipe_service import (
 from job_agent.sources import extract_generic_jobs_from_html
 
 FIXTURE_PATH = Path("tests/fixtures/synthetic-job-board.html")
+RECIPE_PATH = Path("tests/fixtures/recipes/synthetic-job-board.yaml")
 HTML = FIXTURE_PATH.read_text(encoding="utf-8")
 
 
@@ -234,7 +235,7 @@ def test_quality_check_rates_recipe_output_better_than_generic_false_positive_ht
 
 
 def test_example_recipe_loads() -> None:
-    recipe = load_job_board_recipe(Path("sources/recipes/examples/synthetic-job-board.yaml"))
+    recipe = load_job_board_recipe(RECIPE_PATH)
 
     assert recipe.source_name == "Synthetic Example Job Board"
     assert recipe.listing.card_selector == ".job-card"
@@ -246,7 +247,7 @@ def test_cli_recipe_command_runs_against_local_fixture(capsys: pytest.CaptureFix
     from job_agent.cli import test_recipe
 
     test_recipe(
-        "sources/recipes/examples/synthetic-job-board.yaml",
+        str(RECIPE_PATH),
         str(FIXTURE_PATH),
         base_url="https://example.com/jobs",
     )
@@ -278,7 +279,7 @@ def test_cli_recipe_command_can_save_source_health(
     monkeypatch.setattr("job_agent.services.source_health_service.SourceHealthService", lambda: FakeHealthService())
 
     test_recipe(
-        "sources/recipes/examples/synthetic-job-board.yaml",
+        str(RECIPE_PATH),
         str(FIXTURE_PATH),
         base_url="https://example.com/jobs",
         source_id="sample-jobs",
@@ -305,29 +306,24 @@ def test_url_extraction_uses_recipe_rendered_mode_by_default(monkeypatch: pytest
     assert len(result.jobs) == 2
 
 
-def test_cli_local_fixture_ignores_rendered_recipe_mode(capsys: pytest.CaptureFixture[str]) -> None:
+def test_cli_local_fixture_ignores_rendered_recipe_mode(capsys: pytest.CaptureFixture[str], tmp_path: Path) -> None:
     from job_agent.cli import test_recipe
 
     test_recipe(
-        "sources/recipes/examples/synthetic-job-board.yaml",
+        str(RECIPE_PATH),
         str(FIXTURE_PATH),
         base_url="https://example.com/jobs",
     )
     normal_output = capsys.readouterr().out
     assert "Input mode: local_fixture_html" in normal_output
 
-    rendered_recipe = FIXTURE_PATH.parent / "rendered-mode-recipe.yaml"
+    rendered_recipe = tmp_path / "rendered-mode-recipe.yaml"
     rendered_recipe.write_text(
-        Path("sources/recipes/examples/synthetic-job-board.yaml")
-        .read_text(encoding="utf-8")
-        .replace("mode: static_html", "mode: rendered_html"),
+        RECIPE_PATH.read_text(encoding="utf-8").replace("mode: static_html", "mode: rendered_html"),
         encoding="utf-8",
     )
-    try:
-        test_recipe(str(rendered_recipe), str(FIXTURE_PATH), base_url="https://example.com/jobs")
-        output = capsys.readouterr().out
-    finally:
-        rendered_recipe.unlink()
+    test_recipe(str(rendered_recipe), str(FIXTURE_PATH), base_url="https://example.com/jobs")
+    output = capsys.readouterr().out
 
     assert "Input mode: local_fixture_html" in output
     assert "Warning: Local fixture HTML ignores recipe mode: rendered_html." in output
