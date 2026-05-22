@@ -324,6 +324,7 @@ def test_source_overview_and_detail_routes_render(client: TestClient) -> None:
     assert "Not ready yet" in detail.text
     assert "Run recipe review" in detail.text
     assert "Recipe preview" in detail.text
+    assert "Open recipe review" in detail.text
     assert "Source test" in detail.text
     assert "Daily run" in detail.text
     assert "Source settings" in detail.text
@@ -501,6 +502,7 @@ def test_source_routes_render_saved_health(client: TestClient, project_root: Pat
     assert "Saved review details" in detail.text
     assert "output/recipe-calibration/eursap/page.html" in detail.text
     assert "9 jobs extracted, 9 useful titles, no generic labels." in detail.text
+    assert "auto_run=1" not in detail.text
     assert compatibility.status_code == 200
     assert "Saved Source / Recipe Result" in compatibility.text
     assert "9 jobs extracted, 9 useful titles, no generic labels." in compatibility.text
@@ -510,6 +512,7 @@ def test_source_routes_render_saved_health(client: TestClient, project_root: Pat
     assert auto_preview.status_code == 200
     assert "Running review" in auto_preview.text
     assert 'requestSubmit()' in auto_preview.text
+    assert 'searchParams.delete("auto_run")' in auto_preview.text
 
 
 def test_source_routes_render_value_metrics(client: TestClient, project_root: Path) -> None:

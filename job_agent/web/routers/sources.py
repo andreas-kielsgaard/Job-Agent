@@ -67,7 +67,7 @@ def source_detail(request: Request, source_id: str, message: str = "", warning: 
     go_live_readiness = source_execution_readiness_service().evaluate(source.id)
     best_artifact_dir = generation_status.best_artifact.artifact_dir if generation_status.best_artifact else ""
     recipe_explanation = explain_recipe(source.recipe_path, root=execution_source_service().root) if source.recipe_path else None
-    source_status = _source_page_status(source, execution_entry, go_live_readiness, _recipe_preview_url(source))
+    source_status = _source_page_status(source, execution_entry, go_live_readiness, _recipe_preview_url(source, auto_run=True))
     response = templates.TemplateResponse(
         request,
         "source_detail.html",
@@ -483,7 +483,7 @@ def approve_recipe_candidate(
     return RedirectResponse(f"/recipe-candidates/{candidate_id}", status_code=303)
 
 
-def _recipe_preview_url(source) -> str:
+def _recipe_preview_url(source, *, auto_run: bool = False) -> str:
     if not source.recipe_path:
         return ""
     params = {
@@ -491,8 +491,9 @@ def _recipe_preview_url(source) -> str:
         "input_path_or_url": source.url,
         "source_mode": "configured",
         "selected_source_id": source.id,
-        "auto_run": "1",
     }
+    if auto_run:
+        params["auto_run"] = "1"
     return f"/recipe-preview?{urlencode(params)}"
 
 

@@ -66,6 +66,9 @@
 </div>
 <script>
   window.addEventListener("DOMContentLoaded", () => {
+    const url = new URL(window.location.href);
+    url.searchParams.delete("auto_run");
+    window.history.replaceState({}, "", url.pathname + url.search + url.hash);
     window.setTimeout(() => {
       document.getElementById("recipe-review-form").requestSubmit();
     }, 120);
