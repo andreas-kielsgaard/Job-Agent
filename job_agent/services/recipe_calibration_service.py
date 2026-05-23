@@ -13,7 +13,7 @@ from bs4 import BeautifulSoup, NavigableString, Tag
 
 from job_agent.browser.playwright_probe import slugify_url
 from job_agent.config import ROOT
-from job_agent.services.extraction_quality import quality_as_dict, title_quality
+from job_agent.services.extraction_quality import quality_as_dict
 from job_agent.services.job_board_check_service import validate_public_url
 from job_agent.services.job_board_recipe_service import (
     JobBoardRecipe,
@@ -26,6 +26,12 @@ from job_agent.services.job_board_recipe_service import (
     extract_jobs_with_recipe,
     job_board_recipe_from_mapping,
     load_job_board_recipe,
+)
+from job_agent.services.source_quality_rules import (
+    is_probable_detail_url,
+    link_text_is_noise,
+    text_has_noise_term,
+    title_quality,
 )
 
 JOB_TERMS = (
@@ -53,54 +59,6 @@ TEXT_TERMS = (
     "freelance",
     "remote",
     "hybrid",
-)
-NOISE_TERMS = (
-    "apply now",
-    "services",
-    "job search",
-    "upload sap job",
-    "improve my cv",
-    "contract staffing",
-    "filter",
-    "reporting violations",
-    "terms of use",
-    "cookie policy",
-    "privacy policy",
-    "data protection officer",
-    "sitemap",
-    "newsletter",
-)
-NOISE_URL_FRAGMENTS = (
-    "/-/media/",
-    "/media/",
-    "/assets/",
-    "/static/",
-    "/privacy",
-    "/cookie",
-    "/terms",
-    "/sitemap",
-    "/accessibility",
-    "/contact",
-)
-NON_DETAIL_EXTENSIONS = (
-    ".pdf",
-    ".doc",
-    ".docx",
-    ".xls",
-    ".xlsx",
-    ".zip",
-    ".jpg",
-    ".jpeg",
-    ".png",
-    ".gif",
-    ".svg",
-    ".webp",
-    ".ico",
-    ".css",
-    ".js",
-    ".woff",
-    ".woff2",
-    ".ttf",
 )
 META_PATTERNS = (
     r"\bjob\s*id\b",
@@ -540,31 +498,11 @@ def _detail_url_token(url: str) -> str:
 
 
 def _link_text_is_noise(text: str, href: str) -> bool:
-    normalized = f"{text} {href}".lower()
-    return any(
-        term in normalized
-        for term in [
-            "apply now",
-            "#job-application",
-            "login",
-            "sign up",
-            "reporting violations",
-            "terms of use",
-            "cookie policy",
-            "cookie settings",
-            "privacy policy",
-            "data protection officer",
-            "sitemap",
-            "view all jobs",
-        ]
-    )
+    return link_text_is_noise(text, href)
 
 
 def _url_is_probable_detail_url(path: str) -> bool:
-    lowered = path.lower()
-    if any(fragment in lowered for fragment in NOISE_URL_FRAGMENTS):
-        return False
-    return not any(lowered.endswith(extension) for extension in NON_DETAIL_EXTENSIONS)
+    return is_probable_detail_url(path)
 
 
 def _link_selector_for_card(card: Tag, token: str) -> str:
@@ -1027,7 +965,7 @@ def _likely_noise(tag: Tag) -> bool:
     text = tag.get_text(" ", strip=True).lower()
     if title_quality(text) == "generic":
         return True
-    return any(term in text for term in NOISE_TERMS)
+    return text_has_noise_term(text)
 
 
 def _selected_text(root: Tag, selector: str) -> str:

@@ -48,67 +48,14 @@ class RecipeGenerationRunService:
             raise ValueError(f"Source not found: {source_id}")
         artifact_path = RecipeArtifactService(self.root).resolve_artifact_path(artifact_dir)
         bounded_attempts = max(1, min(int(max_attempts or 1), 8))
-        run_id = self._new_run_id(source.id)
         relative_artifact = _display_path(artifact_path, self.root)
-        now = _now()
-        run = {
-            "run_id": run_id,
-            "source_id": source.id,
-            "source_name": source.name,
-            "source_url": source.url,
-            "artifact_dir": relative_artifact,
-            "refine": bool(refine),
-            "max_attempts": bounded_attempts,
-            "status": "pending",
-            "created_at": now,
-            "updated_at": now,
-            "started_at": "",
-            "finished_at": "",
-            "steps": [
-                {
-                    "phase": "Queue reading-plan generation",
-                    "status": "pending",
-                    "detail": "Waiting for the generator to start.",
-                    "created_at": now,
-                }
-            ],
-            "warnings": [],
-            "error": "",
-            "candidate_id": "",
-            "candidate_path": "",
-            "candidate_url": "",
-            "generated_recipe_path": "",
-            "compatibility_url": "",
-            "recipe_review_url": "",
-            "recipe_rules_url": "",
-            "suggested_recipe_yaml": "",
-            "explanation": "",
-            "confidence": "",
-            "selected_strategy": "",
-            "assumptions": [],
-            "schema_valid": False,
-            "validation_errors": [],
-            "referenced_artifact_files": [],
-            "refinement_used": bool(refine),
-            "refinement_accepted": False,
-            "attempt_count": 0,
-            "attempts": [],
-            "quality_status": "",
-            "extracted_job_count": 0,
-            "useful_titles": 0,
-            "generic_labels": 0,
-            "unique_urls": 0,
-            "average_description_length": 0,
-            "quality_warnings": [],
-            "evidence_summary": "",
-            "evidence_observations": {},
-        }
-        self._write_run(run)
-        if run_async:
-            _EXECUTOR.submit(self._run_generation, run_id)
-            return run
-        self._run_generation(run_id)
-        return self.load(run_id)
+        run = self._initial_run(
+            source,
+            artifact_dir=relative_artifact,
+            refine=bool(refine),
+            max_attempts=bounded_attempts,
+        )
+        return self._queue_run(run, run_async=run_async)
 
     def start_from_source_capture(
         self,
@@ -128,70 +75,17 @@ class RecipeGenerationRunService:
             raise ValueError("Source URL is required before learning a source.")
         bounded_attempts = max(1, min(int(max_attempts or 1), 8))
         bounded_candidates = max(5, min(int(max_candidates or 30), 50))
-        run_id = self._new_run_id(source.id)
-        now = _now()
-        run = {
-            "run_id": run_id,
-            "source_id": source.id,
-            "source_name": source.name,
-            "source_url": source.url,
-            "artifact_dir": "Pending live capture",
-            "capture_source": True,
-            "capture_rendered": bool(rendered),
-            "capture_detail": bool(capture_detail),
-            "max_candidates": bounded_candidates,
-            "refine": bool(refine),
-            "max_attempts": bounded_attempts,
-            "status": "pending",
-            "created_at": now,
-            "updated_at": now,
-            "started_at": "",
-            "finished_at": "",
-            "steps": [
-                {
-                    "phase": "Queue reading-plan generation",
-                    "status": "pending",
-                    "detail": "Waiting for the generator to start.",
-                    "created_at": now,
-                }
-            ],
-            "warnings": [],
-            "error": "",
-            "candidate_id": "",
-            "candidate_path": "",
-            "candidate_url": "",
-            "generated_recipe_path": "",
-            "compatibility_url": "",
-            "recipe_review_url": "",
-            "recipe_rules_url": "",
-            "suggested_recipe_yaml": "",
-            "explanation": "",
-            "confidence": "",
-            "selected_strategy": "",
-            "assumptions": [],
-            "schema_valid": False,
-            "validation_errors": [],
-            "referenced_artifact_files": [],
-            "refinement_used": bool(refine),
-            "refinement_accepted": False,
-            "attempt_count": 0,
-            "attempts": [],
-            "quality_status": "",
-            "extracted_job_count": 0,
-            "useful_titles": 0,
-            "generic_labels": 0,
-            "unique_urls": 0,
-            "average_description_length": 0,
-            "quality_warnings": [],
-            "evidence_summary": "",
-            "evidence_observations": {},
-        }
-        self._write_run(run)
-        if run_async:
-            _EXECUTOR.submit(self._run_generation, run_id)
-            return run
-        self._run_generation(run_id)
-        return self.load(run_id)
+        run = self._initial_run(
+            source,
+            artifact_dir="Pending live capture",
+            refine=bool(refine),
+            max_attempts=bounded_attempts,
+            capture_source=True,
+            capture_rendered=bool(rendered),
+            capture_detail=bool(capture_detail),
+            max_candidates=bounded_candidates,
+        )
+        return self._queue_run(run, run_async=run_async)
 
     def load(self, run_id: str) -> dict[str, Any]:
         path = self._run_file(run_id)
@@ -368,6 +262,80 @@ class RecipeGenerationRunService:
         except Exception as exc:
             self._append_step(run_id, "Generation failed", "failed", str(exc))
             self._set_run_status(run_id, "failed", error=str(exc), finished_at=_now())
+
+    def _initial_run(
+        self,
+        source,
+        *,
+        artifact_dir: str,
+        refine: bool,
+        max_attempts: int,
+        **extra: Any,
+    ) -> dict[str, Any]:
+        now = _now()
+        run = {
+            "run_id": self._new_run_id(source.id),
+            "source_id": source.id,
+            "source_name": source.name,
+            "source_url": source.url,
+            "artifact_dir": artifact_dir,
+            "refine": refine,
+            "max_attempts": max_attempts,
+            "status": "pending",
+            "created_at": now,
+            "updated_at": now,
+            "started_at": "",
+            "finished_at": "",
+            "steps": [
+                {
+                    "phase": "Queue reading-plan generation",
+                    "status": "pending",
+                    "detail": "Waiting for the generator to start.",
+                    "created_at": now,
+                }
+            ],
+            "warnings": [],
+            "error": "",
+            "candidate_id": "",
+            "candidate_path": "",
+            "candidate_url": "",
+            "generated_recipe_path": "",
+            "compatibility_url": "",
+            "recipe_review_url": "",
+            "recipe_rules_url": "",
+            "suggested_recipe_yaml": "",
+            "explanation": "",
+            "confidence": "",
+            "selected_strategy": "",
+            "assumptions": [],
+            "schema_valid": False,
+            "validation_errors": [],
+            "referenced_artifact_files": [],
+            "refinement_used": refine,
+            "refinement_accepted": False,
+            "attempt_count": 0,
+            "attempts": [],
+            "quality_status": "",
+            "extracted_job_count": 0,
+            "useful_titles": 0,
+            "generic_labels": 0,
+            "unique_urls": 0,
+            "average_description_length": 0,
+            "quality_warnings": [],
+            "evidence_summary": "",
+            "evidence_observations": {},
+        }
+        run.update(extra)
+        return run
+
+    def _queue_run(self, run: dict[str, Any], *, run_async: bool) -> dict[str, Any]:
+        self._write_run(run)
+        run_id = str(run["run_id"])
+        if run_async:
+            _EXECUTOR.submit(self._run_generation, run_id)
+            return run
+        self._run_generation(run_id)
+        return self.load(run_id)
 
     def _write_generated_recipe(self, run_id: str, recipe_yaml: str) -> str:
         path = self.runs_dir / run_id / "suggested-recipe.yaml"
