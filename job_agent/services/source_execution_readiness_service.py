@@ -9,7 +9,7 @@ from job_agent.config import ROOT
 from job_agent.io.yaml_store import read_yaml, write_yaml
 from job_agent.services.execution_source_service import ExecutionSourceService
 from job_agent.services.recipe_candidate_service import RecipeCandidateStore
-from job_agent.services.source_dry_run_service import SourceDryRunResult
+from job_agent.services.source_test_service import SourceTestResult
 from job_agent.services.source_registry_service import SourceRegistryService
 
 READINESS_PATH = Path("sources/source-execution-readiness.yaml")
@@ -29,7 +29,7 @@ class SourceExecutionReadiness:
     sample_titles: list[str] = field(default_factory=list)
     sample_urls: list[str] = field(default_factory=list)
     readiness_status: str = "untested"
-    readiness_summary: str = "No source dry-run readiness has been saved yet."
+    readiness_summary: str = "No source test readiness has been saved yet."
     checks: dict[str, Any] = field(default_factory=dict)
     blockers: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
@@ -67,8 +67,8 @@ class SourceExecutionReadinessService:
             return SourceExecutionReadiness(source_id=source_id)
         return _record_from_mapping(source_id, record)
 
-    def save_from_dry_run(self, result: SourceDryRunResult) -> SourceExecutionReadiness:
-        readiness = self.evaluate(result.source_id, dry_run_result=result)
+    def save_from_source_test(self, result: SourceTestResult) -> SourceExecutionReadiness:
+        readiness = self.evaluate(result.source_id, source_test_result=result)
         data = read_yaml(self.path, {"sources": {}})
         if not isinstance(data, dict):
             data = {"sources": {}}
@@ -81,25 +81,28 @@ class SourceExecutionReadinessService:
         write_yaml(self.path, data)
         return readiness
 
+    def save_from_dry_run(self, result: SourceTestResult) -> SourceExecutionReadiness:
+        return self.save_from_source_test(result)
+
     def evaluate(
         self,
         source_id: str,
-        dry_run_result: SourceDryRunResult | None = None,
+        source_test_result: SourceTestResult | None = None,
     ) -> SourceExecutionReadiness:
         source = self.registry.get_source(source_id)
         execution_entry = self.execution.find_by_source_id(source_id)
         saved = self.load(source_id)
         checks, blockers, warnings = self._checks(source_id, source, execution_entry)
-        if dry_run_result:
-            dry_status = dry_run_result.status
-            job_count = dry_run_result.job_count
-            warning_count = dry_run_result.warning_count
-            dry_warnings = list(dry_run_result.warnings)
-            forced_disabled = dry_run_result.forced_disabled
-            source_type = dry_run_result.source_type
-            enabled_at_check = dry_run_result.source_enabled
-            sample_titles = [job.title for job in dry_run_result.jobs[:5]]
-            sample_urls = [job.url for job in dry_run_result.jobs[:5] if job.url]
+        if source_test_result:
+            dry_status = source_test_result.status
+            job_count = source_test_result.job_count
+            warning_count = source_test_result.warning_count
+            dry_warnings = list(source_test_result.warnings)
+            forced_disabled = source_test_result.forced_disabled
+            source_type = source_test_result.source_type
+            enabled_at_check = source_test_result.source_enabled
+            sample_titles = [job.title for job in source_test_result.jobs[:5]]
+            sample_urls = [job.url for job in source_test_result.jobs[:5] if job.url]
             last_checked_at = _now()
         else:
             dry_status = saved.dry_run_status
@@ -113,7 +116,7 @@ class SourceExecutionReadinessService:
             sample_urls = list(saved.sample_urls)
             last_checked_at = saved.last_checked_at
 
-        dry_blockers, dry_review_warnings = _dry_run_findings(dry_status, job_count, dry_warnings)
+        dry_blockers, dry_review_warnings = _source_test_findings(dry_status, job_count, dry_warnings)
         blockers.extend(dry_blockers)
         warnings.extend(dry_review_warnings)
         readiness_status = _derive_readiness_status(blockers, warnings, last_checked_at)
@@ -140,10 +143,10 @@ class SourceExecutionReadinessService:
         readiness = self.evaluate(source_id)
         blockers = list(readiness.blockers)
         if readiness.readiness_status != "ready":
-            blockers.append(f"Saved readiness is {readiness.readiness_status}; run and save a successful dry-run first.")
+            blockers.append(f"Saved readiness is {readiness.readiness_status}; run and save a successful source test first.")
         execution_entry = self.execution.find_by_source_id(source_id)
         if execution_entry and bool(execution_entry.get("enabled", True)):
-            blockers.append("Execution entry is already enabled.")
+            blockers.append("Source is already included in daily runs.")
         return SourceEnablementCheck(
             source_id=source_id,
             can_enable=not blockers,
@@ -185,28 +188,28 @@ class SourceExecutionReadinessService:
         if adopted_path and not checks["adopted_recipe_path_matches_registry"]:
             warnings.append("Latest adopted recipe path differs from the source registry recipe_path.")
         if not execution_entry:
-            blockers.append("No daily-run execution entry exists.")
+            blockers.append("No daily-run projection exists.")
         else:
             execution_recipe_path = str(execution_entry.get("recipe_path") or "")
             checks["execution_entry_recipe_path_matches_registry"] = (
                 _normalize_path(execution_recipe_path) == _normalize_path(source.recipe_path)
             )
             if not checks["execution_entry_recipe_path_matches_registry"]:
-                blockers.append("Execution entry recipe_path does not match source registry recipe_path.")
+                blockers.append("Daily-run projection recipe_path does not match source registry recipe_path.")
         return checks, blockers, warnings
 
 
-def _dry_run_findings(status: str, job_count: int, warnings: list[str]) -> tuple[list[str], list[str]]:
+def _source_test_findings(status: str, job_count: int, warnings: list[str]) -> tuple[list[str], list[str]]:
     blockers = []
     review_warnings = []
     if not status or status == "untested":
-        blockers.append("No saved dry-run readiness result.")
+        blockers.append("No saved source test readiness result.")
     elif status in {"not_found", "disabled", "failing"}:
-        blockers.append(f"Dry-run status is {status}.")
+        blockers.append(f"Source test status is {status}.")
     if job_count <= 0:
-        blockers.append("Dry-run extracted no jobs.")
+        blockers.append("Source test extracted no jobs.")
     if warnings:
-        review_warnings.append(f"Dry-run reported {len(warnings)} warnings.")
+        review_warnings.append(f"Source test reported {len(warnings)} warnings.")
     return blockers, review_warnings
 
 
@@ -222,12 +225,12 @@ def _derive_readiness_status(blockers: list[str], warnings: list[str], last_chec
 
 def _summary(status: str, job_count: int, blockers: list[str], warnings: list[str]) -> str:
     if status == "ready":
-        return f"Ready: dry-run extracted {job_count} jobs and readiness checks passed."
+        return f"Ready: source test extracted {job_count} jobs and readiness checks passed."
     if status == "warning":
-        return f"Warning: dry-run extracted {job_count} jobs with review warnings."
+        return f"Warning: source test extracted {job_count} jobs with review warnings."
     if status == "blocked":
         return f"Blocked: {blockers[0] if blockers else 'readiness checks did not pass'}"
-    return "No source dry-run readiness has been saved yet."
+    return "No source test readiness has been saved yet."
 
 
 def _latest_adopted_path(store: RecipeCandidateStore, source_id: str) -> str:
@@ -278,7 +281,7 @@ def _record_from_mapping(source_id: str, data: dict[str, Any]) -> SourceExecutio
         sample_titles=_list(data.get("sample_titles")),
         sample_urls=_list(data.get("sample_urls")),
         readiness_status=str(data.get("readiness_status") or "untested"),
-        readiness_summary=str(data.get("readiness_summary") or "No source dry-run readiness has been saved yet."),
+        readiness_summary=str(data.get("readiness_summary") or "No source test readiness has been saved yet."),
         checks=data.get("checks") if isinstance(data.get("checks"), dict) else {},
         blockers=_list(data.get("blockers")),
         warnings=_list(data.get("warnings")),

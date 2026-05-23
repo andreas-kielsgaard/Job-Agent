@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from job_agent.cli import dry_run_source
+from job_agent.cli import test_source as run_source_test_cli
 from job_agent.io.json_store import write_json
 from job_agent.models import Job, SourceRunResult, SourceWarning
-from job_agent.services.source_dry_run_service import DryRunJobPreview, SourceDryRunResult, SourceDryRunService
+from job_agent.services.source_test_service import SourceTestJobPreview, SourceTestResult, SourceTestService
 from job_agent.store import JobStore
 
 
@@ -18,44 +18,44 @@ class FakeResponse:
         return None
 
 
-def test_dry_run_missing_source_returns_not_found(project_root: Path) -> None:
-    result = SourceDryRunService(project_root).dry_run("missing")
+def test_source_test_missing_source_returns_not_found(project_root: Path) -> None:
+    result = SourceTestService(project_root).run_test("missing")
 
     assert result.status == "not_found"
     assert result.job_count == 0
 
 
-def test_dry_run_disabled_source_does_not_execute_adapter(monkeypatch, project_root: Path) -> None:
+def test_source_test_disabled_source_does_not_execute_adapter(monkeypatch, project_root: Path) -> None:
     _write_execution_source(project_root, enabled=False)
 
     def fail_if_called(source, root):
         raise AssertionError("adapter should not run")
 
-    monkeypatch.setattr("job_agent.services.source_dry_run_service.adapter_for_source", fail_if_called)
+    monkeypatch.setattr("job_agent.services.source_test_service.adapter_for_source", fail_if_called)
 
-    result = SourceDryRunService(project_root).dry_run("sample-source")
+    result = SourceTestService(project_root).run_test("sample-source")
 
     assert result.status == "disabled"
     assert result.job_count == 0
 
 
-def test_dry_run_force_disabled_executes_adapter(monkeypatch, project_root: Path) -> None:
+def test_source_test_force_disabled_executes_adapter(monkeypatch, project_root: Path) -> None:
     _write_execution_source(project_root, enabled=False)
 
     class FakeAdapter:
         def fetch(self):
             return SourceRunResult(jobs=[Job(title="SAP ABAP Consultant", source="Sample", source_id="sample-source")])
 
-    monkeypatch.setattr("job_agent.services.source_dry_run_service.adapter_for_source", lambda source, root: FakeAdapter())
+    monkeypatch.setattr("job_agent.services.source_test_service.adapter_for_source", lambda source, root: FakeAdapter())
 
-    result = SourceDryRunService(project_root).dry_run("sample-source", force_disabled=True)
+    result = SourceTestService(project_root).run_test("sample-source", force_disabled=True)
 
     assert result.status == "success"
     assert result.forced_disabled is True
     assert result.jobs[0].source_id == "sample-source"
 
 
-def test_dry_run_enabled_recipe_html_source_extracts_jobs(monkeypatch, project_root: Path) -> None:
+def test_source_test_enabled_recipe_html_source_extracts_jobs(monkeypatch, project_root: Path) -> None:
     recipe_path = _write_recipe(project_root)
     _write_execution_source(project_root, enabled=True, recipe_path=recipe_path.relative_to(project_root).as_posix())
     html = """
@@ -67,7 +67,7 @@ def test_dry_run_enabled_recipe_html_source_extracts_jobs(monkeypatch, project_r
     """
     monkeypatch.setattr("requests.get", lambda *args, **kwargs: FakeResponse(html))
 
-    result = SourceDryRunService(project_root).dry_run("sample-source")
+    result = SourceTestService(project_root).run_test("sample-source")
 
     assert result.status == "success"
     assert result.job_count == 1
@@ -76,7 +76,7 @@ def test_dry_run_enabled_recipe_html_source_extracts_jobs(monkeypatch, project_r
     assert result.jobs[0].location == "Remote"
 
 
-def test_dry_run_collects_warnings(monkeypatch, project_root: Path) -> None:
+def test_source_test_collects_warnings(monkeypatch, project_root: Path) -> None:
     _write_execution_source(project_root, enabled=True)
 
     class FakeAdapter:
@@ -86,16 +86,16 @@ def test_dry_run_collects_warnings(monkeypatch, project_root: Path) -> None:
                 warnings=[SourceWarning("Sample", "Check details", "https://example.com/jobs")],
             )
 
-    monkeypatch.setattr("job_agent.services.source_dry_run_service.adapter_for_source", lambda source, root: FakeAdapter())
+    monkeypatch.setattr("job_agent.services.source_test_service.adapter_for_source", lambda source, root: FakeAdapter())
 
-    result = SourceDryRunService(project_root).dry_run("sample-source")
+    result = SourceTestService(project_root).run_test("sample-source")
 
     assert result.status == "warning"
     assert result.warning_count == 1
     assert result.warnings == ["Sample: Check details"]
 
 
-def test_dry_run_explains_count_mismatch_and_seen_state(monkeypatch, project_root: Path) -> None:
+def test_source_test_explains_count_mismatch_and_seen_state(monkeypatch, project_root: Path) -> None:
     _write_execution_source(project_root, enabled=True)
     seen_job = Job(
         title="SAP ABAP Consultant",
@@ -140,9 +140,9 @@ def test_dry_run_explains_count_mismatch_and_seen_state(monkeypatch, project_roo
                 },
             )
 
-    monkeypatch.setattr("job_agent.services.source_dry_run_service.adapter_for_source", lambda source, root: FakeAdapter())
+    monkeypatch.setattr("job_agent.services.source_test_service.adapter_for_source", lambda source, root: FakeAdapter())
 
-    result = SourceDryRunService(project_root).dry_run("sample-source")
+    result = SourceTestService(project_root).run_test("sample-source")
 
     assert result.listing_observed_count == 3
     assert result.listing_duplicate_count == 1
@@ -152,16 +152,16 @@ def test_dry_run_explains_count_mismatch_and_seen_state(monkeypatch, project_roo
     assert any("already seen in previous runs" in explanation for explanation in result.count_explanations)
 
 
-def test_dry_run_does_not_write_packages_seen_state_or_runs(monkeypatch, project_root: Path) -> None:
+def test_source_test_does_not_write_packages_seen_state_or_runs(monkeypatch, project_root: Path) -> None:
     _write_execution_source(project_root, enabled=True)
 
     class FakeAdapter:
         def fetch(self):
             return SourceRunResult(jobs=[Job(title="SAP ABAP Consultant", source="Sample", source_id="sample-source")])
 
-    monkeypatch.setattr("job_agent.services.source_dry_run_service.adapter_for_source", lambda source, root: FakeAdapter())
+    monkeypatch.setattr("job_agent.services.source_test_service.adapter_for_source", lambda source, root: FakeAdapter())
 
-    result = SourceDryRunService(project_root).dry_run("sample-source")
+    result = SourceTestService(project_root).run_test("sample-source")
 
     assert result.status == "success"
     assert not list((project_root / "output").glob("*/*/index.json"))
@@ -170,12 +170,12 @@ def test_dry_run_does_not_write_packages_seen_state_or_runs(monkeypatch, project
     assert not list((project_root / "output" / "daily-digests").glob("*"))
 
 
-def test_cli_dry_run_source_prints_key_fields_and_no_writes(monkeypatch, capsys) -> None:
+def test_cli_source_test_prints_key_fields_and_no_writes(monkeypatch, capsys) -> None:
     class FakeService:
-        def dry_run(self, source_id, *, force_disabled=False):
+        def run_test(self, source_id, *, force_disabled=False):
             assert source_id == "sample-source"
             assert force_disabled is True
-            return SourceDryRunResult(
+            return SourceTestResult(
                 source_id="sample-source",
                 source_name="Sample Recipe Source",
                 source_type="recipe_html",
@@ -184,7 +184,7 @@ def test_cli_dry_run_source_prints_key_fields_and_no_writes(monkeypatch, capsys)
                 status="success",
                 job_count=1,
                 jobs=[
-                    DryRunJobPreview(
+                    SourceTestJobPreview(
                         title="SAP ABAP Consultant",
                         url="https://example.com/jobs/sap-abap",
                         source="Sample Recipe Source",
@@ -195,13 +195,13 @@ def test_cli_dry_run_source_prints_key_fields_and_no_writes(monkeypatch, capsys)
                 ],
             )
 
-    monkeypatch.setattr("job_agent.services.source_dry_run_service.SourceDryRunService", lambda: FakeService())
+    monkeypatch.setattr("job_agent.services.source_test_service.SourceTestService", lambda: FakeService())
 
-    dry_run_source("sample-source", force_disabled=True)
+    run_source_test_cli("sample-source", force_disabled=True)
 
     output = capsys.readouterr().out
     assert "Source id: sample-source" in output
-    assert "Dry-run status: success" in output
+    assert "Source test status: success" in output
     assert "SAP ABAP Consultant" in output
     assert "Source id: sample-source" in output
     assert "No packages, seen state, materials, digests, or run records were written." in output

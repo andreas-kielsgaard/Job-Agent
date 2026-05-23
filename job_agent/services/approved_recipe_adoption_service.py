@@ -71,7 +71,7 @@ class ApprovedRecipeAdoptionService:
             existing_entry = self.execution.find_by_source_id(source_id)
             execution_enabled_before = bool(existing_entry and existing_entry.get("enabled", True))
             if execution_enabled_before:
-                raise ValueError("Execution entry is enabled; disable it before refreshing from adopted recipe.")
+                raise ValueError("Source is enabled for daily runs; disable it before refreshing from adopted recipe.")
             execution_result = self.execution.create_or_update_recipe_source(updated_source, enabled=False)
             execution_created = execution_result.created
             execution_updated = execution_result.updated

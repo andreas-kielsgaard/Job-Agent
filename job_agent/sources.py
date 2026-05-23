@@ -17,7 +17,7 @@ import requests
 import yaml
 from bs4 import BeautifulSoup
 
-from .config import ROOT, load_yaml
+from .config import ROOT
 from .models import Job, SourceRunResult, SourceWarning
 
 
@@ -231,8 +231,9 @@ class RecipeHtmlAdapter(SourceAdapter):
 
 
 def load_sources(root: Path = ROOT) -> list[dict]:
-    config = load_yaml(root / "sources" / "recruiting-sites.yaml")
-    return [source for source in config.get("sources", []) if source.get("enabled", True)]
+    from .services.execution_source_service import ExecutionSourceService
+
+    return [source for source in ExecutionSourceService(root).list_sources() if source.get("enabled", True)]
 
 
 def load_jobs_from_sources(

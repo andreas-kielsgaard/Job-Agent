@@ -81,7 +81,7 @@ def main() -> None:
     calibrate.add_argument("--max-candidates", type=int, default=30, help="Maximum candidate regions to report.")
     dry_run = subparsers.add_parser(
         "dry-run-source",
-        help="Run one configured execution source through its adapter without writing packages or run state.",
+        help="Compatibility alias for test-source.",
     )
     dry_run.add_argument("source_id")
     dry_run.add_argument(
@@ -92,7 +92,22 @@ def main() -> None:
     dry_run.add_argument(
         "--save-readiness",
         action="store_true",
-        help="Save this dry-run as the latest source go-live readiness result.",
+        help="Save this source test as the latest go-live readiness result.",
+    )
+    source_test = subparsers.add_parser(
+        "test-source",
+        help="Test one configured source without writing packages, seen state, digests, or run records.",
+    )
+    source_test.add_argument("source_id")
+    source_test.add_argument(
+        "--force-disabled",
+        action="store_true",
+        help="Execute a disabled source entry for inspection without enabling it.",
+    )
+    source_test.add_argument(
+        "--save-readiness",
+        action="store_true",
+        help="Save this source test as the latest go-live readiness result.",
     )
     run_source = subparsers.add_parser(
         "run-source",
@@ -190,8 +205,8 @@ def main() -> None:
             static=args.static,
             max_candidates=args.max_candidates,
         )
-    if args.command == "dry-run-source":
-        dry_run_source(args.source_id, force_disabled=args.force_disabled, save_readiness=args.save_readiness)
+    if args.command in {"dry-run-source", "test-source"}:
+        test_source(args.source_id, force_disabled=args.force_disabled, save_readiness=args.save_readiness)
     if args.command == "run-source":
         run_source_now(args.source_id)
     if args.command == "suggest-recipe":
@@ -437,23 +452,23 @@ def _safe_print(text: str = "") -> None:
     print(str(text).encode(encoding, errors="replace").decode(encoding))
 
 
-def dry_run_source(source_id: str, force_disabled: bool = False, save_readiness: bool = False, root=None) -> None:
+def test_source(source_id: str, force_disabled: bool = False, save_readiness: bool = False, root=None) -> None:
     from pathlib import Path
 
     from .config import ROOT
-    from .services.source_dry_run_service import SourceDryRunService
+    from .services.source_test_service import SourceTestService
     from .services.source_execution_readiness_service import SourceExecutionReadinessService
 
     project_root = Path(root) if root else ROOT
-    service = SourceDryRunService(project_root) if root else SourceDryRunService()
-    result = service.dry_run(source_id, force_disabled=force_disabled)
+    service = SourceTestService(project_root) if root else SourceTestService()
+    result = service.run_test(source_id, force_disabled=force_disabled)
     _safe_print(f"Source id: {result.source_id}")
     _safe_print(f"Source name: {result.source_name or 'Not found'}")
     _safe_print(f"Source type: {result.source_type or 'Not found'}")
     _safe_print(f"Enabled: {result.source_enabled}")
     if result.forced_disabled:
         _safe_print("Forced disabled source execution: true")
-    _safe_print(f"Dry-run status: {result.status}")
+    _safe_print(f"Source test status: {result.status}")
     _safe_print(f"Jobs extracted: {result.job_count}")
     if result.listing_observed_count:
         _safe_print(f"Listing cards observed: {result.listing_observed_count}")
@@ -483,9 +498,13 @@ def dry_run_source(source_id: str, force_disabled: bool = False, save_readiness:
     _safe_print("")
     _safe_print("No packages, seen state, materials, digests, or run records were written.")
     if save_readiness:
-        readiness = SourceExecutionReadinessService(project_root).save_from_dry_run(result)
+        readiness = SourceExecutionReadinessService(project_root).save_from_source_test(result)
         _safe_print(f"Readiness saved: {readiness.readiness_status}")
         _safe_print(f"Readiness summary: {readiness.readiness_summary}")
+
+
+test_source.__test__ = False
+dry_run_source = test_source
 
 
 def run_source_now(source_id: str) -> None:
@@ -741,8 +760,8 @@ def recipe_generation_status(source_id: str, root=None) -> None:
     _safe_print(f"Latest approved recipe: {status.latest_approved_recipe_path or 'none'}")
     _safe_print(f"Approved path matches registry: {status.approved_matches_source_recipe_path}")
     _safe_print(f"Source health: {status.source_health_status} - {status.source_health_summary}")
-    _safe_print(f"Execution entry present: {status.execution_entry_exists}")
-    _safe_print(f"Execution enabled: {status.execution_enabled}")
+    _safe_print(f"Daily-run projection present: {status.execution_entry_exists}")
+    _safe_print(f"Daily-run enabled: {status.execution_enabled}")
     for warning in status.warnings:
         _safe_print(f"Workflow note: {warning}")
     _safe_print("Approval/source health and execution enablement are separate; this command does not mutate anything.")
@@ -758,13 +777,13 @@ def source_go_live_status(source_id: str, root=None) -> None:
     _safe_print(f"Source id: {readiness.source_id}")
     _safe_print(f"Readiness status: {readiness.readiness_status}")
     _safe_print(f"Readiness summary: {readiness.readiness_summary}")
-    _safe_print(f"Last dry-run: {readiness.last_checked_at or 'never'}")
-    _safe_print(f"Dry-run status: {readiness.dry_run_status}")
-    _safe_print(f"Dry-run jobs: {readiness.dry_run_job_count}")
-    _safe_print(f"Dry-run warnings: {readiness.dry_run_warning_count}")
+    _safe_print(f"Last source test: {readiness.last_checked_at or 'never'}")
+    _safe_print(f"Source test status: {readiness.dry_run_status}")
+    _safe_print(f"Source test jobs: {readiness.dry_run_job_count}")
+    _safe_print(f"Source test warnings: {readiness.dry_run_warning_count}")
     _safe_print(f"Source health: {readiness.checks.get('source_health_status', 'unknown')}")
-    _safe_print(f"Execution entry present: {readiness.checks.get('execution_entry_exists', False)}")
-    _safe_print(f"Execution enabled: {readiness.checks.get('execution_entry_enabled', False)}")
+    _safe_print(f"Daily-run projection present: {readiness.checks.get('execution_entry_exists', False)}")
+    _safe_print(f"Daily-run enabled: {readiness.checks.get('execution_entry_enabled', False)}")
     _safe_print(
         "Execution recipe matches registry: "
         f"{readiness.checks.get('execution_entry_recipe_path_matches_registry', False)}"
@@ -820,8 +839,8 @@ def adopt_approved_recipe(
     _safe_print(f"Previous registry recipe path: {result.previous_recipe_path or 'none'}")
     _safe_print(f"Adopted recipe path: {result.adopted_recipe_path}")
     _safe_print(f"Registry updated: {result.registry_updated}")
-    _safe_print(f"Disabled execution entry created: {result.execution_entry_created}")
-    _safe_print(f"Disabled execution entry updated: {result.execution_entry_updated}")
+    _safe_print(f"Disabled daily-run projection created: {result.execution_entry_created}")
+    _safe_print(f"Disabled daily-run projection updated: {result.execution_entry_updated}")
     for warning in result.warnings:
         _safe_print(f"Warning: {warning}")
     _safe_print("Execution was not enabled. Daily-run enablement remains a separate guarded action.")

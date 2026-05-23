@@ -49,7 +49,7 @@
     </div>
     <div>
       <span>Safe source test</span>
-      <strong>{{ source_status.dry_run_label }}</strong>
+      <strong>{{ source_status.source_test_label }}</strong>
       <p>{{ go_live_readiness.readiness_summary }}</p>
     </div>
     <div>
@@ -297,7 +297,7 @@
     {% endif %}
   </div>
   <div class="grid">
-    <div class="stat"><span>Source test</span><strong>{{ source_status.dry_run_label }}</strong></div>
+    <div class="stat"><span>Source test</span><strong>{{ source_status.source_test_label }}</strong></div>
     <div class="stat"><span>Jobs found in test</span><strong>{{ go_live_readiness.dry_run_job_count }}</strong></div>
     <div class="stat"><span>Last source test</span><strong>{{ go_live_readiness.last_checked_at or "Never" }}</strong></div>
     <div class="stat"><span>Daily run</span><strong>{{ source_status.automation_label }}</strong></div>
@@ -330,7 +330,7 @@
 
   {% if execution_entry %}
   <details class="diagnostic-panel">
-    <summary>Technical daily-run entry</summary>
+    <summary>Daily-run projection</summary>
     <pre class="copy-source">name: {{ execution_entry.name }}
 source_id: {{ execution_entry.source_id }}
 type: {{ execution_entry.type }}
@@ -339,7 +339,7 @@ recipe_path: {{ execution_entry.recipe_path }}
 enabled: {{ "true" if execution_entry.enabled else "false" }}</pre>
     {% if source.status != "archived" %}
     <form method="post" action="/sources/{{ source.id }}/execution/update" class="inline-form">
-      <button type="submit" class="button light">Refresh disabled entry</button>
+      <button type="submit" class="button light">Refresh daily-run projection</button>
     </form>
     {% endif %}
   </details>

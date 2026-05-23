@@ -34,7 +34,7 @@
 {% if result.status == "disabled" %}
 <div class="panel">
   <p>This execution source is disabled and was not run.</p>
-  <a class="button light" href="/sources/{{ source.id }}/dry-run?force_disabled=true">Test disabled source</a>
+  <a class="button light" href="/sources/{{ source.id }}/test-run">Test disabled source</a>
 </div>
 {% endif %}
 

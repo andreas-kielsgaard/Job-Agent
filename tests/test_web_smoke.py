@@ -606,7 +606,7 @@ def test_viewing_source_pages_does_not_mutate_execution_config(client: TestClien
 def test_source_execution_routes_create_guard_enable_and_disable(client: TestClient, project_root: Path) -> None:
     from job_agent.io.yaml_store import read_yaml
     from job_agent.services.recipe_preview_service import RecipePreviewResult
-    from job_agent.services.source_dry_run_service import DryRunJobPreview, SourceDryRunResult
+    from job_agent.services.source_test_service import SourceTestJobPreview, SourceTestResult
     from job_agent.services.source_execution_readiness_service import SourceExecutionReadinessService
     from job_agent.services.source_health_service import SourceHealthService
 
@@ -645,8 +645,8 @@ def test_source_execution_routes_create_guard_enable_and_disable(client: TestCli
             warnings=[],
         ),
     )
-    SourceExecutionReadinessService(project_root).save_from_dry_run(
-        SourceDryRunResult(
+    SourceExecutionReadinessService(project_root).save_from_source_test(
+        SourceTestResult(
             source_id="eursap-jobs",
             source_name="Eursap Jobs",
             source_type="recipe_html",
@@ -655,7 +655,7 @@ def test_source_execution_routes_create_guard_enable_and_disable(client: TestCli
             status="success",
             job_count=1,
             jobs=[
-                DryRunJobPreview(
+                SourceTestJobPreview(
                     title="SAP Basis Consultant",
                     url="https://eursap.eu/jobs/sap-basis",
                     source="Eursap Jobs",
@@ -697,15 +697,15 @@ def test_source_detail_shows_dry_run_link_when_execution_entry_exists(client: Te
 
 
 def test_source_test_run_view_and_api_save_readiness(monkeypatch: pytest.MonkeyPatch, client: TestClient) -> None:
-    from job_agent.services.source_dry_run_service import DryRunJobPreview, SourceDryRunResult
+    from job_agent.services.source_test_service import SourceTestJobPreview, SourceTestResult
 
     client.post("/sources/eursap-jobs/execution/create", follow_redirects=False)
 
-    class FakeDryRunService:
+    class FakeSourceTestService:
         def __init__(self, root):
             pass
 
-        def dry_run(self, source_id, *, force_disabled=False, progress_callback=None):
+        def run_test(self, source_id, *, force_disabled=False, progress_callback=None):
             assert source_id == "eursap-jobs"
             assert force_disabled is True
             if progress_callback:
@@ -717,7 +717,7 @@ def test_source_test_run_view_and_api_save_readiness(monkeypatch: pytest.MonkeyP
                         "capability": "listing",
                     }
                 )
-            return SourceDryRunResult(
+            return SourceTestResult(
                 source_id="eursap-jobs",
                 source_name="Eursap Jobs",
                 source_type="recipe_html",
@@ -774,7 +774,7 @@ def test_source_test_run_view_and_api_save_readiness(monkeypatch: pytest.MonkeyP
                     }
                 ],
                 jobs=[
-                    DryRunJobPreview(
+                    SourceTestJobPreview(
                         title=f"SAP Basis Consultant {index}",
                         url=f"https://eursap.eu/jobs/sap-basis-{index}",
                         source="Eursap Jobs",
@@ -787,7 +787,7 @@ def test_source_test_run_view_and_api_save_readiness(monkeypatch: pytest.MonkeyP
                 ],
             )
 
-    monkeypatch.setattr("job_agent.web.routers.sources.SourceDryRunService", FakeDryRunService)
+    monkeypatch.setattr("job_agent.web.routers.sources.SourceTestService", FakeSourceTestService)
 
     view = client.get("/sources/eursap-jobs/test-run")
     response = client.post("/sources/eursap-jobs/test-run")
@@ -816,18 +816,18 @@ def test_source_test_run_view_and_api_save_readiness(monkeypatch: pytest.MonkeyP
 
 
 def test_source_dry_run_route_renders_result(monkeypatch: pytest.MonkeyPatch, client: TestClient) -> None:
-    from job_agent.services.source_dry_run_service import DryRunJobPreview, SourceDryRunResult
+    from job_agent.services.source_test_service import SourceTestJobPreview, SourceTestResult
 
     client.post("/sources/eursap-jobs/execution/create", follow_redirects=False)
 
-    class FakeDryRunService:
+    class FakeSourceTestService:
         def __init__(self, root):
             pass
 
-        def dry_run(self, source_id, *, force_disabled=False):
+        def run_test(self, source_id, *, force_disabled=False):
             assert source_id == "eursap-jobs"
             assert force_disabled is True
-            return SourceDryRunResult(
+            return SourceTestResult(
                 source_id="eursap-jobs",
                 source_name="Eursap Jobs",
                 source_type="recipe_html",
@@ -836,7 +836,7 @@ def test_source_dry_run_route_renders_result(monkeypatch: pytest.MonkeyPatch, cl
                 status="success",
                 job_count=1,
                 jobs=[
-                    DryRunJobPreview(
+                    SourceTestJobPreview(
                         title="SAP Basis Consultant",
                         url="https://eursap.eu/jobs/sap-basis",
                         source="Eursap Jobs",
@@ -847,7 +847,7 @@ def test_source_dry_run_route_renders_result(monkeypatch: pytest.MonkeyPatch, cl
                 ],
             )
 
-    monkeypatch.setattr("job_agent.web.routers.sources.SourceDryRunService", FakeDryRunService)
+    monkeypatch.setattr("job_agent.web.routers.sources.SourceTestService", FakeSourceTestService)
 
     response = client.get("/sources/eursap-jobs/dry-run?force_disabled=true")
 
@@ -870,14 +870,11 @@ def test_source_detail_run_now_requires_enabled_source(client: TestClient) -> No
 def test_source_detail_run_now_redirects_to_run_detail(
     monkeypatch: pytest.MonkeyPatch, client: TestClient, project_root: Path
 ) -> None:
-    from job_agent.io.yaml_store import read_yaml, write_yaml
     from job_agent.services.single_source_run_service import SingleSourceRunResult
+    from job_agent.services.execution_source_service import ExecutionSourceService
 
     client.post("/sources/eursap-jobs/execution/create", follow_redirects=False)
-    config_path = project_root / "sources" / "recruiting-sites.yaml"
-    config = read_yaml(config_path, {})
-    config["sources"][0]["enabled"] = True
-    write_yaml(config_path, config)
+    ExecutionSourceService(project_root).enable("eursap-jobs")
 
     class FakeSingleSourceRunService:
         def __init__(self, root):
@@ -900,7 +897,6 @@ def test_source_detail_run_now_redirects_to_run_detail(
 
     assert response.status_code == 303
     assert response.headers["location"] == "/runs/run-1"
-
 
 def test_manual_source_cannot_create_recipe_execution_route(client: TestClient) -> None:
     response = client.post("/sources/manual-intake/execution/create", follow_redirects=False)

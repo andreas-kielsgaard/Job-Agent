@@ -119,7 +119,7 @@ def test_prepare_disabled_execution_entry_updates_disabled_entry(project_root: P
     assert entry["enabled"] is False
 
 
-def test_prepare_disabled_execution_entry_refuses_enabled_entry(project_root: Path) -> None:
+def test_prepare_disabled_execution_entry_overrides_stale_enabled_yaml_from_registry(project_root: Path) -> None:
     candidate = _approved_candidate(project_root)
     config_path = project_root / "sources" / "recruiting-sites.yaml"
     config_path.write_text(
@@ -133,12 +133,17 @@ def test_prepare_disabled_execution_entry_refuses_enabled_entry(project_root: Pa
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="enabled"):
-        ApprovedRecipeAdoptionService(project_root).adopt(
-            candidate.candidate_id,
-            "eursap-jobs",
-            prepare_disabled_execution_entry=True,
-        )
+    result = ApprovedRecipeAdoptionService(project_root).adopt(
+        candidate.candidate_id,
+        "eursap-jobs",
+        prepare_disabled_execution_entry=True,
+    )
+
+    entry = read_yaml(config_path, {})["sources"][0]
+    assert result.execution_entry_updated is True
+    assert result.execution_entry_enabled_before is False
+    assert entry["recipe_path"] == "sources/recipes/experimental/new-eursap.yaml"
+    assert entry["enabled"] is False
 
 
 def test_cli_adopt_approved_recipe_prints_summary(capsys, project_root: Path) -> None:

@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from job_agent.models import Job
+from job_agent.services.extraction_assessment import listing_count_explanations
 from job_agent.services.extraction_quality import MIN_USEFUL_DESCRIPTION_CHARS
 from job_agent.services.job_board_recipe_service import (
     ApplicationEntry,
@@ -459,32 +460,14 @@ def _coverage_sentence(field_coverage: list[FieldCoverage]) -> str:
 
 
 def _preview_count_explanations(extraction: RecipeExtractionResult) -> list[str]:
-    explanations: list[str] = []
-    observed = extraction.listing_observed_count
-    retained = len(extraction.jobs)
-    if observed:
-        if observed == retained and not any(
-            [
-                extraction.listing_missing_url_count,
-                extraction.listing_rejected_count,
-                extraction.listing_duplicate_count,
-                extraction.listing_limit_skipped_count,
-            ]
-        ):
-            explanations.append(f"Observed {observed} listing card(s) and retained all {retained} as jobs.")
-        else:
-            reasons = []
-            if extraction.listing_missing_url_count:
-                reasons.append(f"{extraction.listing_missing_url_count} card(s) had no recipe-readable job URL")
-            if extraction.listing_rejected_count:
-                reasons.append(f"{extraction.listing_rejected_count} card(s) were rejected by recipe filters")
-            if extraction.listing_duplicate_count:
-                reasons.append(f"{extraction.listing_duplicate_count} duplicate URL(s) were ignored")
-            if extraction.listing_limit_skipped_count:
-                reasons.append(f"{extraction.listing_limit_skipped_count} card(s) were outside the configured run limit")
-            reason_text = "; ".join(reasons) if reasons else "some cards did not produce retained jobs"
-            explanations.append(f"Observed {observed} listing card(s) and retained {retained} job(s): {reason_text}.")
-    return explanations
+    return listing_count_explanations(
+        observed=extraction.listing_observed_count,
+        retained=len(extraction.jobs),
+        missing_url=extraction.listing_missing_url_count,
+        rejected=extraction.listing_rejected_count,
+        duplicates=extraction.listing_duplicate_count,
+        limited=extraction.listing_limit_skipped_count,
+    )
 
 
 def _capability_sentence(checks) -> str:

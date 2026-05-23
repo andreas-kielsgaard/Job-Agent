@@ -74,6 +74,10 @@ def test_manual_source_cannot_create_recipe_execution_entry(project_root: Path) 
         ExecutionSourceService(project_root).create_or_update_recipe_source(source)
 
 
-def test_enable_missing_execution_entry_raises(project_root: Path) -> None:
-    with pytest.raises(KeyError):
-        ExecutionSourceService(project_root).enable("eursap-jobs")
+def test_enable_registry_recipe_source_materializes_execution_entry(project_root: Path) -> None:
+    enabled = ExecutionSourceService(project_root).enable("eursap-jobs")
+    source = SourceRegistryService(project_root).get_source("eursap-jobs")
+
+    assert enabled["enabled"] is True
+    assert enabled["recipe_path"] == source.recipe_path
+    assert source.enabled is True

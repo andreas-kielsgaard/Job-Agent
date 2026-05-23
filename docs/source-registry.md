@@ -1,6 +1,6 @@
 # Source Registry
 
-The source registry is the first version of a separate Sources area in the app. It treats sources as places jobs can come from, with review status, recipe health, notes, and source-specific value signals from saved packages.
+The source registry is the Sources area backing store. It treats sources as places jobs can come from, with review status, selected reading plan, source-test readiness, notes, and source-specific value signals from saved packages.
 
 This is separate from Setup:
 
@@ -15,7 +15,7 @@ The registry lives at:
 sources/source-registry.yaml
 ```
 
-It is a review/configuration layer. It does not replace `sources/recruiting-sites.yaml`, and daily runs still use the existing daily-run source config.
+It is the review/configuration layer for source records. Recipe-backed sources are projected into the daily-run execution config from this registry so there is one owner for enabled/disabled state.
 
 Each entry can include:
 
@@ -46,7 +46,7 @@ Recipe preview is the manual trust gate before any later source integration. A r
 
 ## Recipe-Backed Execution
 
-Daily runs now have an opt-in `recipe_html` source type in the existing `sources/recruiting-sites.yaml` execution config. This is a technical bridge only; no experimental recipe sources are enabled by default, and the source registry is still not the daily-run source of truth.
+Daily runs have an opt-in `recipe_html` source type in the existing `sources/recruiting-sites.yaml` execution config. For registry recipe sources, this execution entry is a projection from `sources/source-registry.yaml`; the registry owns whether the source is included.
 
 Example shape:
 
@@ -60,52 +60,52 @@ sources:
     enabled: false
 ```
 
-Use recipe preview and saved source health before manually enabling a recipe-backed source. When a `recipe_html` source is eventually enabled in `sources/recruiting-sites.yaml`, it loads the configured constrained YAML recipe, extracts jobs from the configured single URL, and returns normal jobs to the existing daily-run pipeline. It does not add pagination or broader site traversal.
+Use recipe preview and saved source health before enabling a recipe-backed source. When a `recipe_html` source is enabled, it loads the configured constrained YAML recipe, follows the recipe's listing/detail/pagination instructions within configured limits, and returns normal jobs to the existing daily-run pipeline.
 
-Recipe-backed jobs can carry `source_id` into package indexes. Future registry-to-execution work should use this stable id instead of relying on source names or URLs.
+Recipe-backed jobs carry `source_id` into package indexes so later value reporting can match results back to the source without relying on source names or URLs.
 
 ## Guarded Execution Setup
 
-Source detail pages can explicitly create or update a matching disabled `recipe_html` entry in:
+Source detail pages can explicitly refresh a matching disabled `recipe_html` projection in:
 
 ```text
 sources/recruiting-sites.yaml
 ```
 
-This is the daily-run execution config. Viewing the Sources area does not mutate it. Creating or updating an execution entry keeps it disabled by default:
+This is the daily-run execution config. Viewing the Sources area does not mutate it. Refreshing an execution projection keeps it disabled by default:
 
 ```yaml
 enabled: false
 ```
 
-Enabling for daily runs is a separate explicit action and requires saved source health with status `good`. If health is `untested`, `warning`, or `failing`, the UI blocks enablement and asks for recipe preview health to be saved first.
+Enabling for daily runs is a separate explicit action and requires saved source health with status `good` plus a passing source test. If health is `untested`, `warning`, or `failing`, the UI blocks enablement and asks for recipe preview health to be saved first.
 
 Source value is advisory only. It helps decide whether a source looks useful, but it is not an automatic enablement gate.
 
-The source registry remains the review/configuration layer; `sources/recruiting-sites.yaml` remains the execution source of truth until a later, more direct registry-to-execution workflow exists.
+The source registry remains the owner of recipe-backed source settings. `sources/recruiting-sites.yaml` is kept as the execution adapter bridge.
 
-## Source Dry Run
+## Source Test
 
-Source dry run tests one configured execution source in isolation. It answers: "Does this `sources/recruiting-sites.yaml` entry work through the same adapter path daily runs would use?"
+Source test exercises one configured source in isolation. It answers: "Does this source work through the same adapter path daily runs would use, without writing outputs?"
 
 This is different from recipe preview:
 
 - Recipe Preview: "Does this recipe extract from this input?"
-- Source Dry Run: "Does this configured execution source work as the daily-run adapter would see it?"
+- Source Test: "Does this configured source work as the daily-run adapter would see it?"
 
-Dry run can be launched from a source detail page when an execution entry exists, or from the CLI:
-
-```powershell
-python -m job_agent.cli dry-run-source eursap-jobs
-```
-
-Disabled execution sources are not run unless explicitly forced:
+Source test can be launched from a source detail page, or from the CLI:
 
 ```powershell
-python -m job_agent.cli dry-run-source eursap-jobs --force-disabled
+python -m job_agent.cli test-source eursap-jobs
 ```
 
-Dry run reports source status, extracted jobs, warnings, and source ids. It does not write packages, generated materials, seen-job state, digests, application statuses, or run records. It is a low-risk check to use after guarded enablement and before relying on a source in the morning workflow.
+Disabled sources are not run unless explicitly forced:
+
+```powershell
+python -m job_agent.cli test-source eursap-jobs --force-disabled
+```
+
+Source test reports source status, extracted jobs, warnings, and source ids. It does not write packages, generated materials, seen-job state, digests, application statuses, or run records. It is a low-risk check to use before including a source in the morning workflow.
 
 ## Single-Source Run
 
@@ -115,14 +115,14 @@ Single-source run executes one enabled execution source by `source_id` and write
 python -m job_agent.cli run-source eursap-jobs
 ```
 
-It is the next step after dry run:
+It is the next step after a source test:
 
 1. Recipe Preview: test recipe extraction from an input.
-2. Source Dry Run: test a configured execution source without writes.
+2. Source Test: test a configured source without writes.
 3. Single-Source Run: run one enabled execution source and write normal run/package outputs.
 4. Daily Run: run all enabled execution sources.
 
-Single-source run requires the execution entry to exist and be enabled in `sources/recruiting-sites.yaml`. Disabled sources cannot be run for real. Materials are not generated by default, and jobs are not marked seen unless a future explicit option adds that behavior. This workflow is useful before trusting a newly enabled source in the regular morning run.
+Single-source run requires the source to be enabled. Disabled sources cannot be run for real. Materials are not generated by default, and jobs are not marked seen unless a future explicit option adds that behavior. This workflow is useful before trusting a newly enabled source in the regular morning run.
 
 ## Source Health
 
@@ -192,8 +192,6 @@ Source value does not enable a source and does not change daily-run behavior.
 
 ## Not Implemented Yet
 
-- Registry-to-daily-run enablement
 - Automatic recipe enabling
 - Recruiter/contact tracking
-- Pagination or broader site traversal
 - Application submission or form filling

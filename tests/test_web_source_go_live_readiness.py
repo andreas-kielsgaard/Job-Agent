@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 from job_agent.io.yaml_store import read_yaml
 from job_agent.services.execution_source_service import ExecutionSourceService
 from job_agent.services.recipe_preview_service import RecipePreviewResult
-from job_agent.services.source_dry_run_service import DryRunJobPreview, SourceDryRunResult
+from job_agent.services.source_test_service import SourceTestJobPreview, SourceTestResult
 from job_agent.services.source_execution_readiness_service import SourceExecutionReadinessService
 from job_agent.services.source_health_service import SourceHealthService
 from job_agent.services.source_registry_service import SourceRegistryService
@@ -29,16 +29,16 @@ def test_web_dry_run_readiness_route_saves_readiness(
 ) -> None:
     _prepare_good_source(project_root)
 
-    class FakeDryRunService:
+    class FakeSourceTestService:
         def __init__(self, root):
             pass
 
-        def dry_run(self, source_id, *, force_disabled=False):
+        def run_test(self, source_id, *, force_disabled=False):
             assert source_id == "eursap-jobs"
             assert force_disabled is True
             return _dry_run_result()
 
-    monkeypatch.setattr("job_agent.web.routers.sources.SourceDryRunService", FakeDryRunService)
+    monkeypatch.setattr("job_agent.web.routers.sources.SourceTestService", FakeSourceTestService)
 
     response = client.post("/sources/eursap-jobs/dry-run-readiness", follow_redirects=False)
 
@@ -62,7 +62,7 @@ def test_web_enable_when_ready_refuses_blocked_then_enables_ready_source(
     config = read_yaml(project_root / "sources" / "recruiting-sites.yaml", {})
     assert config["sources"][0]["enabled"] is False
 
-    SourceExecutionReadinessService(project_root).save_from_dry_run(_dry_run_result())
+    SourceExecutionReadinessService(project_root).save_from_source_test(_dry_run_result())
     enabled = client.post("/sources/eursap-jobs/enable-when-ready", follow_redirects=False)
 
     assert enabled.status_code == 303
@@ -96,7 +96,7 @@ def _prepare_good_source(project_root: Path) -> None:
 
 
 def _dry_run_result():
-    return SourceDryRunResult(
+    return SourceTestResult(
         source_id="eursap-jobs",
         source_name="Eursap Jobs",
         source_type="recipe_html",
@@ -105,7 +105,7 @@ def _dry_run_result():
         status="success",
         job_count=1,
         jobs=[
-            DryRunJobPreview(
+            SourceTestJobPreview(
                 title="SAP Basis Consultant",
                 url="https://eursap.eu/jobs/sap-basis",
                 source="Eursap Jobs",

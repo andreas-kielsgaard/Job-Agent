@@ -7,6 +7,7 @@ from urllib.parse import urlparse
 from job_agent.config import ROOT
 from job_agent.services.execution_source_service import ExecutionSourceService
 from job_agent.services.recipe_artifact_service import RecipeArtifactService, RecipeArtifactSummary
+from job_agent.services.recipe_candidate_policy import candidate_is_reviewable
 from job_agent.services.recipe_candidate_service import RecipeCandidate, RecipeCandidateStore
 from job_agent.services.source_registry_service import SourceRegistryEntry, SourceRegistryService
 
@@ -52,7 +53,7 @@ class RecipeGenerationStatusService:
         artifacts = self.artifacts.list_artifacts_for_source(source)
         candidates = self._matching_candidates(source, artifacts)
         approved = [candidate for candidate in candidates if candidate.status == "approved"]
-        reviewable_pending = [candidate for candidate in candidates if _is_reviewable_pending_candidate(candidate)]
+        reviewable_pending = [candidate for candidate in candidates if candidate_is_reviewable(candidate)]
         latest = candidates[0] if candidates else None
         latest_reviewable = reviewable_pending[0] if reviewable_pending else None
         latest_approved = approved[0] if approved else None
@@ -113,11 +114,11 @@ def _warnings(status: RecipeGenerationStatus, source: SourceRegistryEntry, lates
     if status.approved_candidates and status.source_health_status == "untested":
         warnings.append("This source has approved recipe candidates, but source health is still untested.")
     if status.source_health_status == "good" and not status.execution_entry_exists:
-        warnings.append("Source health is good, but no daily-run execution entry exists yet. This is expected until enabled separately.")
+        warnings.append("Source health is good, but no daily-run projection exists yet. This is expected until enabled separately.")
     if status.source_health_status == "good" and status.execution_entry_exists and not status.execution_enabled:
         warnings.append("Source health is good, but daily-run execution is disabled. Enablement remains a separate guarded step.")
     if latest and latest.status == "pending" and (not latest.schema_valid or latest.quality_status == "poor"):
-        if _is_reviewable_pending_candidate(latest):
+        if candidate_is_reviewable(latest):
             warnings.append("Latest pending candidate has invalid schema or poor local quality; review before approval.")
         else:
             warnings.append(
@@ -126,16 +127,6 @@ def _warnings(status: RecipeGenerationStatus, source: SourceRegistryEntry, lates
     if latest and latest.status == "approved" and not latest.preview_saved:
         warnings.append("Latest approved candidate did not save preview health.")
     return warnings
-
-
-def _is_reviewable_pending_candidate(candidate: RecipeCandidate) -> bool:
-    return (
-        candidate.status == "pending"
-        and bool(candidate.suggested_recipe_yaml.strip())
-        and bool(candidate.schema_valid)
-        and candidate.quality_status != "poor"
-        and (not candidate.refinement_used or candidate.refinement_accepted)
-    )
 
 
 def _candidate_matches_source(candidate: RecipeCandidate, source: SourceRegistryEntry, artifact_dirs: set[str]) -> bool:

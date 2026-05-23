@@ -7,6 +7,7 @@ from job_agent.services.job_board_check_service import check_job_board_compatibi
 from job_agent.web.debug_state import record_debug_event
 from job_agent.web.dependencies import current_root, templates
 from job_agent.web.form_options import default_recipe_for_source, include_selected_recipe_option, recipe_options, source_options
+from job_agent.web.view_models.source_debug import recipe_label, source_debug_option, source_debug_options
 
 router = APIRouter()
 
@@ -43,7 +44,7 @@ def compatibility_form(
             "recipe_path": recipe_path,
             "source_count": len(sources),
             "recipe_count": len(recipes),
-            "sources": _source_debug_options(sources),
+            "sources": source_debug_options(sources),
             "recipes": recipes,
         },
     )
@@ -182,12 +183,12 @@ def _compatibility_debug_state(
     state = {
         "source_mode": source_mode,
         "selected_source_id": selected_source.id if selected_source else selected_source_id,
-        "selected_source": _source_debug_option(selected_source) if selected_source else None,
+        "selected_source": source_debug_option(selected_source) if selected_source else None,
         "url": url,
         "render": render,
         "recipe_path": recipe_path,
-        "recipe_label": _recipe_label(recipe_path, recipes),
-        "sources": _source_debug_options(sources),
+        "recipe_label": recipe_label(recipe_path, recipes),
+        "sources": source_debug_options(sources),
         "recipes": recipes,
         "error": error,
     }
@@ -204,25 +205,6 @@ def _compatibility_debug_state(
             ],
         }
     return state
-
-
-def _source_debug_options(sources: list) -> list[dict[str, str]]:
-    return [_source_debug_option(source) for source in sources]
-
-
-def _source_debug_option(source) -> dict[str, str]:
-    return {
-        "id": source.id,
-        "name": source.name,
-        "url": source.url,
-        "recipe_path": source.recipe_path,
-        "kind": source.kind,
-        "status": source.status,
-    }
-
-
-def _recipe_label(recipe_path: str, recipes: list[dict[str, str]]) -> str:
-    return next((recipe["label"] for recipe in recipes if recipe["value"] == recipe_path), "")
 
 
 def _quality_summary(quality) -> dict | None:

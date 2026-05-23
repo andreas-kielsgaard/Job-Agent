@@ -6,7 +6,7 @@ from typing import Any
 
 from job_agent.config import ROOT
 from job_agent.io.yaml_store import read_yaml, write_yaml
-from job_agent.services.source_registry_service import SourceRegistryEntry
+from job_agent.services.source_registry_service import SourceRegistryEntry, SourceRegistryService
 
 EXECUTION_SOURCES_PATH = Path("sources/recruiting-sites.yaml")
 
@@ -33,7 +33,31 @@ class ExecutionSourceService:
         return data
 
     def list_sources(self) -> list[dict[str, Any]]:
-        return [source for source in self.load_config().get("sources", []) if isinstance(source, dict)]
+        config_sources = [source for source in self.load_config().get("sources", []) if isinstance(source, dict)]
+        config_by_id = {
+            str(source.get("source_id") or ""): source
+            for source in config_sources
+            if str(source.get("source_id") or "").strip()
+        }
+        projected_sources: list[dict[str, Any]] = []
+        projected_ids: set[str] = set()
+        for registry_source in SourceRegistryService(self.root).list_sources():
+            if registry_source.kind != "recipe" or not registry_source.recipe_path or registry_source.status == "archived":
+                continue
+            existing = config_by_id.get(registry_source.id, {})
+            projected = {
+                **existing,
+                **self._recipe_entry(registry_source, enabled=registry_source.enabled),
+                "enabled": registry_source.enabled,
+            }
+            projected_sources.append(projected)
+            projected_ids.add(registry_source.id)
+        legacy_sources = [
+            source
+            for source in config_sources
+            if str(source.get("source_id") or "") not in projected_ids
+        ]
+        return legacy_sources + projected_sources
 
     def find_by_source_id(self, source_id: str) -> dict[str, Any] | None:
         source_id = source_id.strip()
@@ -47,6 +71,7 @@ class ExecutionSourceService:
     ) -> ExecutionSourceResult:
         if not registry_source.recipe_path:
             raise ValueError("Only recipe-backed registry sources can be added to daily-run execution.")
+        SourceRegistryService(self.root).set_enabled(registry_source.id, enabled)
         config = self.load_config()
         sources = config.setdefault("sources", [])
         if not isinstance(sources, list):
@@ -71,8 +96,28 @@ class ExecutionSourceService:
         return self._set_enabled(source_id, False)
 
     def _set_enabled(self, source_id: str, enabled: bool) -> dict[str, Any]:
+        registry = SourceRegistryService(self.root)
+        registry_source = registry.get_source(source_id)
         config = self.load_config()
-        sources = config.get("sources", [])
+        sources = config.setdefault("sources", [])
+        if not isinstance(sources, list):
+            sources = []
+            config["sources"] = sources
+
+        if registry_source:
+            if not registry_source.recipe_path:
+                raise KeyError(f"No execution source entry exists for source_id: {source_id}")
+            registry_source = registry.set_enabled(source_id, enabled)
+            entry = self._recipe_entry(registry_source, enabled=enabled)
+            for index, source in enumerate(sources):
+                if isinstance(source, dict) and str(source.get("source_id") or "") == source_id:
+                    sources[index] = {**source, **entry, "enabled": enabled}
+                    self._write(config)
+                    return sources[index]
+            sources.append(entry)
+            self._write(config)
+            return entry
+
         for source in sources:
             if isinstance(source, dict) and str(source.get("source_id") or "") == source_id:
                 source["enabled"] = enabled

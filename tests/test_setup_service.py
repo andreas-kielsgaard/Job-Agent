@@ -59,53 +59,10 @@ class SetupServiceTests(unittest.TestCase):
             self.assertEqual(preferences["thresholds"]["minimum_digest_score"], 55)
             self.assertEqual(preferences["location_policy"]["preferred_regions"], ["Denmark", "Sweden"])
 
-    def test_sources_and_setup_files(self) -> None:
+    def test_setup_files(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             service = SetupService(root)
-            source_path = root / "sources" / "recruiting-sites.yaml"
-            source_path.parent.mkdir(parents=True)
-            source_path.write_text("sources:\n- name: Sample\n  enabled: true\n", encoding="utf-8")
-
-            service.toggle_source(0, False)
-            self.assertFalse(yaml.safe_load(source_path.read_text(encoding="utf-8"))["sources"][0]["enabled"])
-            with self.assertRaises(IndexError):
-                service.toggle_source(5, True)
-
-            service.add_source(
-                name="New",
-                url_or_path="https://example.com",
-                source_type="generic_html",
-                keywords="ABAP\nRAP",
-                enabled=True,
-            )
-            sources = yaml.safe_load(source_path.read_text(encoding="utf-8"))["sources"]
-            self.assertEqual(sources[-1]["url"], "https://example.com")
-            self.assertEqual(sources[-1]["keywords"], ["ABAP", "RAP"])
-
-            service.add_source(
-                name="Local",
-                url_or_path="jobs/raw/manual.yaml",
-                source_type="local_yaml",
-                keywords="",
-                enabled=True,
-            )
-            sources = yaml.safe_load(source_path.read_text(encoding="utf-8"))["sources"]
-            self.assertEqual(sources[-1]["path"], "jobs/raw/manual.yaml")
-            self.assertNotIn("url", sources[-1])
-
-            with self.assertRaises(ValueError):
-                service.add_source(
-                    name="",
-                    url_or_path="https://example.com",
-                    source_type="generic_html",
-                    keywords="",
-                    enabled=True,
-                )
-            with self.assertRaises(ValueError):
-                service.add_source(name="Bad", url_or_path="", source_type="generic_html", keywords="", enabled=True)
-            with self.assertRaises(ValueError):
-                service.add_source(name="Bad", url_or_path="x", source_type="unknown", keywords="", enabled=True)
 
             service.save_setup_file("canonical_cv", "CV text")
             self.assertEqual((root / "profile" / "canonical-cv.md").read_text(encoding="utf-8"), "CV text")

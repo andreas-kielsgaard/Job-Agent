@@ -9,9 +9,10 @@ from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 
 from job_agent.services.recipe_calibration_service import capture_recipe_calibration
+from job_agent.services.recipe_candidate_policy import candidate_is_reviewable
 from job_agent.services.recipe_preview_service import explain_recipe
 from job_agent.services.single_source_run_service import SingleSourceRunService
-from job_agent.services.source_dry_run_service import SourceDryRunService
+from job_agent.services.source_test_service import SourceTestService
 from job_agent.services.source_registry_service import SOURCE_KIND_DEFINITIONS, SOURCE_STATUS_DEFINITIONS
 from job_agent.web.dependencies import (
     approved_recipe_adoption_service,
@@ -225,7 +226,7 @@ def archive_registry_source(source_id: str) -> RedirectResponse:
         disabled = _disable_execution_entry_if_present(source.id)
     except KeyError as exc:
         return _redirect_to_sources(warning=f"Source archive failed: {exc}")
-    suffix = " Existing daily-run execution entry was disabled." if disabled else ""
+    suffix = " Existing daily-run projection was disabled." if disabled else ""
     return _redirect_to_sources(
         message=f"Source archived. It is hidden from normal source lists and blocked from daily-run enablement.{suffix}",
     )
@@ -337,7 +338,7 @@ def create_execution_source(source_id: str) -> RedirectResponse:
     return _redirect_to_source(
         source_id,
         message=(
-            "Disabled daily-run entry prepared in sources/recruiting-sites.yaml. "
+            "Disabled daily-run projection prepared in sources/recruiting-sites.yaml. "
             "It will not run until you explicitly enable it after readiness checks."
         ),
     )
@@ -349,7 +350,7 @@ def update_execution_source(source_id: str) -> RedirectResponse:
     _require_recipe_source(source)
     _require_not_archived(source)
     execution_source_service().create_or_update_recipe_source(source, enabled=False)
-    return _redirect_to_source(source_id, message="Execution entry updated and kept disabled.")
+    return _redirect_to_source(source_id, message="Daily-run projection updated and kept disabled.")
 
 
 @router.post("/sources/{source_id}/execution/enable")
@@ -361,7 +362,7 @@ def enable_execution_source(source_id: str) -> RedirectResponse:
     if not result.enabled:
         warning = " ".join(result.check.blockers[:3]) or "Source is not ready for daily-run enablement."
         return _redirect_to_source(source_id, warning=warning)
-    return _redirect_to_source(source_id, message="Execution entry enabled for daily runs.")
+    return _redirect_to_source(source_id, message="Source included in daily runs.")
 
 
 @router.post("/sources/{source_id}/execution/disable")
@@ -370,21 +371,21 @@ def disable_execution_source(source_id: str) -> RedirectResponse:
     try:
         execution_source_service().disable(source.id)
     except KeyError:
-        return _redirect_to_source(source_id, warning="No execution entry exists to disable.")
-    return _redirect_to_source(source_id, message="Execution entry disabled.")
+        return _redirect_to_source(source_id, warning="This source is not available for daily-run disablement.")
+    return _redirect_to_source(source_id, message="Source removed from daily runs.")
 
 
 @router.get("/sources/{source_id}/dry-run", response_class=HTMLResponse)
 def source_dry_run(request: Request, source_id: str, force_disabled: bool = False) -> HTMLResponse:
     source = _registry_source_or_404(source_id)
     execution_entry = execution_source_service().find_by_source_id(source.id)
-    result = SourceDryRunService(execution_source_service().root).dry_run(
+    result = SourceTestService(execution_source_service().root).run_test(
         source.id,
         force_disabled=force_disabled,
     )
     return templates.TemplateResponse(
         request,
-        "source_dry_run.html",
+        "source_test_result.html",
         {
             "request": request,
             "source": source,
@@ -420,11 +421,11 @@ def run_source_test(source_id: str) -> JSONResponse:
     _ensure_disabled_execution_entry(source)
     execution_entry = execution_source_service().find_by_source_id(source.id)
     force_disabled = bool(execution_entry and not bool(execution_entry.get("enabled", True)))
-    result = SourceDryRunService(execution_source_service().root).dry_run(
+    result = SourceTestService(execution_source_service().root).run_test(
         source.id,
         force_disabled=force_disabled,
     )
-    readiness = source_execution_readiness_service().save_from_dry_run(result)
+    readiness = source_execution_readiness_service().save_from_source_test(result)
     return JSONResponse(_source_test_payload(source, result, readiness))
 
 
@@ -443,12 +444,12 @@ def run_source_test_stream(source_id: str) -> StreamingResponse:
 
         def worker() -> None:
             try:
-                result = SourceDryRunService(execution_source_service().root).dry_run(
+                result = SourceTestService(execution_source_service().root).run_test(
                     source.id,
                     force_disabled=force_disabled,
                     progress_callback=progress,
                 )
-                readiness = source_execution_readiness_service().save_from_dry_run(result)
+                readiness = source_execution_readiness_service().save_from_source_test(result)
                 events.put({"type": "complete", "data": _source_test_payload(source, result, readiness)})
             except Exception as exc:
                 events.put({"type": "error", "message": str(exc)})
@@ -474,12 +475,12 @@ def dry_run_source_readiness(source_id: str) -> RedirectResponse:
     source = _registry_source_or_404(source_id)
     execution_entry = execution_source_service().find_by_source_id(source.id)
     force_disabled = bool(execution_entry and not bool(execution_entry.get("enabled", True)))
-    result = SourceDryRunService(execution_source_service().root).dry_run(
+    result = SourceTestService(execution_source_service().root).run_test(
         source.id,
         force_disabled=force_disabled,
     )
-    readiness = source_execution_readiness_service().save_from_dry_run(result)
-    message = f"Dry-run readiness saved: {readiness.readiness_status}. {readiness.dry_run_job_count} jobs extracted."
+    readiness = source_execution_readiness_service().save_from_source_test(result)
+    message = f"Source test readiness saved: {readiness.readiness_status}. {readiness.dry_run_job_count} jobs extracted."
     if readiness.readiness_status == "blocked":
         return _redirect_to_source(source_id, warning=message)
     return _redirect_to_source(source_id, message=message)
@@ -494,7 +495,7 @@ def enable_source_when_ready(source_id: str) -> RedirectResponse:
     if not result.enabled:
         warning = " ".join(result.check.blockers[:3]) or "Source is not ready for daily-run enablement."
         return _redirect_to_source(source_id, warning=warning)
-    return _redirect_to_source(source_id, message="Execution entry enabled after go-live readiness checks passed.")
+    return _redirect_to_source(source_id, message="Source included in daily runs after readiness checks passed.")
 
 
 @router.post("/sources/{source_id}/run-now")
@@ -503,7 +504,7 @@ def run_source_now(source_id: str) -> RedirectResponse:
     _require_not_archived(source)
     execution_entry = execution_source_service().find_by_source_id(source.id)
     if not execution_entry:
-        return _redirect_to_source(source_id, warning="Create an execution entry before running this source.")
+        return _redirect_to_source(source_id, warning="This source is not available for daily-run execution.")
     if not bool(execution_entry.get("enabled", True)):
         return _redirect_to_source(source_id, warning="Enable this source before running.")
     result = SingleSourceRunService(execution_source_service().root).run(source.id)
@@ -576,13 +577,7 @@ def recipe_candidate_detail(request: Request, candidate_id: str, source_id: str 
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     source = source_registry_service().get_source(source_id) if source_id else _source_for_candidate(candidate)
     approval_recipe_path = recipe_candidate_approval_service().suggested_recipe_path(candidate, source)
-    candidate_can_be_used = (
-        candidate.status == "pending"
-        and bool(candidate.suggested_recipe_yaml.strip())
-        and bool(candidate.schema_valid)
-        and candidate.quality_status != "poor"
-        and (not candidate.refinement_used or candidate.refinement_accepted)
-    )
+    candidate_can_be_used = candidate_is_reviewable(candidate)
     return templates.TemplateResponse(
         request,
         "recipe_candidate_detail.html",
@@ -623,9 +618,9 @@ def adopt_recipe_candidate(
         return _redirect_to_source(source_id, warning=f"Approved recipe adoption failed: {exc}")
     parts = [f"Approved recipe adopted for {result.source_name}."]
     if result.execution_entry_created:
-        parts.append("Disabled execution entry created.")
+        parts.append("Disabled daily-run projection created.")
     if result.execution_entry_updated:
-        parts.append("Disabled execution entry updated.")
+        parts.append("Disabled daily-run projection updated.")
     return _redirect_to_source(source_id, message=" ".join(parts))
 
 
@@ -777,7 +772,7 @@ def _source_test_payload(source, result, readiness) -> dict[str, object]:
         "job_count": result.job_count,
         "warning_count": result.warning_count,
         "warnings": result.warnings,
-        "jobs": [_dry_run_job_mapping(job) for job in result.jobs],
+        "jobs": [_source_test_job_mapping(job) for job in result.jobs],
         "jobs_returned": len(result.jobs),
         "recipe_path": result.recipe_path,
         "recipe_source_name": result.recipe_source_name,
@@ -816,7 +811,7 @@ def _source_test_payload(source, result, readiness) -> dict[str, object]:
     }
 
 
-def _dry_run_job_mapping(job) -> dict[str, object]:
+def _source_test_job_mapping(job) -> dict[str, object]:
     return {
         "title": job.title,
         "url": job.url,

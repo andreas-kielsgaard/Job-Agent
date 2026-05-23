@@ -78,7 +78,7 @@ def test_local_auto_recipe_workflow_end_to_end_without_execution_enablement(proj
     assert health.health_status == "good"
     assert status.latest_approved_recipe_path == "sources/recipes/experimental/eursap-jobs.yaml"
     assert status.approved_matches_source_recipe_path is True
-    assert status.execution_entry_exists is False
+    assert status.execution_entry_exists is True
     assert status.execution_enabled is False
     assert _read_optional(project_root / "sources" / "recruiting-sites.yaml") == before_execution_config
 
@@ -153,7 +153,7 @@ def test_recipe_generation_status_cli_prints_workflow_state(capsys, project_root
     assert "Calibration artifacts: 1" in output
     assert "Candidates: pending=0, approved=1, rejected=0" in output
     assert "Source health: good" in output
-    assert "Execution enabled: False" in output
+    assert "Daily-run enabled: False" in output
     assert "does not mutate anything" in output
 
 

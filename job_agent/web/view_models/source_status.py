@@ -31,7 +31,7 @@ def build_source_page_status(
         "primary_action": None,
         "secondary_action": {"type": "link", "label": "Edit settings", "href": "#source-settings"},
         "preview_label": _status_label(source.health.health_status),
-        "dry_run_label": _status_label(readiness.readiness_status),
+        "source_test_label": _status_label(readiness.readiness_status),
         "automation_label": "Included" if execution_enabled else "Prepared but off" if execution_entry else "Not included",
         "blockers": [],
     }
@@ -58,7 +58,7 @@ def build_source_page_status(
                 "badge": "Manual",
                 "badge_class": "high",
                 "preview_label": "Not needed",
-                "dry_run_label": "Not needed",
+                "source_test_label": "Not needed",
                 "automation_label": "Manual only",
             }
         )
@@ -70,7 +70,7 @@ def build_source_page_status(
                 "badge": "Local file",
                 "badge_class": "high",
                 "preview_label": "Not needed",
-                "dry_run_label": "Not needed",
+                "source_test_label": "Not needed",
                 "automation_label": "Configured locally",
             }
         )

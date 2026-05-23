@@ -12,11 +12,11 @@
 <div class="panel running-panel">
   <h2 id="test-status-title">Starting source test</h2>
   <p class="muted">This runs the configured source the way the daily run would, but does not save job packages, mark jobs as seen, or include the source in the daily run.</p>
-  <p class="muted" id="source-test-running-note">Preparing the configured source and recipe.</p>
+  <p class="muted" id="source-test-running-note">Preparing the configured source and reading plan.</p>
   {% if not execution_entry %}
-  <p><span class="badge low">No daily-run entry is prepared for this source yet.</span></p>
+  <p><span class="badge low">No daily-run projection is prepared for this source yet.</span></p>
   {% elif force_disabled %}
-  <p><span class="badge medium">Testing while the daily-run entry is disabled.</span></p>
+  <p><span class="badge medium">Testing while the source is excluded from the daily run.</span></p>
   {% endif %}
   <ol class="progress-steps" id="source-test-steps">
     <li class="active">Resolve configured source and selected recipe</li>

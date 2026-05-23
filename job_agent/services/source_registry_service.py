@@ -304,6 +304,24 @@ class SourceRegistryService:
             notes=current.notes,
         )
 
+    def set_enabled(self, source_id: str, enabled: bool) -> SourceRegistryEntry:
+        self.ensure_registry()
+        data = read_yaml(self.path, {"sources": []})
+        sources = data.get("sources", []) if isinstance(data, dict) else []
+        for item in sources:
+            if not isinstance(item, dict) or item.get("id") != source_id:
+                continue
+            if enabled and _normalize_status(str(item.get("status") or "")) == "archived":
+                raise ValueError("Archived sources cannot be enabled.")
+            item["enabled"] = bool(enabled)
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            write_yaml(self.path, data)
+            updated = self.get_source(source_id)
+            if not updated:
+                raise KeyError(f"Source not found after update: {source_id}")
+            return updated
+        raise KeyError(f"Source not found: {source_id}")
+
     def adopt_recipe_path(self, source_id: str, recipe_path: str, note: str = "") -> SourceRegistryEntry:
         self.ensure_registry()
         data = read_yaml(self.path, {"sources": []})
