@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="source-detail-header">
+  <div>
+    <p class="eyebrow">Sources</p>
+    <h1>Add Source</h1>
+    <p class="muted">Save the job-board page first. The app will help you learn, review, and test it before it can join automatic job checks.</p>
+  </div>
+  <a class="button light" href="/sources">Back to sources</a>
+</div>
+
+{% if warning %}
+<div class="panel"><span class="badge low">{{ warning }}</span></div>
+{% endif %}
+
+<div class="panel">
+  <h2>Source Details</h2>
+  <p class="muted">Adding a source does not fetch it or include it in automatic job checks. It only creates a setup entry.</p>
+  <form method="post" action="/sources/new">
+    <div class="form-grid">
+      <div>
+        <label>Source URL</label>
+        <input name="url" value="{{ url }}" placeholder="https://example.com/jobs" required autofocus>
+      </div>
+      <div>
+        <label>Display name</label>
+        <input name="name" value="{{ name }}" placeholder="Leave blank to infer from the URL">
+      </div>
+    </div>
+    <label>Notes</label>
+    <textarea name="notes" class="compact-textarea" placeholder="Why this source is worth reviewing, region, role type, login concerns, or other context">{{ notes }}</textarea>
+    <details class="diagnostic-panel">
+      <summary>I already know the reading plan</summary>
+      <p class="muted">Most new sources should leave this alone and use Learn source after saving.</p>
+      <label>Existing reading plan</label>
+      <select name="recipe_path">
+        <option value="">No reading plan yet</option>
+        {% for option in recipe_options %}
+        <option value="{{ option.value }}" {% if recipe_path == option.value %}selected{% endif %}>{{ option.label }}</option>
+        {% endfor %}
+      </select>
+    </details>
+    <div class="form-actions action-row">
+      <button type="submit" class="button">Save source</button>
+      <a class="button light" href="/sources">Cancel</a>
+    </div>
+  </form>
+</div>
+
+<div class="panel">
+  <h2>What Happens Next</h2>
+  <div class="source-proof-grid">
+    <div>
+      <span>1. Save</span>
+      <strong>Source only</strong>
+      <p>The source starts as a setup entry and is not included in daily runs.</p>
+    </div>
+    <div>
+      <span>2. Learn</span>
+      <strong>Reading plan</strong>
+      <p>The app inspects a small sample and creates rules you can review.</p>
+    </div>
+    <div>
+      <span>3. Test</span>
+      <strong>Safe run</strong>
+      <p>Verify the source without saving jobs before enabling anything automatic.</p>
+    </div>
+  </div>
+</div>
+{% endblock %}

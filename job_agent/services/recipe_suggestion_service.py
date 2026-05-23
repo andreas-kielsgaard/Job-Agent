@@ -1,17 +1,22 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
 import yaml
+from bs4 import BeautifulSoup
 
 from job_agent.config import ROOT
+from job_agent.services.extraction_quality import job_url_quality
+from job_agent.services.recipe_calibration_service import classify_recipe_field_label, label_unsupported_reason
 from job_agent.services.job_board_recipe_service import (
     check_recipe_against_html,
     extract_job_detail_from_html,
     job_board_recipe_from_mapping,
+    _selectors,
 )
 from job_agent.services.llm_service import LlmService
 
@@ -111,6 +116,8 @@ def suggest_recipe_from_artifact(
         start_url=start_url,
         existing_recipe_path=existing_recipe_path,
     )
+    if no_evidence := _no_recipe_evidence_result(evidence):
+        return no_evidence
     deterministic = _deterministic_suggestion_result(evidence)
     client = llm_client or LlmServiceRecipeSuggestionClient(root)
     prompt = build_recipe_suggestion_prompt(evidence)
@@ -142,6 +149,17 @@ def suggest_recipe_with_refinement(
         start_url=start_url,
         existing_recipe_path=existing_recipe_path,
     )
+    if no_evidence := _no_recipe_evidence_result(evidence):
+        attempt = RecipeRefinementAttempt(
+            attempt_number=1,
+            suggested_recipe_yaml="",
+            schema_valid=False,
+            validation_errors=list(no_evidence.validation_errors),
+            quality_status="poor",
+            quality_warnings=list(no_evidence.warnings),
+            revision_reason="Calibration evidence did not contain a repeated job listing or detail-page sample.",
+        )
+        return RecipeRefinementResult(final_result=no_evidence, attempts=[attempt], accepted=False)
     client = llm_client or LlmServiceRecipeSuggestionClient(root)
     attempts: list[RecipeRefinementAttempt] = []
     final_result: RecipeSuggestionResult | None = None
@@ -236,6 +254,10 @@ def evaluate_suggestion_against_artifact(result: RecipeSuggestionResult) -> Reci
         quality_status = "poor"
         warnings.append("No unique job URLs were extracted.")
         revision_reason = "Recipe extracted no unique URLs."
+    elif _all_extracted_urls_are_non_jobs(quality):
+        quality_status = "poor"
+        warnings.append("Extracted non-job URLs pointing to files, assets, legal pages, or other non-job pages.")
+        revision_reason = "Recipe extracted non-job URLs."
     elif quality.generic_title_count >= quality.candidate_count:
         quality_status = "poor"
         warnings.append("All extracted titles look generic.")
@@ -243,6 +265,12 @@ def evaluate_suggestion_against_artifact(result: RecipeSuggestionResult) -> Reci
     elif quality.average_description_length < 40 and not detail_path.exists():
         quality_status = "warning"
         warnings.append("Average description length is low; verify the card selector captures enough text.")
+
+    semantic_warnings = _semantic_recipe_warnings(recipe, result.artifact_dir)
+    if semantic_warnings:
+        quality_status = "poor"
+        warnings.extend(semantic_warnings)
+        revision_reason = revision_reason or "Recipe selectors contradict visible page labels."
 
     if detail_path.exists():
         detail_report = _read_json(result.artifact_dir / "selector-report.json")
@@ -326,6 +354,9 @@ def load_recipe_suggestion_evidence(
         "detail_sample_captured": bool(selector_report.get("detail_sample_captured")) if isinstance(selector_report, dict) else False,
         "detail_visible_text_sample": detail_visible_text,
         "recipe_blueprint": selector_report.get("recipe_blueprint", {}) if isinstance(selector_report, dict) else {},
+        "field_observations": (selector_report.get("recipe_blueprint", {}) or {}).get("field_observations", {})
+        if isinstance(selector_report, dict)
+        else {},
         "visible_text_sample": visible_text,
         "candidate_elements_sample": candidate_html,
         "summary": summary,
@@ -354,6 +385,9 @@ def build_recipe_suggestion_prompt(evidence: RecipeSuggestionEvidence) -> str:
         "login/session/cookie handling, hidden endpoint assumptions, or network/API discovery.\n"
         "A deterministic recipe_blueprint may be included. Prefer preserving selectors from that blueprint when "
         "the local evidence supports them; revise only when the evidence contradicts it.\n"
+        "Use table headers and detail label/value observations to map fields semantically. Do not map `Category` "
+        "to workload, `Application deadline` or `Closing date` to posted_date, or `End date` to start_date. "
+        "If the schema lacks a matching report field, omit that selector and mention the unsupported field.\n"
         "Include pagination selectors when visible evidence shows page/next links. Use detail.follow only when "
         "a detail sample URL or detail sample text justifies job-detail enrichment.\n"
         "Prefer selectors and regex patterns visible in the local evidence. If automation is not recommended, "
@@ -383,6 +417,9 @@ def build_recipe_refinement_prompt(evidence: RecipeSuggestionEvidence, attempt: 
         "The YAML may use only this schema: source_name, start_url, mode, listing, pagination, accept, reject, "
         "patterns, limits, detail. Do not include Python code, browser scripts, arbitrary adapters, "
         "login/session/cookie handling, hidden endpoint assumptions, or network/API discovery.\n"
+        "Use visible labels as ground truth: Category is not workload, Application deadline/Closing date is not "
+        "posted_date, and End date is not start_date. Omit unsupported fields instead of forcing them into a "
+        "nearby report field.\n"
         "Include pagination selectors when visible evidence shows page/next links.\n"
         "Do not assume access to any page beyond the saved local artifact.\n\n"
         f"Evidence JSON:\n{json.dumps(evidence.prompt_payload, ensure_ascii=False, indent=2)}\n\n"
@@ -436,6 +473,43 @@ def _deterministic_suggestion_result(evidence: RecipeSuggestionEvidence) -> Reci
     )
 
 
+def _all_extracted_urls_are_non_jobs(quality) -> bool:
+    candidates = list(getattr(quality, "candidates", []) or [])
+    if not candidates:
+        return False
+    return all(job_url_quality(str(getattr(candidate, "url", "") or "")) == "non_job" for candidate in candidates)
+
+
+def _no_recipe_evidence_result(evidence: RecipeSuggestionEvidence) -> RecipeSuggestionResult | None:
+    blueprint = evidence.prompt_payload.get("recipe_blueprint")
+    if not isinstance(blueprint, dict):
+        return None
+    if blueprint.get("status") != "not_recommended":
+        return None
+    warnings = list(evidence.warnings) + _list_value(blueprint.get("warnings"))
+    warnings.append(
+        "The captured page did not expose repeated job cards or a job-detail link. "
+        "Try a browser-rendered capture if the job list is loaded by JavaScript."
+    )
+    return RecipeSuggestionResult(
+        source_name=evidence.source_name,
+        start_url=evidence.start_url,
+        artifact_dir=evidence.artifact_dir,
+        suggested_recipe_yaml="",
+        explanation=(
+            "The saved calibration artifact did not contain enough job-list evidence to generate a reading plan."
+        ),
+        confidence="low",
+        assumptions=[],
+        warnings=warnings,
+        evidence_summary=evidence.evidence_summary,
+        selected_strategy="not_recommended",
+        referenced_artifact_files=evidence.referenced_artifact_files,
+        validation_errors=["No stable repeated listing card selector was found."],
+        schema_valid=False,
+    )
+
+
 def validate_suggested_recipe_yaml(value: str) -> list[str]:
     if not value.strip():
         return ["suggested_recipe_yaml is empty."]
@@ -476,6 +550,122 @@ def _suggestion_result_from_response(evidence: RecipeSuggestionEvidence, raw_res
 
 def _attempt_is_acceptable(attempt: RecipeRefinementAttempt) -> bool:
     return attempt.schema_valid and attempt.quality_status in {"good", "warning"}
+
+
+def _semantic_recipe_warnings(recipe, artifact_dir: Path) -> list[str]:
+    warnings: list[str] = []
+    page_path = artifact_dir / "page.html"
+    if page_path.exists():
+        page_html = page_path.read_text(encoding="utf-8", errors="replace")
+        warnings.extend(_listing_label_warnings(recipe, page_html))
+    detail_path = artifact_dir / "detail-sample.html"
+    if detail_path.exists():
+        detail_html = detail_path.read_text(encoding="utf-8", errors="replace")
+        warnings.extend(_detail_label_warnings(recipe, detail_html))
+    return warnings
+
+
+def _listing_label_warnings(recipe, html: str) -> list[str]:
+    soup = BeautifulSoup(html, "html.parser")
+    cards = soup.select(recipe.listing.card_selector)
+    if not cards or cards[0].name != "tr":
+        return []
+    headers = _table_headers_for_row(cards[0])
+    if not headers:
+        return []
+    warnings: list[str] = []
+    selector_fields = {
+        "location": recipe.listing.location_selector,
+        "remote": recipe.listing.remote_selector,
+        "rate": recipe.listing.rate_selector,
+        "workload": recipe.listing.workload_selector,
+        "posted_date": recipe.listing.posted_date_selector,
+        "start_date": recipe.listing.start_date_selector,
+    }
+    for field_name, selector_value in selector_fields.items():
+        for selector in _selectors(selector_value):
+            column = _td_column_index(selector)
+            if column is None or column < 1 or column > len(headers):
+                continue
+            label = headers[column - 1]
+            expected_key = classify_recipe_field_label(label)
+            expected_field = _field_name_from_selector_key(expected_key)
+            unsupported_reason = label_unsupported_reason(label)
+            if unsupported_reason:
+                warnings.append(
+                    f"listing.{field_name}_selector points at column {column} labelled `{label}`. {unsupported_reason}"
+                )
+            elif expected_field and expected_field != field_name:
+                warnings.append(
+                    f"listing.{field_name}_selector points at column {column} labelled `{label}`, "
+                    f"which matches `{expected_field}`."
+                )
+    return warnings
+
+
+def _detail_label_warnings(recipe, html: str) -> list[str]:
+    soup = BeautifulSoup(html, "html.parser")
+    warnings: list[str] = []
+    selector_fields = {
+        "location": recipe.detail.location_selector,
+        "remote": recipe.detail.remote_selector,
+        "rate": recipe.detail.rate_selector,
+        "workload": recipe.detail.workload_selector,
+        "posted_date": recipe.detail.posted_date_selector,
+        "start_date": recipe.detail.start_date_selector,
+    }
+    for field_name, selector_value in selector_fields.items():
+        for selector in _selectors(selector_value):
+            match = soup.select_one(selector)
+            if not match:
+                continue
+            label = _leading_label(match.get_text(" ", strip=True))
+            if not label:
+                continue
+            expected_key = classify_recipe_field_label(label)
+            expected_field = _field_name_from_selector_key(expected_key)
+            unsupported_reason = label_unsupported_reason(label)
+            if unsupported_reason:
+                warnings.append(f"detail.{field_name}_selector reads `{label}`. {unsupported_reason}")
+            elif expected_field and expected_field != field_name:
+                warnings.append(
+                    f"detail.{field_name}_selector reads `{label}`, which matches `{expected_field}`."
+                )
+    return warnings
+
+
+def _table_headers_for_row(row) -> list[str]:
+    cells = row.find_all("td", recursive=False)
+    table = row.find_parent("table")
+    if not cells or not table:
+        return []
+    header_rows = table.select("thead tr")
+    if not header_rows:
+        header_rows = [candidate for candidate in table.find_all("tr") if candidate.find("th")]
+    headers: list[str] = []
+    for header_row in header_rows:
+        candidate_headers = [cell.get_text(" ", strip=True) for cell in header_row.find_all("th", recursive=False)]
+        if len(candidate_headers) >= len(headers):
+            headers = candidate_headers
+    if len(headers) < len(cells):
+        headers.extend([""] * (len(cells) - len(headers)))
+    return headers[: len(cells)]
+
+
+def _td_column_index(selector: str) -> int | None:
+    match = re.search(r"td:nth-of-type\((\d+)\)", selector)
+    return int(match.group(1)) if match else None
+
+
+def _field_name_from_selector_key(selector_key: str) -> str:
+    return selector_key.removesuffix("_selector") if selector_key else ""
+
+
+def _leading_label(text: str) -> str:
+    if ":" not in text:
+        return ""
+    label = text.split(":", 1)[0].strip()
+    return label if 0 < len(label) <= 40 else ""
 
 
 def _candidate_summaries(selector_report: dict) -> list[dict]:
@@ -533,6 +723,7 @@ def _recipe_schema_summary() -> dict:
             "rate_selector",
             "workload_selector",
             "posted_date_selector",
+            "start_date_selector",
             "description_selector",
         ],
         "pattern_fields": [

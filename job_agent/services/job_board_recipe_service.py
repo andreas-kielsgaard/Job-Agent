@@ -7,7 +7,7 @@ from collections.abc import Callable
 from dataclasses import MISSING, dataclass, field
 from pathlib import Path
 from typing import Any
-from urllib.parse import urljoin
+from urllib.parse import urldefrag, urljoin
 
 import requests
 import yaml
@@ -32,6 +32,7 @@ class ListingRecipe:
     rate_selector: SelectorValue = ""
     workload_selector: SelectorValue = ""
     posted_date_selector: SelectorValue = ""
+    start_date_selector: SelectorValue = ""
     description_selector: SelectorValue = ""
 
 
@@ -332,6 +333,7 @@ def _extract_jobs_with_recipe_with_stats(
         seen_urls.add(url)
 
         posted_date = _select_text(card, recipe.listing.posted_date_selector)
+        start_date = _select_text(card, recipe.listing.start_date_selector) or pattern_values.get("start_date")
         job = Job(
             title=title,
             company=_select_text(card, recipe.listing.company_selector) or "Unknown",
@@ -341,7 +343,7 @@ def _extract_jobs_with_recipe_with_stats(
             location=_select_text(card, recipe.listing.location_selector) or pattern_values.get("location") or "Not listed",
             remote=_select_text(card, recipe.listing.remote_selector) or pattern_values.get("remote") or "Not listed",
             rate=_select_text(card, recipe.listing.rate_selector) or pattern_values.get("rate") or "Not listed",
-            start_date=pattern_values.get("start_date") or "Not listed",
+            start_date=start_date or "Not listed",
             workload=(
                 _select_text(card, recipe.listing.workload_selector)
                 or pattern_values.get("workload")
@@ -717,24 +719,26 @@ def find_pagination_links(html: str, base_url: str, recipe: JobBoardRecipe) -> l
     next_urls: set[str] = set()
     for soup in soups:
         next_urls.update(_selected_urls(soup, recipe.pagination.next_selector, base_url))
+    next_url_keys = {_pagination_url_key(url) for url in next_urls}
     links: list[PaginationLink] = []
     seen_urls: set[str] = set()
-    for soup in soups:
-        for selector in selectors:
+    for selector in selectors:
+        for soup in soups:
             for match in soup.select(selector):
                 href = match.get("href")
                 if not href:
                     continue
                 url = urljoin(base_url, str(href).strip())
-                if url in seen_urls:
+                url_key = _pagination_url_key(url)
+                if url_key in seen_urls:
                     continue
-                seen_urls.add(url)
+                seen_urls.add(url_key)
                 label = match.get_text(" ", strip=True) or url
                 links.append(
                     PaginationLink(
                         label=label,
                         url=url,
-                        is_next=url in next_urls or _looks_like_next_link(label, match),
+                        is_next=url_key in next_url_keys or _looks_like_next_link(label, match),
                     )
                 )
     return links
@@ -896,17 +900,35 @@ def _fetch_pagination_job_pages(
 
 def _pagination_urls_to_fetch(links: list[PaginationLink], max_pages: int) -> list[str]:
     additional_page_count = max(0, max_pages - 1)
-    ordered = sorted(links, key=lambda link: (not link.is_next, link.url))
+    ordered = sorted(links, key=_pagination_sort_key)
     urls: list[str] = []
     seen: set[str] = set()
     for link in ordered:
-        if link.url in seen:
+        url_key = _pagination_url_key(link.url)
+        if url_key in seen:
             continue
-        seen.add(link.url)
+        seen.add(url_key)
         urls.append(link.url)
         if len(urls) >= additional_page_count:
             break
     return urls
+
+
+def _pagination_sort_key(link: PaginationLink) -> tuple[bool, int, str]:
+    page_number = _page_number_from_url_or_label(link.url, link.label)
+    return (not link.is_next, page_number or 1_000_000, link.url)
+
+
+def _pagination_url_key(url: str) -> str:
+    return urldefrag(url).url
+
+
+def _page_number_from_url_or_label(url: str, label: str) -> int:
+    match = re.search(r"(?:[?&]pagenr=|/page/)(\d+)", url)
+    if match:
+        return int(match.group(1))
+    stripped = label.strip()
+    return int(stripped) if stripped.isdigit() else 0
 
 
 def _pagination_trace_detail(
@@ -1105,6 +1127,7 @@ def _expected_report_field_sources(recipe: JobBoardRecipe) -> dict[str, str]:
         "rate": recipe.listing.rate_selector,
         "workload": recipe.listing.workload_selector,
         "posted_date": recipe.listing.posted_date_selector,
+        "start_date": recipe.listing.start_date_selector,
         "description": recipe.listing.description_selector,
     }
     for field_name, selector in selector_fields.items():
@@ -1299,33 +1322,34 @@ def _fetch_rendered_html(url: str, timeout_seconds: int) -> tuple[str, str, list
 def _apply_detail_html(job: Job, html: str, recipe: JobBoardRecipe) -> dict[str, str]:
     soup = BeautifulSoup(html, "html.parser")
     schema_values = _extract_jobposting_json_ld(soup) if recipe.detail.use_json_ld else {}
-    detail_root = soup.select_one(".job-single") or soup.body or soup
+    detail_root = _detail_root(soup)
     pattern_values = _extract_pattern_values(detail_root.get_text(" ", strip=True), recipe.patterns)
     found_values = {
-        "title": _select_text(soup, recipe.detail.title_selector)
+        "title": _select_detail_text(detail_root, soup, recipe.detail.title_selector)
         or schema_values.get("title", "")
         or pattern_values.get("title", ""),
-        "description": _select_text(soup, recipe.detail.description_selector) or schema_values.get("description", ""),
-        "location": _select_text(soup, recipe.detail.location_selector)
+        "description": _select_detail_text(detail_root, soup, recipe.detail.description_selector)
+        or schema_values.get("description", ""),
+        "location": _select_detail_text(detail_root, soup, recipe.detail.location_selector)
         or schema_values.get("location", "")
         or pattern_values.get("location", ""),
-        "remote": _select_text(soup, recipe.detail.remote_selector)
+        "remote": _select_detail_text(detail_root, soup, recipe.detail.remote_selector)
         or schema_values.get("remote", "")
         or pattern_values.get("remote", ""),
-        "rate": _select_text(soup, recipe.detail.rate_selector)
+        "rate": _select_detail_text(detail_root, soup, recipe.detail.rate_selector)
         or schema_values.get("rate", "")
         or pattern_values.get("rate", ""),
-        "workload": _select_text(soup, recipe.detail.workload_selector)
+        "workload": _select_detail_text(detail_root, soup, recipe.detail.workload_selector)
         or schema_values.get("workload", "")
         or pattern_values.get("workload", "")
         or pattern_values.get("work_type", ""),
-        "posted_date": _select_text(soup, recipe.detail.posted_date_selector)
+        "posted_date": _select_detail_text(detail_root, soup, recipe.detail.posted_date_selector)
         or schema_values.get("posted_date", "")
         or pattern_values.get("posted_date", ""),
-        "start_date": _select_text(soup, recipe.detail.start_date_selector)
+        "start_date": _select_detail_text(detail_root, soup, recipe.detail.start_date_selector)
         or schema_values.get("start_date", "")
         or pattern_values.get("start_date", ""),
-        "languages": _select_text(soup, recipe.detail.language_selector)
+        "languages": _select_detail_text(detail_root, soup, recipe.detail.language_selector)
         or schema_values.get("language", "")
         or pattern_values.get("language", ""),
     }
@@ -1355,6 +1379,23 @@ def _apply_detail_html(job: Job, html: str, recipe: JobBoardRecipe) -> dict[str,
     if found_values and "Detail page fetched by recipe; verify details manually." not in job.extraction_notes:
         job.extraction_notes.append("Detail page fetched by recipe; verify details manually.")
     return found_values
+
+
+def _detail_root(soup: BeautifulSoup) -> Tag:
+    for selector in [".job-single", ".project-show-single-page"]:
+        match = soup.select_one(selector)
+        if match:
+            return match
+    detail_body = soup.select_one(".project-body")
+    if detail_body:
+        modal = detail_body.find_parent(class_="modal")
+        if isinstance(modal, Tag):
+            return modal
+    return soup.body or soup
+
+
+def _select_detail_text(detail_root: Tag, soup: BeautifulSoup, selector: SelectorValue) -> str:
+    return _select_text(detail_root, selector) or _select_text(soup, selector)
 
 
 def _selector_fields(data: dict[str, Any], cls: type) -> dict[str, Any]:

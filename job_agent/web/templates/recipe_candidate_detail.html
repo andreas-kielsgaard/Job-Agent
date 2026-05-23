@@ -1,7 +1,11 @@
 {% extends "base.html" %}
 {% block content %}
-<div class="row">
-  <h1 style="margin-right:auto;">Recipe Candidate</h1>
+<div class="source-detail-header">
+  <div>
+    <p class="eyebrow">Reading plan</p>
+    <h1>Review Reading Plan</h1>
+    <p class="muted">{{ candidate.source_name }}</p>
+  </div>
   {% if source %}
   <a class="button light" href="/sources/{{ source.id }}">Back to {{ source.name }}</a>
   {% else %}
@@ -9,145 +13,135 @@
   {% endif %}
 </div>
 
-<div class="panel">
-  <h2>Review Summary</h2>
-  <p class="muted">This is a pending/rejected review object only. It is not an active recipe and does not affect daily-run execution.</p>
-  <div class="grid">
-    <div class="stat"><span>Candidate id</span><strong>{{ candidate.candidate_id }}</strong></div>
-    <div class="stat"><span>Status</span><strong>{{ candidate.status }}</strong></div>
-    <div class="stat"><span>Created</span><strong>{{ candidate.created_at }}</strong></div>
-    <div class="stat"><span>Updated</span><strong>{{ candidate.updated_at }}</strong></div>
-    <div class="stat"><span>Source</span><strong>{{ candidate.source_name }}</strong></div>
-    <div class="stat"><span>Schema valid</span><strong>{{ "Yes" if candidate.schema_valid else "No" }}</strong></div>
-    <div class="stat"><span>Strategy</span><strong>{{ candidate.selected_strategy or "n/a" }}</strong></div>
-    <div class="stat"><span>Confidence</span><strong>{{ candidate.confidence or "n/a" }}</strong></div>
+<div class="panel source-status-panel">
+  <div class="source-status-main">
+    <span class="badge {{ 'high' if candidate_can_be_used or candidate.status == 'approved' else 'medium' }}">{{ "Ready for review" if candidate_can_be_used else ("Needs better sample" if candidate.status == "pending" else candidate.status|replace("_", " ")|title) }}</span>
+    <h2>{% if candidate_can_be_used %}Use this plan only if the preview matches the page{% elif candidate.status == "pending" %}No usable reading plan was generated{% elif candidate.status == "approved" %}Reading plan saved{% elif candidate.status == "rejected" %}Reading plan discarded{% else %}Reading plan {{ candidate.status }}{% endif %}</h2>
+    <p class="muted">{% if candidate_can_be_used %}This plan is not included in the daily run by itself. It must be selected for the source, reviewed, and tested safely first.{% elif candidate.status == "pending" %}This saved attempt did not produce selectable rules. Use it as evidence for what went wrong, then learn the source again with a better capture.{% else %}This plan is not included in the daily run by itself. It must be selected for the source, reviewed, and tested safely first.{% endif %}</p>
+    <div class="action-row">
+      {% if candidate_can_be_used %}
+      <form method="post" action="/recipe-candidates/{{ candidate.candidate_id }}/approve" class="inline-form">
+        {% if source %}<input type="hidden" name="source_id" value="{{ source.id }}">{% endif %}
+        <input type="hidden" name="recipe_path" value="{{ approval_recipe_path }}">
+        <button type="submit" class="button">Use this reading plan</button>
+      </form>
+      {% endif %}
+      {% if candidate.status == "pending" %}
+      <form method="post" action="/recipe-candidates/{{ candidate.candidate_id }}/reject" class="inline-form">
+        {% if source %}<input type="hidden" name="source_id" value="{{ source.id }}">{% endif %}
+        <input type="hidden" name="reason" value="Discarded from reading-plan review.">
+        <button type="submit" class="button light">Discard</button>
+      </form>
+      {% if not candidate_can_be_used and source %}
+      <form method="post" action="/sources/{{ source.id }}/reading-plan/learn" class="inline-form">
+        <button type="submit" class="button">Learn source again</button>
+      </form>
+      {% endif %}
+      {% elif candidate.status == "approved" and source and not candidate.adopted_at %}
+      <form method="post" action="/recipe-candidates/{{ candidate.candidate_id }}/adopt" class="inline-form">
+        <input type="hidden" name="source_id" value="{{ source.id }}">
+        <button type="submit" class="button">Use for this source</button>
+      </form>
+      {% endif %}
+    </div>
   </div>
-  <p><strong>Start URL:</strong> {{ candidate.start_url or "Not listed" }}</p>
-  <p><strong>Artifact:</strong> {{ candidate.artifact_dir }}</p>
-  {% if candidate.rejection_reason %}
-  <p><strong>Rejection reason:</strong> {{ candidate.rejection_reason }}</p>
-  {% endif %}
-  {% if candidate.approved_recipe_path %}
-  <p><strong>Approved recipe path:</strong> {{ candidate.approved_recipe_path }}</p>
-  <p><strong>Approved source id:</strong> {{ candidate.approved_source_id or "none" }}</p>
-  <p><strong>Preview saved:</strong> {{ "Yes" if candidate.preview_saved else "No" }}</p>
-  {% if candidate.adopted_at %}
-  <p><strong>Adopted by source:</strong> {{ candidate.adopted_source_id }} using {{ candidate.adopted_recipe_path }}</p>
-  {% endif %}
-  <p class="muted">Approval did not enable daily-run execution. Use source execution controls separately after review.</p>
-  {% endif %}
+  <div class="source-progress-grid">
+    <div>
+      <span>Local check</span>
+      <strong>{{ candidate.quality_status or ("Schema valid" if candidate.schema_valid else "Needs review") }}</strong>
+      <p>{{ candidate.extracted_job_count }} jobs, {{ candidate.useful_titles }} useful titles, {{ candidate.unique_urls }} unique URLs.</p>
+    </div>
+    <div>
+      <span>Confidence</span>
+      <strong>{{ candidate.confidence or "Not listed" }}</strong>
+      <p>{{ candidate.selected_strategy or "No strategy label saved." }}</p>
+    </div>
+    <div>
+      <span>Saved review</span>
+      <strong>{% if candidate.preview_saved %}Saved{% else %}Not saved{% endif %}</strong>
+      <p>{% if candidate.preview_saved %}{{ candidate.preview_extracted_job_count }} jobs extracted in approval preview.{% else %}Use the plan to save a review result for the source.{% endif %}</p>
+    </div>
+  </div>
 </div>
 
 <div class="panel">
-  <h2>Quality</h2>
+  <h2>What It Learned</h2>
+  {% if candidate.evidence_summary %}
+  <p class="muted">{{ candidate.evidence_summary }}</p>
+  {% endif %}
   <div class="grid">
-    <div class="stat"><span>Status</span><strong>{{ candidate.quality_status or "n/a" }}</strong></div>
     <div class="stat"><span>Jobs extracted</span><strong>{{ candidate.extracted_job_count }}</strong></div>
     <div class="stat"><span>Useful titles</span><strong>{{ candidate.useful_titles }}</strong></div>
     <div class="stat"><span>Generic labels</span><strong>{{ candidate.generic_labels }}</strong></div>
     <div class="stat"><span>Unique URLs</span><strong>{{ candidate.unique_urls }}</strong></div>
-    <div class="stat"><span>Avg description</span><strong>{{ candidate.average_description_length }}</strong></div>
-    <div class="stat"><span>Refinement used</span><strong>{{ "Yes" if candidate.refinement_used else "No" }}</strong></div>
-    <div class="stat"><span>Refinement accepted</span><strong>{{ "Yes" if candidate.refinement_accepted else "No" }}</strong></div>
-    <div class="stat"><span>Preview jobs</span><strong>{{ candidate.preview_extracted_job_count }}</strong></div>
-    <div class="stat"><span>Preview useful titles</span><strong>{{ candidate.preview_useful_titles }}</strong></div>
-    <div class="stat"><span>Preview unique URLs</span><strong>{{ candidate.preview_unique_urls }}</strong></div>
+    <div class="stat"><span>Average description</span><strong>{{ candidate.average_description_length }}</strong></div>
+    <div class="stat"><span>Refinement</span><strong>{{ "Accepted" if candidate.refinement_accepted else ("Used" if candidate.refinement_used else "Not used") }}</strong></div>
   </div>
-  {% for error in candidate.validation_errors %}
-  <p class="muted">Validation error: {{ error }}</p>
-  {% endfor %}
-  {% for warning in candidate.quality_warnings %}
-  <p class="muted">Quality warning: {{ warning }}</p>
-  {% endfor %}
-  {% for warning in candidate.warnings %}
-  <p class="muted">Warning: {{ warning }}</p>
-  {% endfor %}
-  {% for warning in candidate.preview_warnings %}
-  <p class="muted">Preview warning: {{ warning }}</p>
-  {% endfor %}
-  {% for assumption in candidate.assumptions %}
-  <p class="muted">Assumption: {{ assumption }}</p>
-  {% endfor %}
+  {% set notes = candidate.validation_errors + candidate.quality_warnings + candidate.warnings + candidate.preview_warnings + candidate.assumptions %}
+  {% if notes %}
+  <h3>Review Notes</h3>
+  <ul>
+    {% for note in notes %}
+    <li>{{ note }}</li>
+    {% endfor %}
+  </ul>
+  {% endif %}
 </div>
 
+{% if candidate_can_be_used %}
+<details class="panel diagnostic-panel">
+  <summary>Save location and overwrite options</summary>
+  <p class="muted">The default save location is based on the source name. Change it only if you intentionally want to replace or create a different YAML file.</p>
+  <form method="post" action="/recipe-candidates/{{ candidate.candidate_id }}/approve">
+    {% if source %}<input type="hidden" name="source_id" value="{{ source.id }}">{% endif %}
+    <label>Save location</label>
+    <input type="text" name="recipe_path" value="{{ approval_recipe_path }}" required>
+    <label class="check"><input type="checkbox" name="overwrite" value="1"> Replace existing file at this location</label>
+    <button type="submit" class="button light">Use with these options</button>
+  </form>
+</details>
+{% endif %}
+
 {% if candidate.attempts %}
-<div class="panel">
-  <h2>Attempt History</h2>
+<details class="panel diagnostic-panel">
+  <summary>Generation attempts</summary>
   {% for attempt in candidate.attempts %}
   <div class="stat" style="margin:0.6rem 0;">
     <span>Attempt {{ attempt.attempt_number or attempt["attempt_number"] }}</span>
     <strong>{{ attempt.quality_status or attempt["quality_status"] }}</strong>
     <p class="muted">Schema valid: {{ attempt.schema_valid if attempt.schema_valid is defined else attempt["schema_valid"] }} | Jobs: {{ attempt.extracted_job_count or attempt["extracted_job_count"] }} | Useful titles: {{ attempt.useful_titles or attempt["useful_titles"] }} | URLs: {{ attempt.unique_urls or attempt["unique_urls"] }}</p>
-    {% for warning in attempt.quality_warnings or attempt["quality_warnings"] %}
-    <p class="muted">Quality warning: {{ warning }}</p>
-    {% endfor %}
     {% if attempt.revision_reason or attempt["revision_reason"] %}
     <p class="muted">Revision reason: {{ attempt.revision_reason or attempt["revision_reason"] }}</p>
     {% endif %}
   </div>
   {% endfor %}
-</div>
+</details>
 {% endif %}
 
-{% if candidate.status == "pending" %}
-<div class="panel">
-  <h2>Approve Candidate</h2>
-  <p class="muted">Approval writes the suggested YAML to a recipe file, previews it against local artifact page.html, and saves source health when a source id is supplied. It does not enable daily runs or edit sources/recruiting-sites.yaml.</p>
-  <form method="post" action="/recipe-candidates/{{ candidate.candidate_id }}/approve">
-    {% if source %}<input type="hidden" name="source_id" value="{{ source.id }}">{% endif %}
-    <label>Recipe path</label>
-    <input type="text" name="recipe_path" value="{{ approval_recipe_path }}" required>
-    <label class="check"><input type="checkbox" name="overwrite" value="1"> Overwrite existing recipe file</label>
-    <button type="submit" class="button">Approve candidate and preview recipe</button>
-  </form>
-</div>
-
-<div class="panel">
-  <h2>Reject Candidate</h2>
-  <form method="post" action="/recipe-candidates/{{ candidate.candidate_id }}/reject">
-    {% if source %}<input type="hidden" name="source_id" value="{{ source.id }}">{% endif %}
-    <label>Reason</label>
-    <input type="text" name="reason" placeholder="Why this candidate should not be promoted later">
-    <button type="submit" class="button light">Reject candidate</button>
-  </form>
-</div>
-{% else %}
-<div class="panel">
-  <h2>Approval</h2>
-  <p class="muted">This candidate is {{ candidate.status }} and cannot be approved from this review page.</p>
-</div>
-{% endif %}
-
-{% if candidate.status == "approved" and source %}
-<div class="panel">
-  <h2>Adopt For Source</h2>
-  <p class="muted">Adoption updates the source registry recipe_path to this approved recipe. It can optionally prepare a disabled daily-run entry, but it never enables daily-run execution.</p>
-  <form method="post" action="/recipe-candidates/{{ candidate.candidate_id }}/adopt">
-    <input type="hidden" name="source_id" value="{{ source.id }}">
-    <label class="check"><input type="checkbox" name="prepare_disabled_execution_entry" value="1"> Prepare disabled daily-run entry</label>
-    <button type="submit" class="button">Adopt approved recipe for this source</button>
-  </form>
-</div>
-{% endif %}
-
-<div class="panel">
-  <h2>Suggested YAML</h2>
+{% if candidate.suggested_recipe_yaml %}
+<details class="panel diagnostic-panel">
+  <summary>Generated YAML</summary>
   <pre class="copy-source">{{ candidate.suggested_recipe_yaml }}</pre>
-</div>
+</details>
+{% endif %}
 
-<div class="panel">
-  <h2>Useful Commands</h2>
-  {% if candidate.status == "pending" %}
-  <pre class="copy-source">python -m job_agent.cli approve-recipe-candidate {{ candidate.candidate_id }} --recipe-path {{ approval_recipe_path }}{% if source %} --source-id {{ source.id }}{% endif %}</pre>
-  {% endif %}
+<details class="panel diagnostic-panel">
+  <summary>Technical details</summary>
+  <div class="grid">
+    <div class="stat"><span>Plan id</span><strong>{{ candidate.candidate_id }}</strong></div>
+    <div class="stat"><span>Status</span><strong>{{ candidate.status }}</strong></div>
+    <div class="stat"><span>Created</span><strong>{{ candidate.created_at }}</strong></div>
+    <div class="stat"><span>Updated</span><strong>{{ candidate.updated_at }}</strong></div>
+    <div class="stat"><span>Schema valid</span><strong>{{ "Yes" if candidate.schema_valid else "No" }}</strong></div>
+    <div class="stat"><span>Artifact</span><strong>{{ candidate.artifact_dir }}</strong></div>
+  </div>
+  <p><strong>Start URL:</strong> {{ candidate.start_url or "Not listed" }}</p>
   {% if candidate.approved_recipe_path %}
-  {% if source %}
-  <pre class="copy-source">python -m job_agent.cli adopt-approved-recipe {{ candidate.candidate_id }} --source-id {{ source.id }}</pre>
+  <p><strong>Saved recipe path:</strong> {{ candidate.approved_recipe_path }}</p>
+  <p><strong>Approved source id:</strong> {{ candidate.approved_source_id or "none" }}</p>
   {% endif %}
-  <pre class="copy-source">python -m job_agent.cli test-recipe {{ candidate.approved_recipe_path }} {{ candidate.artifact_dir }}/page.html --base-url {{ candidate.start_url }}{% if candidate.approved_source_id %} --source-id {{ candidate.approved_source_id }}{% endif %}</pre>
-  {% if candidate.approved_source_id %}
-  <pre class="copy-source">python -m job_agent.cli dry-run-source {{ candidate.approved_source_id }}</pre>
+  {% if candidate.adopted_at %}
+  <p><strong>Used by source:</strong> {{ candidate.adopted_source_id }} using {{ candidate.adopted_recipe_path }}</p>
   {% endif %}
-  {% endif %}
-</div>
+</details>
 {% endblock %}

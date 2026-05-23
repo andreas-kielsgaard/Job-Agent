@@ -31,27 +31,27 @@ SOURCE_KIND_DEFINITIONS = [
     },
     {
         "value": "recipe",
-        "label": "Recipe-backed job board",
-        "description": "A public job-board URL paired with a recipe for structured extraction.",
+        "label": "Job board with reading plan",
+        "description": "A public job-board URL paired with rules for structured extraction.",
     },
 ]
 SOURCE_STATUS_DEFINITIONS = [
     {
         "value": "ready",
-        "label": "Ready",
-        "description": "Reviewed as a useful source. Daily runs still require a separate enabled execution entry.",
+        "label": "Reviewed",
+        "description": "Reviewed as a useful source. Daily runs still require explicit inclusion.",
         "badge": "high",
     },
     {
         "value": "testing",
-        "label": "Testing",
-        "description": "Available for preview and dry-run checks, but not yet trusted for normal unattended use.",
+        "label": "In setup",
+        "description": "Available for review and source tests, but not yet trusted for normal unattended use.",
         "badge": "medium",
     },
     {
         "value": "needs_review",
-        "label": "Needs review",
-        "description": "Needs human review before being treated as a trusted source.",
+        "label": "Needs setup",
+        "description": "Needs a reading plan, review, or source test before being treated as a trusted source.",
         "badge": "medium",
     },
     {
@@ -170,6 +170,53 @@ class SourceRegistryService:
 
     def get_source(self, source_id: str) -> SourceRegistryEntry | None:
         return next((source for source in self.list_sources() if source.id == source_id), None)
+
+    def add_source(
+        self,
+        *,
+        name: str,
+        url: str,
+        recipe_path: str = "",
+        notes: str = "",
+    ) -> SourceRegistryEntry:
+        normalized_url = _validate_public_source_url(url)
+        normalized_recipe_path = _validate_recipe_path(recipe_path, self.root)
+        source_name = name.strip() or _name_from_url(normalized_url)
+        source_id = self._unique_source_id(_slug(source_name) or "source")
+
+        for existing in self.list_sources():
+            if existing.url and _normalize_url(existing.url) == _normalize_url(normalized_url):
+                raise ValueError(f"Source already exists: {existing.name}")
+
+        self.ensure_registry()
+        data = read_yaml(self.path, {"sources": []})
+        if not isinstance(data, dict):
+            data = {"sources": []}
+        sources = data.setdefault("sources", [])
+        if not isinstance(sources, list):
+            sources = []
+            data["sources"] = sources
+
+        sources.append(
+            {
+                "id": source_id,
+                "name": source_name,
+                "kind": "recipe" if normalized_recipe_path else "job_board",
+                "status": "testing" if normalized_recipe_path else "needs_review",
+                "url": normalized_url,
+                "recipe_path": normalized_recipe_path,
+                "added_at": _utc_now(),
+                "enabled": False,
+                "notes": notes.strip(),
+                "tags": ["recipe"] if normalized_recipe_path else [],
+            }
+        )
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        write_yaml(self.path, data)
+        created = self.get_source(source_id)
+        if not created:
+            raise KeyError(f"Source not found after create: {source_id}")
+        return created
 
     def update_source(
         self,
@@ -360,6 +407,15 @@ class SourceRegistryService:
             matched = [package for package in packages if _package_matches_source(package, entry)]
             result[entry.id] = _stats_from_packages(matched)
         return result
+
+    def _unique_source_id(self, base_id: str) -> str:
+        existing_ids = {source.id for source in self.list_sources()}
+        if base_id not in existing_ids:
+            return base_id
+        suffix = 2
+        while f"{base_id}-{suffix}" in existing_ids:
+            suffix += 1
+        return f"{base_id}-{suffix}"
 
 
 def _default_sources() -> list[dict[str, Any]]:
@@ -643,6 +699,58 @@ def _same_domain_or_url(source_url: str, package_url: str) -> bool:
     source_path = source.path.rstrip("/")
     package_path = package.path.rstrip("/")
     return not source_path or package_path == source_path or package_path.startswith(f"{source_path}/")
+
+
+def _validate_public_source_url(value: str) -> str:
+    url = value.strip()
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise ValueError("Enter a public http(s) source URL.")
+    hostname = (parsed.hostname or "").lower()
+    if hostname in {"localhost", "127.0.0.1", "::1"} or hostname.endswith(".local"):
+        raise ValueError("Source URL must be a public job-board or recruiter page.")
+    return url
+
+
+def _validate_recipe_path(value: str, root: Path) -> str:
+    recipe_path = value.replace("\\", "/").strip()
+    if not recipe_path:
+        return ""
+    candidate = Path(recipe_path)
+    if not candidate.is_absolute():
+        candidate = root / candidate
+    try:
+        resolved = candidate.resolve()
+        recipes_root = (root / "sources" / "recipes").resolve()
+    except OSError as exc:
+        raise ValueError(f"Invalid recipe path: {value}") from exc
+    if resolved != recipes_root and recipes_root not in resolved.parents:
+        raise ValueError("Recipe path must stay under sources/recipes.")
+    if not resolved.exists():
+        raise ValueError(f"Recipe not found: {value}")
+    try:
+        return resolved.relative_to(root).as_posix()
+    except ValueError:
+        return resolved.as_posix()
+
+
+def _normalize_url(value: str) -> str:
+    parsed = _parsed_url(value)
+    if not parsed or not parsed.netloc:
+        return value.strip().rstrip("/")
+    host = _normalize_host(parsed.netloc)
+    path = parsed.path.rstrip("/")
+    query = f"?{parsed.query}" if parsed.query else ""
+    return f"{parsed.scheme.lower()}://{host}{path}{query}"
+
+
+def _name_from_url(value: str) -> str:
+    parsed = _parsed_url(value)
+    host = _normalize_host(parsed.netloc if parsed else "")
+    if not host:
+        return "New Source"
+    label = host.split(".")[0].replace("-", " ").replace("_", " ").strip()
+    return label.title() if label else "New Source"
 
 
 def _parsed_url(value: str):

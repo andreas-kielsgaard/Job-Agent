@@ -13,6 +13,7 @@ from job_agent.services.recipe_suggestion_service import (
     RecipeRefinementResult,
     RecipeSuggestionResult,
 )
+from job_agent.services.source_registry_service import SourceRegistryService
 
 VALID_RECIPE_YAML = """source_name: Eursap Jobs
 start_url: https://eursap.eu/jobs
@@ -32,11 +33,10 @@ def test_source_detail_displays_recipe_generation_controls_and_artifacts(client:
     response = client.get("/sources/eursap-jobs")
 
     assert response.status_code == 200
-    assert "Generate or replace recipe" in response.text
-    assert "Generate recipe draft" in response.text
+    assert "Advanced: regenerate or inspect plans" in response.text
+    assert "Generate plan from saved sample" in response.text
     assert "eursap-artifact" in response.text
     assert "a.looking__card" in response.text
-    assert "--save-candidate" in response.text
 
 
 def test_generate_candidate_plain_suggestion_saves_pending_candidate(
@@ -134,6 +134,30 @@ def test_generate_candidate_handles_llm_unavailable_as_redirect_warning(
     assert not RecipeCandidateStore(project_root).list_candidates()
 
 
+def test_learn_source_uses_rendered_capture_by_default(
+    monkeypatch: pytest.MonkeyPatch, client: TestClient, project_root: Path
+) -> None:
+    source = SourceRegistryService(project_root).add_source(
+        name="Experis",
+        url="https://www.experis.pl/en/search?page=1&searchKeyword=SAP",
+    )
+    captured: dict[str, object] = {}
+
+    class RunService:
+        def start_from_source_capture(self, source_id: str, **kwargs):
+            captured.update(kwargs)
+            return {"run_id": "run-1"}
+
+    monkeypatch.setattr("job_agent.web.routers.sources.recipe_generation_run_service", lambda: RunService())
+
+    response = client.post(f"/sources/{source.id}/reading-plan/learn", follow_redirects=False)
+
+    assert response.status_code == 303
+    assert response.headers["location"] == f"/sources/{source.id}/recipe-generation/run-1"
+    assert captured["rendered"] is True
+    assert captured["capture_detail"] is True
+
+
 def test_generated_draft_recipe_is_available_in_follow_up_dropdowns(client: TestClient, project_root: Path) -> None:
     recipe_path = project_root / "output" / "recipe-generation-runs" / "example-run" / "suggested-recipe.yaml"
     recipe_path.parent.mkdir(parents=True, exist_ok=True)
@@ -169,8 +193,38 @@ def test_source_detail_displays_relevant_pending_and_rejected_candidates(
     assert response.status_code == 200
     assert pending.candidate_id in response.text
     assert rejected.candidate_id in response.text
-    assert "Draft recipes" in response.text
+    assert "Generated plans" in response.text
     assert "rejected" in response.text
+
+
+def test_source_detail_does_not_treat_unusable_attempt_as_reviewable_plan(
+    client: TestClient, project_root: Path
+) -> None:
+    artifact = _write_artifact(project_root)
+    source = SourceRegistryService(project_root).add_source(
+        name="Experis",
+        url="https://www.experis.pl/en/search?page=1&searchKeyword=SAP",
+    )
+    candidate = RecipeCandidateStore(project_root).save_candidate_from_suggestion(
+        RecipeSuggestionResult(
+            source_name="Experis",
+            start_url=source.url,
+            artifact_dir=artifact,
+            suggested_recipe_yaml="",
+            schema_valid=False,
+            validation_errors=["No stable repeated listing card selector was found."],
+            selected_strategy="not_recommended",
+            confidence="low",
+        )
+    )
+
+    response = client.get(f"/sources/{source.id}")
+
+    assert response.status_code == 200
+    assert "Teach the app how to read this source" in response.text
+    assert "Review generated reading plan" not in response.text
+    assert "Review latest generated plan" not in response.text
+    assert candidate.candidate_id in response.text
 
 
 def test_candidate_detail_page_shows_yaml_and_attempt_history(client: TestClient, project_root: Path) -> None:
@@ -180,7 +234,7 @@ def test_candidate_detail_page_shows_yaml_and_attempt_history(client: TestClient
     response = client.get(f"/recipe-candidates/{candidate.candidate_id}?source_id=eursap-jobs")
 
     assert response.status_code == 200
-    assert "Suggested YAML" in response.text
+    assert "Generated YAML" in response.text
     assert "a.looking__card" in response.text
     assert "Attempt 1" in response.text
     assert "Back to Eursap Jobs" in response.text

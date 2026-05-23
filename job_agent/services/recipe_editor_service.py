@@ -22,6 +22,7 @@ SELECTOR_FIELDS = [
     ("listing.rate_selector", "Rate", "Pay or rate text on the listing card.", False),
     ("listing.workload_selector", "Workload", "Contract type, full-time, or workload text.", False),
     ("listing.posted_date_selector", "Posted date", "Date text on the listing card.", False),
+    ("listing.start_date_selector", "Start date", "Start-date text on the listing card.", False),
     ("listing.description_selector", "Listing description", "Summary text on the listing card.", False),
     ("detail.title_selector", "Detail title", "Title on the detail page.", False),
     ("detail.description_selector", "Detail description", "Main description on the detail page.", False),

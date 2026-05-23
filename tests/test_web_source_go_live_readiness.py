@@ -18,8 +18,8 @@ def test_source_detail_shows_go_live_readiness_panel(client: TestClient) -> None
     response = client.get("/sources/eursap-jobs")
 
     assert response.status_code == 200
-    assert "Daily Run" in response.text
-    assert "The daily run is the scheduled job search across enabled sources" in response.text
+    assert "Safe Source Test" in response.text
+    assert "This verifies the full source flow without saving jobs" in response.text
 
 
 def test_web_dry_run_readiness_route_saves_readiness(

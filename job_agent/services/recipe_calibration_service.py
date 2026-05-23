@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urljoin, urlparse
 
-from bs4 import BeautifulSoup, Tag
+from bs4 import BeautifulSoup, NavigableString, Tag
 
 from job_agent.browser.playwright_probe import slugify_url
 from job_agent.config import ROOT
@@ -62,6 +62,45 @@ NOISE_TERMS = (
     "improve my cv",
     "contract staffing",
     "filter",
+    "reporting violations",
+    "terms of use",
+    "cookie policy",
+    "privacy policy",
+    "data protection officer",
+    "sitemap",
+    "newsletter",
+)
+NOISE_URL_FRAGMENTS = (
+    "/-/media/",
+    "/media/",
+    "/assets/",
+    "/static/",
+    "/privacy",
+    "/cookie",
+    "/terms",
+    "/sitemap",
+    "/accessibility",
+    "/contact",
+)
+NON_DETAIL_EXTENSIONS = (
+    ".pdf",
+    ".doc",
+    ".docx",
+    ".xls",
+    ".xlsx",
+    ".zip",
+    ".jpg",
+    ".jpeg",
+    ".png",
+    ".gif",
+    ".svg",
+    ".webp",
+    ".ico",
+    ".css",
+    ".js",
+    ".woff",
+    ".woff2",
+    ".ttf",
 )
 META_PATTERNS = (
     r"\bjob\s*id\b",
@@ -71,6 +110,23 @@ META_PATTERNS = (
     r"\b(remote|hybrid|onsite)\b",
     r"\b(contract|freelance|permanent)\b",
     r"(\bEUR\b|\bDKK\b|£|\$|/day|/hour)",
+)
+
+UNSUPPORTED_FIELD_LABELS = {
+    "application deadline": "Application deadlines are not posting dates.",
+    "deadline": "Deadlines are not posting dates.",
+    "closing date": "Closing dates are not posting dates.",
+    "end date": "End dates are not start dates.",
+    "category": "Categories are not workload or contract type.",
+}
+
+FIELD_LABEL_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("location_selector", ("location", "city", "place")),
+    ("remote_selector", ("remote", "remote percentage", "onsite", "on-site", "hybrid")),
+    ("rate_selector", ("rate", "salary", "pay", "day rate", "hourly rate")),
+    ("workload_selector", ("workload", "work type", "job type", "employment type", "contract type", "type")),
+    ("posted_date_selector", ("posted date", "date posted", "published", "created")),
+    ("start_date_selector", ("start date", "beginning", "start")),
 )
 
 
@@ -236,19 +292,26 @@ def build_recipe_blueprint(
             "min_description_length": 0,
         },
     }
-    pagination = _pagination_recipe(soup)
+    pagination = _pagination_recipe(html, base_url)
     if pagination:
         recipe["pagination"] = pagination
-    detail = _detail_recipe(detail_html)
+    detail, detail_field_observations = _detail_recipe(detail_html)
     if detail:
         recipe["detail"] = detail
+    field_observations: dict[str, Any] = {}
+    listing_field_observations = card.get("field_observations")
+    if isinstance(listing_field_observations, dict):
+        field_observations.update(listing_field_observations)
+    if detail_field_observations:
+        field_observations["detail_label_values"] = detail_field_observations
 
     validation_errors: list[str] = []
     try:
         job_board_recipe_from_mapping(recipe, label="recipe_blueprint")
     except ValueError as exc:
         validation_errors.append(str(exc))
-    return {
+    observation_warnings = _field_observation_warnings(field_observations)
+    result = {
         "status": "draft",
         "confidence": "high" if not validation_errors and int(card["match_count"] or 0) >= 3 else "medium",
         "recipe": recipe,
@@ -256,8 +319,11 @@ def build_recipe_blueprint(
         "detail_sample_url": detail_url,
         "detail_sample_captured": bool(detail_html),
         "validation_errors": validation_errors,
-        "warnings": validation_errors,
+        "warnings": validation_errors + observation_warnings,
     }
+    if field_observations:
+        result["field_observations"] = field_observations
+    return result
 
 
 def discover_candidate_elements(html: str, max_candidates: int = 30) -> list[CandidateElement]:
@@ -300,8 +366,11 @@ def audit_recipe_selectors(html: str, base_url: str, recipe: JobBoardRecipe | No
         "link_selector": recipe.listing.link_selector,
         "company_selector": recipe.listing.company_selector,
         "location_selector": recipe.listing.location_selector,
+        "remote_selector": recipe.listing.remote_selector,
         "rate_selector": recipe.listing.rate_selector,
+        "workload_selector": recipe.listing.workload_selector,
         "posted_date_selector": recipe.listing.posted_date_selector,
+        "start_date_selector": recipe.listing.start_date_selector,
         "description_selector": recipe.listing.description_selector,
     }
     first_cards = cards[:5]
@@ -359,13 +428,15 @@ def _best_listing_card(soup: BeautifulSoup, base_url: str) -> dict[str, Any] | N
     scored: dict[str, dict[str, Any]] = {}
     for link, absolute_url, token in _job_detail_links(soup, base_url):
         for ancestor in _candidate_ancestors_for_link(link):
+            if _likely_noise(ancestor):
+                continue
             selector = _card_selector_for_tag(ancestor, soup)
             if not selector:
                 continue
             cards = soup.select(selector)
             if not cards or len(cards) > 150:
                 continue
-            matching_cards = [card for card in cards if _job_detail_links(card, base_url)]
+            matching_cards = [card for card in cards if not _likely_noise(card) and _job_detail_links(card, base_url)]
             if not matching_cards:
                 continue
             average_links = sum(len(card.find_all("a", href=True)) for card in cards) / len(cards)
@@ -374,6 +445,10 @@ def _best_listing_card(soup: BeautifulSoup, base_url: str) -> dict[str, Any] | N
             selector_lower = selector.lower()
             if any(term in selector_lower for term in ["job", "project", "card", "item", "row"]):
                 score += 18
+            if any(term in selector_lower for term in ["card", "item", "row"]):
+                score += 12
+            if "info" in selector_lower and not any(term in selector_lower for term in ["card", "item", "row"]):
+                score -= 10
             if ancestor.name in {"article", "tr", "li"}:
                 score += 8
             if len(cards) == 1:
@@ -399,7 +474,13 @@ def _best_listing_card(soup: BeautifulSoup, base_url: str) -> dict[str, Any] | N
     best = max(scored.values(), key=lambda item: item["score"])
     best_cards = soup.select(best["selector"])[:5]
     best["title_selector"] = _link_selector_for_card(best_cards[0], best["url_token"])
-    best["field_selectors"] = _available_listing_field_selectors(best_cards)
+    if best_cards and best_cards[0].name == "tr":
+        field_selectors, field_observations = _table_listing_field_selectors(best_cards[0], best_cards)
+        best["field_selectors"] = field_selectors
+        if field_observations:
+            best["field_observations"] = {"listing_table_columns": field_observations}
+    else:
+        best["field_selectors"] = _available_listing_field_selectors(best_cards)
     return best
 
 
@@ -450,6 +531,8 @@ def _job_detail_links(root: Tag | BeautifulSoup, base_url: str) -> list[tuple[Ta
 
 def _detail_url_token(url: str) -> str:
     path = urlparse(url).path.lower()
+    if not _url_is_probable_detail_url(path):
+        return ""
     for token in ["/job/", "/project/", "/freelance_projects/", "/jobs/"]:
         if token in path:
             return token
@@ -458,7 +541,30 @@ def _detail_url_token(url: str) -> str:
 
 def _link_text_is_noise(text: str, href: str) -> bool:
     normalized = f"{text} {href}".lower()
-    return any(term in normalized for term in ["apply now", "#job-application", "login", "sign up"])
+    return any(
+        term in normalized
+        for term in [
+            "apply now",
+            "#job-application",
+            "login",
+            "sign up",
+            "reporting violations",
+            "terms of use",
+            "cookie policy",
+            "cookie settings",
+            "privacy policy",
+            "data protection officer",
+            "sitemap",
+            "view all jobs",
+        ]
+    )
+
+
+def _url_is_probable_detail_url(path: str) -> bool:
+    lowered = path.lower()
+    if any(fragment in lowered for fragment in NOISE_URL_FRAGMENTS):
+        return False
+    return not any(lowered.endswith(extension) for extension in NON_DETAIL_EXTENSIONS)
 
 
 def _link_selector_for_card(card: Tag, token: str) -> str:
@@ -489,27 +595,81 @@ def _listing_recipe_from_card(card: dict[str, Any]) -> dict[str, Any]:
         "title_selector": title_selector,
         "link_selector": title_selector,
     }
-    if card_selector.startswith("tbody tr") or card_selector == "tr":
-        listing.update(
-            {
-                "location_selector": "td:nth-of-type(3)",
-                "workload_selector": "td:nth-of-type(2)",
-                "posted_date_selector": "td:nth-of-type(4)",
-            }
-        )
-        return listing
     listing.update(card.get("field_selectors") or {})
     return {key: value for key, value in listing.items() if value}
 
 
+def _table_listing_field_selectors(first_card: Tag, cards: list[Tag]) -> tuple[dict[str, str], list[dict[str, Any]]]:
+    headers = _table_headers_for_row(first_card)
+    if not headers:
+        return {}, []
+
+    selectors: dict[str, str] = {}
+    observations: list[dict[str, Any]] = []
+    for index, label in enumerate(headers, start=1):
+        normalized = _normalize_label(label)
+        if not normalized:
+            continue
+        selector = f"td:nth-of-type({index})"
+        values = [_selected_text(card, selector) for card in cards[:5]]
+        sample_value = next((value for value in values if value), "")
+        if not sample_value:
+            continue
+        selector_key = classify_recipe_field_label(label)
+        unsupported_reason = label_unsupported_reason(label)
+        observations.append(
+            {
+                "index": index,
+                "label": label,
+                "selector": selector,
+                "mapped_selector": selector_key,
+                "sample_value": _preview(sample_value, 160),
+                "supported": bool(selector_key),
+                "warning": unsupported_reason,
+            }
+        )
+        if selector_key and selector_key not in {"title_selector", "link_selector"}:
+            selectors.setdefault(selector_key, selector)
+    return selectors, observations
+
+
+def _table_headers_for_row(row: Tag) -> list[str]:
+    cells = row.find_all("td", recursive=False)
+    if not cells:
+        return []
+    table = row.find_parent("table")
+    if not table:
+        return []
+    header_rows = table.select("thead tr")
+    if not header_rows:
+        header_rows = [candidate for candidate in table.find_all("tr") if candidate.find("th")]
+    headers: list[str] = []
+    for header_row in header_rows:
+        candidate_headers = [cell.get_text(" ", strip=True) for cell in header_row.find_all("th", recursive=False)]
+        if len(candidate_headers) >= len(headers):
+            headers = candidate_headers
+    if not headers:
+        return []
+    if len(headers) < len(cells):
+        headers.extend([""] * (len(cells) - len(headers)))
+    return headers[: len(cells)]
+
+
 def _available_listing_field_selectors(cards: list[Tag]) -> dict[str, str]:
     selector_fields = {
-        "location_selector": [".job-location", ".location", ".city"],
-        "remote_selector": [".job-arrangement", ".remote"],
-        "workload_selector": [".job-type", ".type"],
-        "posted_date_selector": ["time", ".posted-date", ".date"],
+        "location_selector": [".job-location", ".location", '[data-testid="city"]', ".city"],
+        "remote_selector": ['[data-testid="remoteInPercent"]', ".job-arrangement", ".remote"],
+        "workload_selector": ['[data-testid="type"]', ".job-type", ".type"],
+        "posted_date_selector": ['[data-testid="created"]', "time", ".posted-date", ".date"],
+        "start_date_selector": ['[data-testid="beginningText"]'],
         "description_selector": [".job-summary", ".summary", ".description"],
-        "company_selector": [".company", ".client", ".recruiter"],
+        "company_selector": [
+            '[data-testid="company"]',
+            "div.project-info > div.mg-b-display-m:first-child",
+            ".company",
+            ".client",
+            ".recruiter",
+        ],
     }
     result: dict[str, str] = {}
     for field_name, selectors in selector_fields.items():
@@ -520,18 +680,36 @@ def _available_listing_field_selectors(cards: list[Tag]) -> dict[str, str]:
     return result
 
 
-def _pagination_recipe(soup: BeautifulSoup) -> dict[str, Any]:
+def _pagination_recipe(html: str, base_url: str) -> dict[str, Any]:
+    soup = BeautifulSoup(html, "html.parser")
+    next_selector = 'link[rel="next"]' if soup.select('link[rel="next"][href*="pagenr="]') else ""
     if soup.select("a.page-numbers"):
         return {
             "page_link_selector": "a.page-numbers",
-            "next_selector": "a.next.page-numbers" if soup.select("a.next.page-numbers") else "",
+            "next_selector": "a.next.page-numbers" if soup.select("a.next.page-numbers") else next_selector,
             "max_pages": _observed_max_page(soup, default=2),
             "request_delay_seconds": 1.0,
         }
     if soup.select('a[href*="pagenr="]'):
         return {
             "page_link_selector": 'a[href*="pagenr="]',
+            "next_selector": next_selector,
             "max_pages": _observed_max_page(soup, default=2),
+            "request_delay_seconds": 1.0,
+        }
+    observed_links = discover_pagination_links(html, base_url)
+    if any("pagenr=" in link.url for link in observed_links):
+        return {
+            "page_link_selector": 'a[href*="pagenr="]',
+            "next_selector": next_selector,
+            "max_pages": _observed_max_page_from_links(observed_links, default=2),
+            "request_delay_seconds": 1.0,
+        }
+    if next_selector:
+        return {
+            "page_link_selector": next_selector,
+            "next_selector": next_selector,
+            "max_pages": 2,
             "request_delay_seconds": 1.0,
         }
     return {}
@@ -550,9 +728,22 @@ def _observed_max_page(soup: BeautifulSoup, default: int) -> int:
     return max(default, min(max(numbers or [default]), 50))
 
 
-def _detail_recipe(detail_html: str) -> dict[str, Any]:
+def _observed_max_page_from_links(links: list[Any], default: int) -> int:
+    numbers = []
+    for link in links:
+        label = str(getattr(link, "label", "") or "")
+        if label.isdigit():
+            numbers.append(int(label))
+        query_pages = parse_qs(urlparse(str(getattr(link, "url", "") or "")).query).get("pagenr", [])
+        for value in query_pages:
+            if str(value).isdigit():
+                numbers.append(int(value))
+    return max(default, min(max(numbers or [default]), 50))
+
+
+def _detail_recipe(detail_html: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     if not detail_html:
-        return {}
+        return {}, []
     soup = BeautifulSoup(detail_html, "html.parser")
     detail: dict[str, Any] = {
         "follow": True,
@@ -562,11 +753,13 @@ def _detail_recipe(detail_html: str) -> dict[str, Any]:
     if _has_jobposting_json_ld(soup):
         detail["use_json_ld"] = True
     title_selectors = []
-    for selector in [".job-single h1", ".project-show-single-page h1", "main h1", "h1"]:
+    for selector in [".job-single h1", ".project-show-single-page h1", ".modal h1", "main h1", "h1"]:
         if soup.select(selector):
             title_selectors.append(selector)
     if title_selectors:
         detail["title_selector"] = title_selectors[:3]
+    label_selectors, label_observations = _detail_label_value_selectors(soup)
+    detail.update(label_selectors)
     for field_name, selectors in {
         "description_selector": [".job_txt_wrapp .des_wrapp", ".project-body", ".job-single .job-description"],
         "location_selector": [".job-single .job-location", ".badge-content-city", ".dato_wrapp"],
@@ -574,11 +767,96 @@ def _detail_recipe(detail_html: str) -> dict[str, Any]:
         "posted_date_selector": [".posted-date"],
         "start_date_selector": [".start-date"],
     }.items():
+        if field_name in detail:
+            continue
         for selector in selectors:
             if soup.select(selector):
                 detail[field_name] = selector
                 break
-    return detail
+    return detail, label_observations
+
+
+def _detail_label_value_selectors(soup: BeautifulSoup) -> tuple[dict[str, str], list[dict[str, Any]]]:
+    selectors: dict[str, str] = {}
+    observations: list[dict[str, Any]] = []
+    for element in soup.find_all(["div", "li", "p", "span", "dt", "dd"]):
+        label, value = _split_label_value(element)
+        if not label or not value:
+            continue
+        selector_key = classify_recipe_field_label(label)
+        unsupported_reason = label_unsupported_reason(label)
+        value_selector = _label_value_selector(element)
+        observations.append(
+            {
+                "label": label,
+                "selector": value_selector,
+                "mapped_selector": selector_key,
+                "sample_value": _preview(value, 160),
+                "supported": bool(selector_key),
+                "warning": unsupported_reason,
+            }
+        )
+        if selector_key and selector_key not in selectors:
+            selectors[selector_key] = value_selector
+    return selectors, observations
+
+
+def _split_label_value(element: Tag) -> tuple[str, str]:
+    direct_text = " ".join(str(child) for child in element.contents if isinstance(child, NavigableString))
+    direct_text = re.sub(r"\s+", " ", direct_text).strip()
+    if ":" not in direct_text:
+        return "", ""
+    label, remainder = direct_text.split(":", 1)
+    label = label.strip()
+    if not label or len(label) > 40:
+        return "", ""
+    value_node = _label_value_node(element)
+    value = value_node.get_text(" ", strip=True) if value_node else remainder.strip()
+    if not value or len(value) > 400:
+        return "", ""
+    return label, value
+
+
+def _label_value_node(element: Tag) -> Tag | None:
+    for child in element.find_all(["span", "strong", "b"], recursive=False):
+        text = child.get_text(" ", strip=True)
+        if text:
+            return child
+    return None
+
+
+def _label_value_selector(element: Tag) -> str:
+    selector = _scoped_selector(element)
+    value_node = _label_value_node(element)
+    if value_node:
+        child_selector = _selector_part(value_node, include_position=False)
+        return f"{selector} > {child_selector}"
+    return selector
+
+
+def _scoped_selector(element: Tag) -> str:
+    part = _selector_part(element)
+    parent = element.parent
+    if not isinstance(parent, Tag) or parent.name == "[document]":
+        return part
+    parent_part = _selector_part(parent)
+    if not parent_part or parent.name in {"html", "body"}:
+        return part
+    return f"{parent_part} > {part}"
+
+
+def _selector_part(element: Tag, *, include_position: bool = True) -> str:
+    classes = [str(item) for item in element.get("class", []) if _class_is_stable(str(item))]
+    base = f"{element.name}.{classes[0]}" if classes else str(element.name or "")
+    if not include_position:
+        return base
+    parent = element.parent
+    if not isinstance(parent, Tag):
+        return base
+    siblings = [child for child in parent.find_all(element.name, recursive=False)]
+    if len(siblings) <= 1 or element not in siblings:
+        return base
+    return f"{base}:nth-of-type({siblings.index(element) + 1})"
 
 
 def _has_jobposting_json_ld(soup: BeautifulSoup) -> bool:
@@ -602,9 +880,60 @@ def _default_patterns() -> dict[str, str]:
         "job_id_regex": r"(?:Job ID|Ref):\s*(?P<job_id>[A-Za-z0-9_/-]+)",
         "remote_regex": r"\b(?P<remote>Remote|Hybrid|Hybrid-remote|Office based|On-site|\d+%\s*remote)\b",
         "work_type_regex": r"\b(?P<work_type>Contract|Freelance|Permanent)\b",
-        "start_date_regex": r"(?:Start(?: date)?|Start):\s*(?P<start_date>[^*\n\r]+?)(?=\s+\*|\s+Duration:|\s+End date:|$)",
+        "start_date_regex": (
+            r"(?:Start(?: date)?\s*:?\s*)(?P<start_date>asap|\d{1,2}\s*/\s*\d{4}|"
+            r"\d{1,2}[./]\d{1,2}[./]\d{4}|[^*\n\r]+?)(?=\s+Duration\b|\s+\d+\s*%\s*workload\b|\s+End date:|$)"
+        ),
         "language_regex": r"(?:Languages?:\s*|Language skills:\s*|Fluent in\s+)(?P<language>[A-Z][A-Za-z]+(?:\s*\([^)]*\))?)",
     }
+
+
+def _field_observation_warnings(field_observations: dict[str, Any]) -> list[str]:
+    warnings: list[str] = []
+    seen: set[str] = set()
+    for group in field_observations.values():
+        if not isinstance(group, list):
+            continue
+        for observation in group:
+            if not isinstance(observation, dict):
+                continue
+            warning = str(observation.get("warning") or "").strip()
+            label = str(observation.get("label") or "").strip()
+            if warning and label:
+                message = f"{label}: {warning}"
+                if message not in seen:
+                    seen.add(message)
+                    warnings.append(message)
+    return warnings
+
+
+def classify_recipe_field_label(label: str) -> str:
+    normalized = _normalize_label(label)
+    if not normalized or label_unsupported_reason(label):
+        return ""
+    for selector_key, terms in FIELD_LABEL_RULES:
+        if any(_label_matches_term(normalized, term) for term in terms):
+            return selector_key
+    return ""
+
+
+def label_unsupported_reason(label: str) -> str:
+    normalized = _normalize_label(label)
+    for term, reason in UNSUPPORTED_FIELD_LABELS.items():
+        if _label_matches_term(normalized, term):
+            return reason
+    return ""
+
+
+def _normalize_label(label: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", label.lower()).strip()
+
+
+def _label_matches_term(normalized_label: str, term: str) -> bool:
+    normalized_term = _normalize_label(term)
+    if not normalized_label or not normalized_term:
+        return False
+    return bool(re.search(rf"(^|\s){re.escape(normalized_term)}($|\s)", normalized_label))
 
 
 def _add_candidate(scored: list[tuple[int, Tag]], seen: set[int], tag: Tag, score: int) -> None:
@@ -635,7 +964,7 @@ def _score_candidate(tag: Tag) -> int:
     if tag.name in {"article", "li", "section"}:
         score += 2
     if _likely_noise(tag):
-        score = max(score - 3, 1)
+        score = max(score - 12, 1)
     return score
 
 
@@ -690,10 +1019,20 @@ def _candidate_kind(tag: Tag) -> str:
 
 
 def _likely_noise(tag: Tag) -> bool:
+    if tag.name in {"header", "footer", "nav"} or tag.find_parent(["header", "footer", "nav"]):
+        return True
+    classes_and_id = " ".join([str(tag.get("id", "")), *[str(item) for item in tag.get("class", [])]]).lower()
+    if any(term in classes_and_id for term in ["footer", "header", "nav", "menu", "slideout", "disclaimer", "cookie"]):
+        return True
     text = tag.get_text(" ", strip=True).lower()
     if title_quality(text) == "generic":
         return True
     return any(term in text for term in NOISE_TERMS)
+
+
+def _selected_text(root: Tag, selector: str) -> str:
+    match = root.select_one(selector)
+    return match.get_text(" ", strip=True) if match else ""
 
 
 def _preview(text: str, limit: int) -> str:

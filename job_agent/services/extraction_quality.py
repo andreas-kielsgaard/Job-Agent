@@ -10,18 +10,59 @@ GENERIC_TITLE_LABELS = {
     "apply",
     "apply now",
     "apply today",
+    "contact us",
+    "cookie policy",
+    "cookie settings",
+    "data protection officer",
     "details",
     "learn more",
     "more",
     "more info",
+    "privacy policy",
+    "reporting violations",
     "read more",
     "see details",
     "services",
+    "sitemap",
+    "terms of use",
     "view",
+    "view all jobs",
     "view details",
     "view job",
     "view role",
 }
+NON_JOB_URL_FRAGMENTS = (
+    "/-/media/",
+    "/media/",
+    "/assets/",
+    "/static/",
+    "/privacy",
+    "/cookie",
+    "/terms",
+    "/sitemap",
+    "/accessibility",
+    "/contact",
+)
+NON_JOB_URL_EXTENSIONS = (
+    ".pdf",
+    ".doc",
+    ".docx",
+    ".xls",
+    ".xlsx",
+    ".zip",
+    ".jpg",
+    ".jpeg",
+    ".png",
+    ".gif",
+    ".svg",
+    ".webp",
+    ".ico",
+    ".css",
+    ".js",
+    ".woff",
+    ".woff2",
+    ".ttf",
+)
 
 MIN_USEFUL_DESCRIPTION_CHARS = 80
 
@@ -114,3 +155,14 @@ def title_quality(title: str) -> str:
     if len(normalized) < 8:
         return "generic"
     return "useful"
+
+
+def job_url_quality(url: str) -> str:
+    normalized = url.lower().strip()
+    if not normalized:
+        return "missing"
+    if any(fragment in normalized for fragment in NON_JOB_URL_FRAGMENTS):
+        return "non_job"
+    if any(normalized.split("?", 1)[0].endswith(extension) for extension in NON_JOB_URL_EXTENSIONS):
+        return "non_job"
+    return "job_like"

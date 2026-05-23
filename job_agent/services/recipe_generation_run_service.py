@@ -12,6 +12,7 @@ from urllib.parse import urlencode
 from job_agent.config import ROOT
 from job_agent.io.atomic import atomic_write_text
 from job_agent.io.json_store import read_json, write_json
+from job_agent.services.recipe_calibration_service import capture_recipe_calibration
 from job_agent.services.recipe_artifact_service import RecipeArtifactService
 from job_agent.services.recipe_candidate_service import RecipeCandidateStore
 from job_agent.services.recipe_suggestion_service import (
@@ -65,7 +66,90 @@ class RecipeGenerationRunService:
             "finished_at": "",
             "steps": [
                 {
-                    "phase": "Queue recipe generation",
+                    "phase": "Queue reading-plan generation",
+                    "status": "pending",
+                    "detail": "Waiting for the generator to start.",
+                    "created_at": now,
+                }
+            ],
+            "warnings": [],
+            "error": "",
+            "candidate_id": "",
+            "candidate_path": "",
+            "candidate_url": "",
+            "generated_recipe_path": "",
+            "compatibility_url": "",
+            "recipe_review_url": "",
+            "recipe_rules_url": "",
+            "suggested_recipe_yaml": "",
+            "explanation": "",
+            "confidence": "",
+            "selected_strategy": "",
+            "assumptions": [],
+            "schema_valid": False,
+            "validation_errors": [],
+            "referenced_artifact_files": [],
+            "refinement_used": bool(refine),
+            "refinement_accepted": False,
+            "attempt_count": 0,
+            "attempts": [],
+            "quality_status": "",
+            "extracted_job_count": 0,
+            "useful_titles": 0,
+            "generic_labels": 0,
+            "unique_urls": 0,
+            "average_description_length": 0,
+            "quality_warnings": [],
+            "evidence_summary": "",
+            "evidence_observations": {},
+        }
+        self._write_run(run)
+        if run_async:
+            _EXECUTOR.submit(self._run_generation, run_id)
+            return run
+        self._run_generation(run_id)
+        return self.load(run_id)
+
+    def start_from_source_capture(
+        self,
+        source_id: str,
+        *,
+        rendered: bool = True,
+        capture_detail: bool = True,
+        max_candidates: int = 30,
+        refine: bool = True,
+        max_attempts: int = 3,
+        run_async: bool = True,
+    ) -> dict[str, Any]:
+        source = SourceRegistryService(self.root).get_source(source_id)
+        if not source:
+            raise ValueError(f"Source not found: {source_id}")
+        if not source.url:
+            raise ValueError("Source URL is required before learning a source.")
+        bounded_attempts = max(1, min(int(max_attempts or 1), 8))
+        bounded_candidates = max(5, min(int(max_candidates or 30), 50))
+        run_id = self._new_run_id(source.id)
+        now = _now()
+        run = {
+            "run_id": run_id,
+            "source_id": source.id,
+            "source_name": source.name,
+            "source_url": source.url,
+            "artifact_dir": "Pending live capture",
+            "capture_source": True,
+            "capture_rendered": bool(rendered),
+            "capture_detail": bool(capture_detail),
+            "max_candidates": bounded_candidates,
+            "refine": bool(refine),
+            "max_attempts": bounded_attempts,
+            "status": "pending",
+            "created_at": now,
+            "updated_at": now,
+            "started_at": "",
+            "finished_at": "",
+            "steps": [
+                {
+                    "phase": "Queue reading-plan generation",
                     "status": "pending",
                     "detail": "Waiting for the generator to start.",
                     "created_at": now,
@@ -132,13 +216,47 @@ class RecipeGenerationRunService:
             source = SourceRegistryService(self.root).get_source(str(run["source_id"]))
             if not source:
                 raise ValueError(f"Source not found: {run['source_id']}")
-            artifact_path = RecipeArtifactService(self.root).resolve_artifact_path(str(run["artifact_dir"]))
-            self._append_step(
-                run_id,
-                "Resolve source and capture",
-                "complete",
-                f"Using {source.name} at {source.url or 'no saved URL'} and saved capture {run['artifact_dir']}.",
-            )
+            if run.get("capture_source"):
+                self._append_step(
+                    run_id,
+                    "Resolve source and capture",
+                    "running",
+                    (
+                        f"Opening {source.name} at {source.url} with "
+                        f"{'browser rendering' if run.get('capture_rendered') else 'normal HTML'}."
+                    ),
+                )
+                capture = capture_recipe_calibration(
+                    source.url,
+                    recipe_path=source.recipe_path or None,
+                    rendered=bool(run.get("capture_rendered")),
+                    root=self.root,
+                    max_candidates=int(run.get("max_candidates") or 30),
+                    capture_detail=bool(run.get("capture_detail")),
+                )
+                artifact_path = capture.artifact_dir
+                relative_artifact = _display_path(artifact_path, self.root)
+                existing_warnings = list(run.get("warnings") or [])
+                self._update_run(
+                    run_id,
+                    artifact_dir=relative_artifact,
+                    warnings=existing_warnings + list(capture.warnings),
+                )
+                detail = (
+                    f"Captured {relative_artifact}: {capture.candidate_count} candidate region(s); "
+                    f"recipe extracted {capture.recipe_extracted_count} job(s)."
+                )
+                if capture.detail_sample_url:
+                    detail += f" Detail sample: {capture.detail_sample_url}."
+                self._append_step(run_id, "Resolve source and capture", "complete", detail)
+            else:
+                artifact_path = RecipeArtifactService(self.root).resolve_artifact_path(str(run["artifact_dir"]))
+                self._append_step(
+                    run_id,
+                    "Resolve source and capture",
+                    "complete",
+                    f"Using {source.name} at {source.url or 'no saved URL'} and saved capture {run['artifact_dir']}.",
+                )
 
             self._append_step(
                 run_id,
@@ -170,10 +288,10 @@ class RecipeGenerationRunService:
             if bool(run.get("refine")):
                 self._append_step(
                     run_id,
-                    "Generate and refine draft recipe",
+                    "Generate and refine reading plan",
                     "running",
                     (
-                        "Building a selector-based draft, validating it against the saved page, "
+                        "Building selector-based rules, validating them against the saved page, "
                         f"and allowing up to {run['max_attempts']} refinement attempt(s)."
                     ),
                 )
@@ -189,16 +307,16 @@ class RecipeGenerationRunService:
                 candidate = RecipeCandidateStore(self.root).save_candidate_from_refinement(refinement)
                 self._append_step(
                     run_id,
-                    "Generate and refine draft recipe",
+                    "Generate and refine reading plan",
                     "complete" if refinement.accepted else "warning",
                     _refinement_summary(refinement),
                 )
             else:
                 self._append_step(
                     run_id,
-                    "Generate draft recipe",
+                    "Generate reading plan",
                     "running",
-                    "Creating one draft recipe from the saved capture without iterative local refinement.",
+                    "Creating one reading plan from the saved capture without iterative local refinement.",
                 )
                 result = suggest_recipe_from_artifact(
                     artifact_path,
@@ -210,19 +328,25 @@ class RecipeGenerationRunService:
                 candidate = RecipeCandidateStore(self.root).save_candidate_from_suggestion(result)
                 self._append_step(
                     run_id,
-                    "Generate draft recipe",
+                    "Generate reading plan",
                     "complete" if result.schema_valid else "warning",
                     _suggestion_summary(result),
                 )
 
-            generated_recipe_path = self._write_generated_recipe(run_id, result.suggested_recipe_yaml)
             candidate_path = RecipeCandidateStore(self.root).candidate_path(candidate.candidate_id)
-            self._append_step(
-                run_id,
-                "Save draft recipe",
-                "complete",
-                f"Saved pending candidate {candidate.candidate_id} and a temporary recipe file for checks.",
+            generated_recipe_path = ""
+            ready_for_checks = result.schema_valid and result.suggested_recipe_yaml.strip() and (
+                not bool(run.get("refine")) or bool(refinement and refinement.accepted)
             )
+            if ready_for_checks:
+                generated_recipe_path = self._write_generated_recipe(run_id, result.suggested_recipe_yaml)
+                save_detail = f"Saved review item {candidate.candidate_id} and a temporary recipe file for checks."
+            else:
+                save_detail = (
+                    f"Saved review item {candidate.candidate_id}. No temporary recipe file was created because "
+                    "the generated plan is not ready to execute."
+                )
+            self._append_step(run_id, "Save reading plan for review", "complete", save_detail)
             payload = _result_payload(
                 run_id=run_id,
                 source_id=source.id,
@@ -238,7 +362,7 @@ class RecipeGenerationRunService:
                 run_id,
                 "Prepare next checks",
                 "complete",
-                "Compatibility check, recipe review, and candidate review links are ready.",
+                "Compatibility evidence, reading review, and source-plan review links are ready.",
             )
             self._set_run_status(run_id, "completed", finished_at=_now())
         except Exception as exc:
@@ -302,18 +426,21 @@ def _result_payload(
     generated_recipe_path: str,
     refinement: RecipeRefinementResult | None,
 ) -> dict[str, Any]:
-    params = {
-        "source_mode": "configured",
-        "selected_source_id": source_id,
-        "url": source_url,
-        "recipe_path": generated_recipe_path,
-    }
-    preview_params = {
-        "source_mode": "configured",
-        "selected_source_id": source_id,
-        "input_path_or_url": source_url,
-        "recipe_path": generated_recipe_path,
-    }
+    params = {}
+    preview_params = {}
+    if generated_recipe_path:
+        params = {
+            "source_mode": "configured",
+            "selected_source_id": source_id,
+            "url": source_url,
+            "recipe_path": generated_recipe_path,
+        }
+        preview_params = {
+            "source_mode": "configured",
+            "selected_source_id": source_id,
+            "input_path_or_url": source_url,
+            "recipe_path": generated_recipe_path,
+        }
     attempts = []
     if refinement:
         attempts = [
@@ -336,9 +463,13 @@ def _result_payload(
         "candidate_path": candidate_path,
         "candidate_url": f"/recipe-candidates/{candidate_id}?{urlencode({'source_id': source_id})}",
         "generated_recipe_path": generated_recipe_path,
-        "compatibility_url": f"/compatibility?{urlencode(params)}",
-        "recipe_review_url": f"/recipe-preview?{urlencode({**preview_params, 'tab': 'execute', 'auto_run': '1'})}",
-        "recipe_rules_url": f"/recipe-preview?{urlencode({**preview_params, 'tab': 'explain'})}",
+        "compatibility_url": f"/compatibility?{urlencode(params)}" if generated_recipe_path else "",
+        "recipe_review_url": f"/recipe-preview?{urlencode({**preview_params, 'tab': 'execute', 'auto_run': '1'})}"
+        if generated_recipe_path
+        else "",
+        "recipe_rules_url": f"/recipe-preview?{urlencode({**preview_params, 'tab': 'explain'})}"
+        if generated_recipe_path
+        else "",
         "suggested_recipe_yaml": result.suggested_recipe_yaml,
         "explanation": result.explanation,
         "confidence": result.confidence,
@@ -399,7 +530,7 @@ def _refinement_summary(refinement: RecipeRefinementResult) -> str:
 
 def _suggestion_summary(result: RecipeSuggestionResult) -> str:
     status = "valid" if result.schema_valid else "invalid"
-    return f"Generated a {status} recipe using {result.selected_strategy or 'unknown strategy'}."
+    return f"Generated a {status} reading plan using {result.selected_strategy or 'unknown strategy'}."
 
 
 def _display_path(path: Path, root: Path) -> str:

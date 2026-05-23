@@ -64,13 +64,6 @@ class SetupService:
                 "content": self.read_text("profile/writing-style.md"),
                 "help": "Used in Claude prompts and as guidance for deterministic writing.",
             },
-            "sources": {
-                "label": "Sources",
-                "field_id": "sources",
-                "path": "sources/recruiting-sites.yaml",
-                "content": self.read_text("sources/recruiting-sites.yaml"),
-                "help": "Enabled sources are read by the run service. local_yaml is safest; generic_html is best-effort.",
-            },
             "cv_template": {
                 "label": "At-a-glance CV template",
                 "field_id": "template.cv",

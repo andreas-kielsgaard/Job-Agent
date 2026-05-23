@@ -17,10 +17,13 @@ def test_setup_loads_friendly_sections(client: TestClient) -> None:
     response = client.get("/setup")
 
     assert response.status_code == 200
+    assert "Worker Profile" in response.text
     assert "CV Reference Upload" in response.text
-    assert "Template Variables" in response.text
+    assert "Advanced profile files and writing templates" in response.text
+    assert "Template variable reference" in response.text
     assert "Highest performance" in response.text
     assert "Minimum digest score" in response.text
+    assert "Add Simple Source" not in response.text
 
 
 def test_dashboard_has_material_generation_option(client: TestClient) -> None:

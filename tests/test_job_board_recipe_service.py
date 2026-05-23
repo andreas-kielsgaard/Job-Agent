@@ -77,7 +77,9 @@ def test_detail_follow_false_does_not_fetch_detail_pages(monkeypatch: pytest.Mon
     calls = []
     jobs = extract_jobs_with_recipe(HTML, "https://example.com", _recipe())
     recipe = _recipe(detail=DetailRecipe(follow=False, description_selector=".detail-description"))
-    monkeypatch.setattr("job_agent.services.job_board_recipe_service.requests.get", lambda *args, **kwargs: calls.append(args))
+    monkeypatch.setattr(
+        "job_agent.services.job_board_recipe_service.requests.get", lambda *args, **kwargs: calls.append(args)
+    )
 
     warnings = enrich_jobs_with_detail_pages(jobs, recipe)
 
@@ -402,6 +404,63 @@ def test_pagination_detection_reads_embedded_json_html_fragments() -> None:
             is_next=True,
         )
     ]
+
+
+def test_pagination_detection_dedupes_link_rel_next_against_embedded_page_links() -> None:
+    html = """
+    <link rel="next" href="https://www.freelancermap.com/projects?pagenr=2">
+    <script type="application/json">
+    {"initialPagination":"<div class='paginator'><a href='/projects?pagenr=2#list'>2</a><a href='/projects?pagenr=3#list'>3</a><a href='/projects?pagenr=4#list'>4</a></div>"}
+    </script>
+    """
+    recipe = _recipe(
+        pagination=PaginationRecipe(
+            page_link_selector='a[href*="pagenr="]',
+            next_selector='link[rel="next"]',
+            max_pages=4,
+        )
+    )
+
+    links = find_pagination_links(html, "https://www.freelancermap.com/projects", recipe)
+
+    assert [(link.label, link.url, link.is_next) for link in links] == [
+        ("2", "https://www.freelancermap.com/projects?pagenr=2#list", True),
+        ("3", "https://www.freelancermap.com/projects?pagenr=3#list", False),
+        ("4", "https://www.freelancermap.com/projects?pagenr=4#list", False),
+    ]
+
+
+def test_detail_extract_scopes_popup_html_to_modal_before_listing_heading() -> None:
+    html = """
+    <main>
+      <h1>Find the perfect project</h1>
+      <div class="modal">
+        <h1>SAP Data Migration Consultant</h1>
+        <div class="project-header-info-list"><span>100% remote</span><span>Freelance</span><span>Start date 9 / 2026</span></div>
+        <div class="badge-content-city">lisboa, Portugal</div>
+        <section class="project-body">Description We are looking for an SAP Data Migration Consultant.</section>
+      </div>
+    </main>
+    """
+    recipe = _recipe(
+        detail=DetailRecipe(
+            follow=True,
+            title_selector=[".project-show-single-page h1", "main h1", "h1"],
+            description_selector=".project-body",
+            location_selector=".badge-content-city",
+            remote_selector=".project-header-info-list > span:nth-of-type(1)",
+            workload_selector=".project-header-info-list > span:nth-of-type(2)",
+            start_date_selector=".project-header-info-list > span:nth-of-type(3)",
+        )
+    )
+
+    job = extract_job_detail_from_html(html, "https://www.freelancermap.com/projects", recipe)
+
+    assert job.title == "SAP Data Migration Consultant"
+    assert job.location == "lisboa, Portugal"
+    assert job.remote == "100% remote"
+    assert job.workload == "Freelance"
+    assert job.start_date == "Start date 9 / 2026"
 
 
 def test_recipe_rejects_cta_services_and_category_links() -> None:

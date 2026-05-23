@@ -1,38 +1,47 @@
 {% extends "base.html" %}
 {% block content %}
-<div class="panel">
-  <h1>Setup</h1>
-  <p class="muted">Local-only settings. API keys, real CVs, and personal profile data are saved to ignored local files.</p>
+<div class="source-detail-header">
+  <div>
+    <p class="eyebrow">Profile</p>
+    <h1>Worker Profile</h1>
+    <p class="muted">Configure the personal profile, CV reference, preferences, and writing settings the app uses when scoring jobs and preparing application material.</p>
+  </div>
+  <div class="source-header-actions">
+    <a class="button light" href="/sources">Manage sources</a>
+    <a class="button light" href="/sources/new">Add source</a>
+  </div>
 </div>
 
 <div class="panel">
-  <h2>Claude API</h2>
-  <p class="muted">The model affects writing quality, speed, and cost. Use the latest Sonnet alias for day-to-day local use; use a stable model ID when you want reproducible output.</p>
-  <form method="post" action="/setup/env" class="grid">
+  <h2>Profile Checklist</h2>
+  <div class="source-proof-grid">
     <div>
-      <label>Anthropic API key</label>
-      <input type="password" name="anthropic_api_key" placeholder="{% if env.get('ANTHROPIC_API_KEY') %}Key is set{% else %}No key set{% endif %}">
+      <span>Personal details</span>
+      <strong>{{ "Ready" if profile.contact.get('name') and profile.contact.get('email') else "Needs details" }}</strong>
+      <p>Name, contact information, title, and location for CVs and form answers.</p>
     </div>
     <div>
-      <label>Claude model</label>
-      <select name="claude_model">
-        {% for model in model_options %}
-        <option value="{{ model.value }}" {% if env.get('CLAUDE_MODEL', 'claude-sonnet-4-0') == model.value %}selected{% endif %}>{{ model.label }} - {{ model.quality }} / Cost {{ model.price }} / Speed {{ model.speed }}</option>
-        {% endfor %}
-      </select>
-      {% for model in model_options %}
-      <p class="muted"><strong>{{ model.label }}</strong>: {{ model.quality }}, cost {{ model.price | lower }}, speed {{ model.speed | lower }}. <code>{{ model.value }}</code>. {{ model.help }}</p>
-      {% endfor %}
+      <span>Preferences</span>
+      <strong>{{ "Configured" if profile.preferences.get('thresholds', {}).get('minimum_digest_score') else "Needs review" }}</strong>
+      <p>Availability, location policy, role interests, and digest threshold.</p>
     </div>
-    <label class="check"><input type="checkbox" name="claude_use_by_default" {% if env.get("CLAUDE_USE_BY_DEFAULT") == "true" %}checked{% endif %}> Use Claude by default in dashboard</label>
-    <div><button type="submit">Save API settings</button></div>
-  </form>
+    <div>
+      <span>Reference CV</span>
+      <strong>{{ "Uploaded" if cv_reference else "Optional" }}</strong>
+      <p>Stored locally and linked from job pages when you apply manually.</p>
+    </div>
+    <div>
+      <span>AI writing</span>
+      <strong>{{ "Configured" if env.get('ANTHROPIC_API_KEY') else "Optional" }}</strong>
+      <p>Used when you choose AI-assisted material generation.</p>
+    </div>
+  </div>
 </div>
 
 <div class="panel" id="profile">
   <h2>Profile Basics</h2>
   <p class="muted">These fields are referenced directly in generated CVs, applications, and form-answer packages.</p>
-  <details>
+  <details class="diagnostic-panel">
     <summary>How these values are used</summary>
     <p>Name, title, phone, email, LinkedIn, and current location appear in the at-a-glance CV and standard form answers. Address is stored for your convenience, but templates will only use it if you add <code>{{ "{{ contact.address " }}}}</code> to a template.</p>
   </details>
@@ -55,7 +64,7 @@
 <div class="panel">
   <h2>Availability and Preferences</h2>
   <p class="muted">These fields influence recruiter-facing wording, location fit, and digest filtering.</p>
-  <details>
+  <details class="diagnostic-panel">
     <summary>What can be included here</summary>
     <p>Use plain language. Availability and relocation text may be inserted into generated applications. Preferred regions help location scoring. Role interests are context for future matching and are safe to keep broad.</p>
   </details>
@@ -69,7 +78,7 @@
     <div>
       <label>Minimum digest score</label>
       <input type="number" name="minimum_digest_score" value="{{ profile.preferences.get('thresholds', {}).get('minimum_digest_score', 45) }}">
-      <p class="muted">Score is 0-100. It combines technical SAP match, module match, contract fit, location fit, seniority, project-management interest, language risk, frontend/functional risk, freshness, and rate visibility. Around 45 includes exploratory roles; 60+ is stricter; 70+ mostly strong technical matches. Excluded roles can still be filtered out regardless of score if language or freshness is a blocker.</p>
+      <p class="muted">Score is 0-100. Around 45 includes exploratory roles; 60+ is stricter; 70+ mostly strong technical matches. Excluded roles can still be filtered out regardless of score if language or freshness is a blocker.</p>
     </div>
     <div><button type="submit">Save preferences</button></div>
   </form>
@@ -77,12 +86,12 @@
 
 <div class="panel" id="cv-reference">
   <h2>CV Reference Upload</h2>
-  <p class="muted">Upload your full CV as PDF, DOCX, TXT, or Markdown. The file is stored under ignored `profile/files/` and shown on each job page for easy access when applying manually.</p>
+  <p class="muted">Upload your full CV as PDF, DOCX, TXT, or Markdown. The file is stored under ignored <code>profile/files/</code> and shown on each job page for easy access when applying manually.</p>
   {% if cv_reference %}
   <p><strong>Current reference CV:</strong> <a href="{{ cv_reference.url }}">{{ cv_reference.filename }}</a></p>
   <p class="muted">{{ cv_reference.path }}</p>
   {% if cv_reference.extracted_text %}
-  <details>
+  <details class="diagnostic-panel">
     <summary>Extracted CV text preview</summary>
     <pre class="copy-source">{{ cv_reference.extracted_text[:3000] }}</pre>
   </details>
@@ -95,12 +104,51 @@
     <label class="check"><input type="checkbox" name="extract_to_canonical"> Replace canonical CV text with extracted text</label>
     <div><button type="submit">Upload CV reference</button></div>
   </form>
+  <p class="muted">Replacing canonical CV text is immediate. Use it only when you trust the extracted text; otherwise upload the file as a reference and review the canonical CV in advanced settings.</p>
 </div>
 
 <div class="panel">
-  <h2>Template Variables</h2>
-  <details>
-    <summary class="button light" style="display:inline-block;">Show template variable reference</summary>
+  <h2>AI Writing</h2>
+  <p class="muted">AI writing is optional. The app can still use deterministic templates when Claude is disabled.</p>
+  <form method="post" action="/setup/env" class="grid">
+    <div>
+      <label>Anthropic API key</label>
+      <input type="password" name="anthropic_api_key" placeholder="{% if env.get('ANTHROPIC_API_KEY') %}Key is set{% else %}No key set{% endif %}">
+    </div>
+    <div>
+      <label>Claude model</label>
+      <select name="claude_model">
+        {% for model in model_options %}
+        <option value="{{ model.value }}" {% if env.get('CLAUDE_MODEL', 'claude-sonnet-4-0') == model.value %}selected{% endif %}>{{ model.label }} - {{ model.quality }} / Cost {{ model.price }} / Speed {{ model.speed }}</option>
+        {% endfor %}
+      </select>
+      <details class="diagnostic-panel">
+        <summary>Model choices</summary>
+        {% for model in model_options %}
+        <p class="muted"><strong>{{ model.label }}</strong>: {{ model.quality }}, cost {{ model.price | lower }}, speed {{ model.speed | lower }}. <code>{{ model.value }}</code>. {{ model.help }}</p>
+        {% endfor %}
+      </details>
+    </div>
+    <label class="check"><input type="checkbox" name="claude_use_by_default" {% if env.get("CLAUDE_USE_BY_DEFAULT") == "true" %}checked{% endif %}> Use Claude by default in dashboard</label>
+    <div><button type="submit">Save AI writing settings</button></div>
+  </form>
+</div>
+
+<div class="panel">
+  <h2>Job Sources</h2>
+  <p class="muted">Job boards and recruiter pages now live in the Sources workflow, where they can be reviewed, assigned recipes, compatibility-checked, and tested before daily-run use.</p>
+  <div class="action-row">
+    <a class="button" href="/sources">Manage sources</a>
+    <a class="button light" href="/sources/new">Add source</a>
+  </div>
+</div>
+
+<details class="panel diagnostic-panel" id="advanced-profile-config">
+  <summary>Advanced profile files and writing templates</summary>
+  <p class="muted">Edit these only when you want direct control over the profile YAML, templates, or prompts. These are not needed for normal source setup.</p>
+
+  <details class="diagnostic-panel">
+    <summary>Template variable reference</summary>
     <p class="muted">Templates use Jinja syntax: double braces insert values, and loops use {% raw %}{% for item in list %}...{% endfor %}{% endraw %}. Keep recruiter-facing templates free of internal score language.</p>
     <table>
       <thead><tr><th>Variable</th><th>Meaning</th></tr></thead>
@@ -111,57 +159,19 @@
       </tbody>
     </table>
   </details>
-</div>
 
-<div class="panel" id="sources">
-  <h2>Sources</h2>
-  <p class="muted">Use this simple editor for basic sources. Keep `local_yaml` for reliable smoke tests. Use `generic_html` for public pages where the app should look for obvious job links. Some recruiter sites need custom adapters later.</p>
-  {% if sources %}
-  <table>
-    <thead><tr><th>Name</th><th>Type</th><th>URL/path</th><th>Enabled</th><th></th></tr></thead>
-    <tbody>
-      {% for source in sources %}
-      <tr>
-        <td>{{ source.name }}</td>
-        <td>{{ source.type }}</td>
-        <td>{{ source.url or source.path }}</td>
-        <td>{{ "yes" if source.enabled else "no" }}</td>
-        <td>
-          <form method="post" action="/setup/source-toggle" class="row">
-            <input type="hidden" name="index" value="{{ source._index }}">
-            <label class="check"><input type="checkbox" name="enabled" {% if source.enabled %}checked{% endif %}> Enabled</label>
-            <button class="light" type="submit">Save</button>
-          </form>
-        </td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-  {% endif %}
-  <h3>Add Simple Source</h3>
-  <form method="post" action="/setup/source-add" class="grid">
-    <div><label>Name</label><input name="name" placeholder="Recruiter or job board"></div>
-    <div><label>Type</label><select name="source_type"><option value="generic_html">Generic public HTML page</option><option value="search_page">Search page</option><option value="local_yaml">Local YAML file</option></select></div>
-    <div style="grid-column: 1 / -1;"><label>URL or local path</label><input name="url_or_path" placeholder="https://example.com/jobs or jobs/raw/sample_jobs.yaml"></div>
-    <div><label>Keywords, one per line</label><textarea name="keywords">SAP ABAP
-SAP RAP
-SAP Gateway</textarea></div>
-    <label class="check"><input type="checkbox" name="enabled" checked> Enabled</label>
-    <div><button type="submit">Add source</button></div>
-  </form>
-</div>
-
-{% for key, item in files.items() %}
-<div class="panel">
-  <h2>{{ item.label }}</h2>
-  <p class="muted">{{ item.path }}</p>
-  <p>{{ item.help }}</p>
-  <form method="post" action="/setup/file">
-    <input type="hidden" name="file_key" value="{{ key }}">
-    <button class="light" type="button" onclick="openAiEdit(this)" data-target="setup-{{ key }}" data-field-id="{{ item.field_id }}" data-button-id="setup.{{ key }}">Edit with AI</button>
-    <textarea id="setup-{{ key }}" name="content">{{ item.content }}</textarea>
-    <button type="submit">Save {{ item.label }}</button>
-  </form>
-</div>
-{% endfor %}
+  {% for key, item in files.items() %}
+  <div class="quality-block">
+    <h3>{{ item.label }}</h3>
+    <p class="muted">{{ item.path }}</p>
+    <p>{{ item.help }}</p>
+    <form method="post" action="/setup/file">
+      <input type="hidden" name="file_key" value="{{ key }}">
+      <button class="light" type="button" onclick="openAiEdit(this)" data-target="setup-{{ key }}" data-field-id="{{ item.field_id }}" data-button-id="setup.{{ key }}">Edit with AI</button>
+      <textarea id="setup-{{ key }}" name="content">{{ item.content }}</textarea>
+      <button type="submit">Save {{ item.label }}</button>
+    </form>
+  </div>
+  {% endfor %}
+</details>
 {% endblock %}

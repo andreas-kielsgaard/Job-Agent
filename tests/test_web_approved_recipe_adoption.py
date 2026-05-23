@@ -27,9 +27,8 @@ def test_candidate_detail_shows_adoption_form_only_for_approved_candidates(clien
     pending_response = client.get(f"/recipe-candidates/{pending.candidate_id}?source_id=eursap-jobs")
     approved_response = client.get(f"/recipe-candidates/{approved.candidate_id}?source_id=eursap-jobs")
 
-    assert "Adopt For Source" not in pending_response.text
-    assert "Adopt For Source" in approved_response.text
-    assert "Prepare disabled daily-run entry" in approved_response.text
+    assert "Use for this source" not in pending_response.text
+    assert "Use for this source" in approved_response.text
 
 
 def test_web_adoption_updates_registry_and_redirects(client: TestClient, project_root: Path) -> None:

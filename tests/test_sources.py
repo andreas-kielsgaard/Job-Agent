@@ -141,6 +141,63 @@ def test_recipe_html_adapter_extracts_jobs_from_recipe(monkeypatch: pytest.Monke
     assert result.metadata["run_steps"][0]["phase"] == "Recipe loaded"
 
 
+def test_recipe_html_adapter_does_not_use_per_page_card_limit_as_run_cap(
+    monkeypatch: pytest.MonkeyPatch, project_root: Path
+) -> None:
+    recipe_path = _write_recipe(project_root)
+    recipe_path.write_text(
+        "source_name: Test Recipe\n"
+        "mode: static_html\n"
+        "listing:\n"
+        "  card_selector: article.job-card\n"
+        "  title_selector: a.job-link\n"
+        "  link_selector: a.job-link\n"
+        "  description_selector: .description\n"
+        "pagination:\n"
+        "  page_link_selector: a.page\n"
+        "  max_pages: 2\n"
+        "  request_delay_seconds: 0\n"
+        "limits:\n"
+        "  max_cards: 2\n",
+        encoding="utf-8",
+    )
+    page_1 = """
+    <article class="job-card"><a class="job-link" href="/jobs/sap-abap">SAP ABAP Consultant</a><p class="description">ABAP role.</p></article>
+    <article class="job-card"><a class="job-link" href="/jobs/sap-basis">SAP Basis Consultant</a><p class="description">Basis role.</p></article>
+    <a class="page" href="https://example.com/jobs?page=2">2</a>
+    """
+    page_2 = """
+    <article class="job-card"><a class="job-link" href="/jobs/sap-fiori">SAP Fiori Consultant</a><p class="description">Fiori role.</p></article>
+    <article class="job-card"><a class="job-link" href="/jobs/sap-mm">SAP MM Consultant</a><p class="description">MM role.</p></article>
+    """
+
+    def fake_fetch(url: str, timeout_seconds: int):
+        if "page=2" in url:
+            return page_2, url, []
+        return page_1, url, []
+
+    monkeypatch.setattr("job_agent.services.job_board_recipe_service._fetch_static_html", fake_fetch)
+
+    result = RecipeHtmlAdapter(
+        {
+            "name": "Recipe Source",
+            "type": "recipe_html",
+            "url": "https://example.com/jobs",
+            "recipe_path": str(recipe_path.relative_to(project_root)),
+        },
+        project_root,
+    ).fetch()
+
+    assert [job.title for job in result.jobs] == [
+        "SAP ABAP Consultant",
+        "SAP Basis Consultant",
+        "SAP Fiori Consultant",
+        "SAP MM Consultant",
+    ]
+    assert result.metadata["job_limit"] is None
+    assert result.metadata["pagination_fetch_count"] == 1
+
+
 def test_recipe_html_adapter_returns_warning_for_invalid_recipe_path(project_root: Path) -> None:
     result = RecipeHtmlAdapter(
         {

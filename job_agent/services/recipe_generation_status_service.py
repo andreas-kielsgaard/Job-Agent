@@ -24,6 +24,10 @@ class RecipeGenerationStatus:
     approved_candidates: int = 0
     latest_candidate_id: str = ""
     latest_candidate_status: str = ""
+    reviewable_pending_candidates: int = 0
+    latest_reviewable_candidate_id: str = ""
+    latest_reviewable_candidate_status: str = ""
+    latest_approved_candidate_id: str = ""
     latest_approved_recipe_path: str = ""
     approved_matches_source_recipe_path: bool = False
     source_health_status: str = "untested"
@@ -48,7 +52,9 @@ class RecipeGenerationStatusService:
         artifacts = self.artifacts.list_artifacts_for_source(source)
         candidates = self._matching_candidates(source, artifacts)
         approved = [candidate for candidate in candidates if candidate.status == "approved"]
+        reviewable_pending = [candidate for candidate in candidates if _is_reviewable_pending_candidate(candidate)]
         latest = candidates[0] if candidates else None
+        latest_reviewable = reviewable_pending[0] if reviewable_pending else None
         latest_approved = approved[0] if approved else None
         execution_entry = self.execution.find_by_source_id(source.id)
         status = RecipeGenerationStatus(
@@ -63,6 +69,10 @@ class RecipeGenerationStatusService:
             approved_candidates=len(approved),
             latest_candidate_id=latest.candidate_id if latest else "",
             latest_candidate_status=latest.status if latest else "",
+            reviewable_pending_candidates=len(reviewable_pending),
+            latest_reviewable_candidate_id=latest_reviewable.candidate_id if latest_reviewable else "",
+            latest_reviewable_candidate_status=latest_reviewable.status if latest_reviewable else "",
+            latest_approved_candidate_id=latest_approved.candidate_id if latest_approved else "",
             latest_approved_recipe_path=latest_approved.approved_recipe_path if latest_approved else "",
             approved_matches_source_recipe_path=bool(
                 latest_approved
@@ -107,10 +117,25 @@ def _warnings(status: RecipeGenerationStatus, source: SourceRegistryEntry, lates
     if status.source_health_status == "good" and status.execution_entry_exists and not status.execution_enabled:
         warnings.append("Source health is good, but daily-run execution is disabled. Enablement remains a separate guarded step.")
     if latest and latest.status == "pending" and (not latest.schema_valid or latest.quality_status == "poor"):
-        warnings.append("Latest pending candidate has invalid schema or poor local quality; review before approval.")
+        if _is_reviewable_pending_candidate(latest):
+            warnings.append("Latest pending candidate has invalid schema or poor local quality; review before approval.")
+        else:
+            warnings.append(
+                "Latest generation attempt did not produce a usable reading plan; learn the source again with a better capture."
+            )
     if latest and latest.status == "approved" and not latest.preview_saved:
         warnings.append("Latest approved candidate did not save preview health.")
     return warnings
+
+
+def _is_reviewable_pending_candidate(candidate: RecipeCandidate) -> bool:
+    return (
+        candidate.status == "pending"
+        and bool(candidate.suggested_recipe_yaml.strip())
+        and bool(candidate.schema_valid)
+        and candidate.quality_status != "poor"
+        and (not candidate.refinement_used or candidate.refinement_accepted)
+    )
 
 
 def _candidate_matches_source(candidate: RecipeCandidate, source: SourceRegistryEntry, artifact_dirs: set[str]) -> bool:

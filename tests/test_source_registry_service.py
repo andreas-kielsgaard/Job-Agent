@@ -122,6 +122,57 @@ def test_update_source_persists_default_source_edits(project_root: Path) -> None
     assert saved["notes"] == "Reviewed for daily-run prep."
 
 
+def test_add_source_saves_review_entry_without_daily_run_execution(project_root: Path) -> None:
+    service = SourceRegistryService(project_root)
+
+    created = service.add_source(
+        name="Accuro Projects",
+        url="https://www.accuro.dk/freelance-projects",
+        notes="Interesting Nordic contract source.",
+    )
+
+    registry = read_yaml(project_root / "sources" / "source-registry.yaml", {})
+    saved = next(item for item in registry["sources"] if item["id"] == "accuro-projects")
+    assert created.id == "accuro-projects"
+    assert created.kind == "job_board"
+    assert created.status == "needs_review"
+    assert created.enabled is False
+    assert saved["url"] == "https://www.accuro.dk/freelance-projects"
+    assert saved["recipe_path"] == ""
+    assert saved["notes"] == "Interesting Nordic contract source."
+
+
+def test_add_source_can_start_with_existing_recipe(project_root: Path) -> None:
+    recipe = project_root / "sources" / "recipes" / "experimental" / "accuro.yaml"
+    recipe.parent.mkdir(parents=True, exist_ok=True)
+    recipe.write_text(
+        "source_name: Accuro\n"
+        "listing:\n"
+        "  card_selector: article\n"
+        "  title_selector: h2\n"
+        "  link_selector: a\n",
+        encoding="utf-8",
+    )
+
+    created = SourceRegistryService(project_root).add_source(
+        name="Accuro",
+        url="https://www.accuro.dk/freelance-projects",
+        recipe_path="sources/recipes/experimental/accuro.yaml",
+    )
+
+    assert created.kind == "recipe"
+    assert created.status == "testing"
+    assert created.recipe_path == "sources/recipes/experimental/accuro.yaml"
+    assert "recipe" in created.tags
+
+
+def test_add_source_rejects_duplicate_url(project_root: Path) -> None:
+    service = SourceRegistryService(project_root)
+
+    with pytest.raises(ValueError, match="Source already exists"):
+        service.add_source(name="Duplicate", url="https://eursap.eu/jobs")
+
+
 def test_update_source_rejects_unknown_status(project_root: Path) -> None:
     with pytest.raises(ValueError, match="Unsupported source status"):
         SourceRegistryService(project_root).update_source(

@@ -4,7 +4,11 @@ from pathlib import Path
 
 import pytest
 
-from job_agent.services.job_board_recipe_service import extract_jobs_with_recipe, job_board_recipe_from_mapping
+from job_agent.services.job_board_recipe_service import (
+    extract_job_detail_from_html,
+    extract_jobs_with_recipe,
+    job_board_recipe_from_mapping,
+)
 from job_agent.services.recipe_calibration_service import (
     audit_recipe_selectors,
     build_recipe_blueprint,
@@ -55,6 +59,27 @@ def test_candidate_discovery_marks_navigation_noise() -> None:
     candidates = discover_candidate_elements(CALIBRATION_HTML, max_candidates=20)
 
     assert any(candidate.likely_noise for candidate in candidates)
+
+
+def test_blueprint_rejects_media_project_links_as_non_job_evidence() -> None:
+    html = """
+    <!doctype html>
+    <html><body>
+      <footer>
+        <div class="footer-disclaimer">
+          <a href="/-/media/project/manpowergroup/legal/reporting.pdf">Reporting violations</a>
+          <a href="/en/privacy-policy">Privacy Policy</a>
+          <a href="/en/all-jobs">View All Jobs</a>
+        </div>
+      </footer>
+    </body></html>
+    """
+
+    blueprint = build_recipe_blueprint(html, "https://www.experis.pl/en/search?page=1&searchKeyword=SAP")
+    candidates = discover_candidate_elements(html, max_candidates=10)
+
+    assert blueprint["status"] == "not_recommended"
+    assert all(candidate.likely_noise for candidate in candidates)
 
 
 def test_selector_audit_reports_zero_card_matches() -> None:
@@ -188,6 +213,130 @@ def test_blueprint_detects_whitehall_style_listing_pagination_and_detail() -> No
     assert recipe["detail"]["follow"] is True
     assert recipe["detail"]["use_json_ld"] is True
     assert ".job-single h1" in recipe["detail"]["title_selector"]
+
+
+def test_blueprint_detects_freelancermap_link_rel_and_embedded_pagination() -> None:
+    html = """
+    <!doctype html>
+    <html><head>
+      <link rel="next" href="https://www.freelancermap.com/projects?query=sap&pagenr=2">
+    </head><body>
+      <main>
+        <div class="project-card">
+          <div class="project-info">
+            <div class="mg-b-display-m line-height-base">K2 Partnering Solutions</div>
+            <div><a class="h3 no-underline" href="/project/sap-data-migration-consultant-3001622">SAP Data Migration Consultant</a></div>
+            <div data-testid="city">lisboa, Portugal</div>
+            <div data-testid="remoteInPercent">100% remote</div>
+            <div data-testid="type">Freelance</div>
+            <div data-testid="beginningText">9/2026</div>
+            <span data-testid="created">19.05.2026</span>
+          </div>
+        </div>
+        <div class="project-card">
+          <div class="project-info">
+            <div class="mg-b-display-m line-height-base">ForTech Consulting GmbH</div>
+            <div><a class="h3 no-underline" href="/project/sap-fi-consultant">SAP FI Consultant</a></div>
+            <div data-testid="city">Lisbon, Portugal</div>
+          </div>
+        </div>
+      </main>
+      <script type="application/json">
+      {"initialPagination":"<div class='paginator'><a href='/projects?query=sap&pagenr=2#list'>2</a><a href='/projects?query=sap&pagenr=3#list'>3</a><a href='/projects?query=sap&pagenr=4#list'>4</a></div>"}
+      </script>
+    </body></html>
+    """
+
+    blueprint = build_recipe_blueprint(html, "https://www.freelancermap.com/projects?query=sap&pagenr=1")
+    recipe = blueprint["recipe"]
+
+    assert recipe["listing"]["card_selector"] == "div.project-card"
+    assert recipe["listing"]["company_selector"] == "div.project-info > div.mg-b-display-m:first-child"
+    assert recipe["listing"]["location_selector"] == '[data-testid="city"]'
+    assert recipe["listing"]["remote_selector"] == '[data-testid="remoteInPercent"]'
+    assert recipe["listing"]["posted_date_selector"] == '[data-testid="created"]'
+    assert recipe["listing"]["start_date_selector"] == '[data-testid="beginningText"]'
+    assert recipe["pagination"]["page_link_selector"] == 'a[href*="pagenr="]'
+    assert recipe["pagination"]["next_selector"] == 'link[rel="next"]'
+    assert recipe["pagination"]["max_pages"] == 4
+
+
+def test_blueprint_uses_table_headers_and_detail_labels_semantically() -> None:
+    overview_html = """
+    <!doctype html>
+    <html><body>
+      <table>
+        <thead>
+          <tr>
+            <th>Position</th>
+            <th>Category</th>
+            <th>Location</th>
+            <th>Application deadline</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><a href="https://accuro.dk/en/freelance_projects/senior-iam/">Senior IAM / IGA Engineer</a></td>
+            <td>IT</td>
+            <td>Copenhagen</td>
+            <td>28 May, 2026</td>
+          </tr>
+          <tr>
+            <td><a href="https://accuro.dk/en/freelance_projects/test-manager/">Test Manager</a></td>
+            <td>Test Management &amp; Test</td>
+            <td>København</td>
+            <td>26 May, 2026</td>
+          </tr>
+        </tbody>
+      </table>
+    </body></html>
+    """
+    detail_html = """
+    <!doctype html>
+    <html><body>
+      <section class="task_detail_wrapp">
+        <h1>Senior IAM / IGA Engineer</h1>
+        <div class="jb_det_box">
+          <div class="dato_div_sec">
+            <div class="dato_wrapp">Start date:&nbsp;<span>01 Jun, 2026</span></div>
+            <div class="dato_wrapp">End date:&nbsp;<span>30 Nov, 2026</span></div>
+          </div>
+          <div class="dato_div_sec">
+            <div class="dato_wrapp">Application deadline:&nbsp;<span>28 May, 2026</span></div>
+            <div class="dato_wrapp">Location:&nbsp;<span>Copenhagen</span></div>
+          </div>
+        </div>
+        <div class="job_txt_wrapp"><div class="des_wrapp">Description: Long IAM delivery description.</div></div>
+      </section>
+    </body></html>
+    """
+
+    blueprint = build_recipe_blueprint(
+        overview_html,
+        "https://accuro.dk/en/consultant/freelance-projects/",
+        detail_html=detail_html,
+        detail_url="https://accuro.dk/en/freelance_projects/senior-iam/",
+    )
+    recipe = blueprint["recipe"]
+
+    assert recipe["listing"]["card_selector"] == "tbody tr"
+    assert recipe["listing"]["location_selector"] == "td:nth-of-type(3)"
+    assert "workload_selector" not in recipe["listing"]
+    assert "posted_date_selector" not in recipe["listing"]
+    assert recipe["detail"]["location_selector"].endswith(".dato_wrapp:nth-of-type(2) > span")
+    assert recipe["detail"]["start_date_selector"].endswith(".dato_wrapp:nth-of-type(1) > span")
+    assert any("Application deadline" in warning for warning in blueprint["warnings"])
+    assert any("Category" in warning for warning in blueprint["warnings"])
+
+    parsed_recipe = job_board_recipe_from_mapping(recipe)
+    detail_job = extract_job_detail_from_html(
+        detail_html,
+        "https://accuro.dk/en/freelance_projects/senior-iam/",
+        parsed_recipe,
+    )
+
+    assert detail_job.location == "Copenhagen"
+    assert detail_job.start_date == "01 Jun, 2026"
 
 
 def test_calibration_captures_one_detail_sample_and_blueprint(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -1,1 +1,19 @@
-sources: []
+sources:
+- name: Whitehall Resources SAP Jobs
+  source_id: whitehall-sap-contract
+  type: recipe_html
+  url: https://www.whitehallresources.com/sap-jobs/
+  recipe_path: sources/recipes/experimental/whitehall-sap-contract.yaml
+  enabled: false
+- name: FreelancerMap
+  source_id: freelancermap
+  type: recipe_html
+  url: https://www.freelancermap.com/projects?created=30&excludeDachProjects=true&query=sap&sort=2&pagenr=1
+  recipe_path: sources/recipes/experimental/freelancermap.yaml
+  enabled: false
+- name: Accuro
+  source_id: accuro
+  type: recipe_html
+  url: https://accuro.dk/en/consultant/freelance-projects/
+  recipe_path: sources/recipes/experimental/accuro.yaml
+  enabled: false

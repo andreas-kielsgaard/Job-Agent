@@ -49,8 +49,8 @@ class ApprovedRecipeAdoptionService:
         source = self.registry.get_source(source_id)
         if not source:
             raise ValueError(f"Source not found: {source_id}")
-        if source.kind != "recipe" and not source.recipe_path:
-            raise ValueError("Only recipe-backed sources can adopt approved recipes.")
+        if source.kind in {"manual", "local_yaml"} and not source.url:
+            raise ValueError("Only URL-based sources can use an approved reading plan.")
 
         warnings = []
         if candidate.approved_source_id and candidate.approved_source_id != source_id:

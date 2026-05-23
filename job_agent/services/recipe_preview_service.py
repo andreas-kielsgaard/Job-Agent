@@ -142,6 +142,7 @@ def explain_recipe(recipe_path: str | Path, root: Path | None = None) -> RecipeE
         RecipeExplanationItem("Rate", _selector_detail(recipe.listing.rate_selector)),
         RecipeExplanationItem("Workload", _selector_detail(recipe.listing.workload_selector)),
         RecipeExplanationItem("Posted date", _selector_detail(recipe.listing.posted_date_selector)),
+        RecipeExplanationItem("Start date", _selector_detail(recipe.listing.start_date_selector)),
         RecipeExplanationItem("Description", _selector_detail(recipe.listing.description_selector)),
     ]
     navigation_fields = [

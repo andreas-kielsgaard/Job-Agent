@@ -7,7 +7,7 @@ CLAUDE_MODELS = [
         "quality": "High performance",
         "speed": "Medium",
         "price": "Medium",
-        "help": "Tracks the current Sonnet 4 snapshot. Good default balance of quality and cost.",
+        "help": "Auto-updating Sonnet 4 alias. Good default balance of quality, cost, and availability.",
     },
     {
         "label": "Stable balanced",
@@ -15,7 +15,7 @@ CLAUDE_MODELS = [
         "quality": "High performance",
         "speed": "Medium",
         "price": "Medium",
-        "help": "Stable snapshot. Best if you want reproducible behavior.",
+        "help": "Pinned Sonnet 4 snapshot. Best if you want reproducible behavior.",
     },
     {
         "label": "Highest performance",
@@ -27,11 +27,11 @@ CLAUDE_MODELS = [
     },
     {
         "label": "Cheapest and fastest",
-        "value": "claude-3-5-haiku-20241022",
+        "value": "claude-3-5-haiku-latest",
         "quality": "Basic performance",
         "speed": "High",
         "price": "Low",
-        "help": "Fast and cheaper, but weaker for nuanced writing.",
+        "help": "Auto-updating Haiku 3.5 alias. Fast and cheaper, but weaker for nuanced writing.",
     },
 ]
 

@@ -97,11 +97,10 @@ async def _store_uploaded_cv(cv_file: UploadFile, extract_to_canonical: bool) ->
 
 @router.post("/setup/source-toggle")
 def toggle_source(index: int = Form(...), enabled: bool = Form(False)) -> RedirectResponse:
-    try:
-        setup_service().toggle_source(index, enabled)
-    except IndexError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return RedirectResponse(url="/setup#sources", status_code=303)
+    return RedirectResponse(
+        url="/sources?warning=Source execution is managed from each source detail page.",
+        status_code=303,
+    )
 
 
 @router.post("/setup/source-add")
@@ -112,13 +111,10 @@ def add_source(
     keywords: str = Form(""),
     enabled: bool = Form(True),
 ) -> RedirectResponse:
-    try:
-        setup_service().add_source(
-            name=name, url_or_path=url_or_path, source_type=source_type, keywords=keywords, enabled=enabled
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return RedirectResponse(url="/setup#sources", status_code=303)
+    return RedirectResponse(
+        url="/sources/new?warning=Use the source workflow to add and review job boards before daily-run use.",
+        status_code=303,
+    )
 
 
 @router.post("/setup/file")

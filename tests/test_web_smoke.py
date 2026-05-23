@@ -50,22 +50,32 @@ def test_setup_routes_write_to_temp_root_and_validate_inputs(client: TestClient,
     assert contact_response.status_code == 303
     assert "Temp User" in (project_root / "profile" / "contact.yaml").read_text(encoding="utf-8")
 
-    invalid_source = client.post(
+    old_source_add = client.post(
         "/setup/source-add",
         data={"name": "Bad", "source_type": "generic_html", "url_or_path": ""},
         follow_redirects=False,
     )
-    assert invalid_source.status_code == 400
+    assert old_source_add.status_code == 303
+    assert old_source_add.headers["location"].startswith("/sources/new")
 
-    local_source = client.post(
+    old_source_toggle = client.post(
+        "/setup/source-toggle",
+        data={"index": "0", "enabled": "1"},
+        follow_redirects=False,
+    )
+    assert old_source_toggle.status_code == 303
+    assert old_source_toggle.headers["location"].startswith("/sources")
+
+    source_config = project_root / "sources" / "recruiting-sites.yaml"
+    before = source_config.read_text(encoding="utf-8") if source_config.exists() else ""
+    redirected_source_add = client.post(
         "/setup/source-add",
         data={"name": "Local", "source_type": "local_yaml", "url_or_path": "jobs/raw/manual.yaml"},
         follow_redirects=False,
     )
-    assert local_source.status_code == 303
-    source_yaml = (project_root / "sources" / "recruiting-sites.yaml").read_text(encoding="utf-8")
-    assert "path: jobs/raw/manual.yaml" in source_yaml
-    assert "url:" not in source_yaml
+    assert redirected_source_add.status_code == 303
+    after = source_config.read_text(encoding="utf-8") if source_config.exists() else ""
+    assert after == before
 
 
 def test_unsupported_cv_upload_suffix_returns_400(client: TestClient) -> None:
@@ -310,9 +320,10 @@ def test_source_overview_and_detail_routes_render(client: TestClient) -> None:
     assert overview.status_code == 200
     assert 'class="source-list"' in overview.text
     assert 'class="source-card"' in overview.text
-    assert "Extraction health" in overview.text
+    assert "/sources/new" in overview.text
+    assert "Reading plan review" in overview.text
     assert "Historical results" in overview.text
-    assert "execution missing" in overview.text
+    assert "Next step" in overview.text
     assert "Manual Intake" in overview.text
     assert "Eursap Jobs" in overview.text
     assert "Whitehall Resources SAP Jobs" in overview.text
@@ -322,28 +333,53 @@ def test_source_overview_and_detail_routes_render(client: TestClient) -> None:
 
     assert detail.status_code == 200
     assert "Not ready yet" in detail.text
-    assert "Run recipe review" in detail.text
-    assert "Recipe preview" in detail.text
-    assert "Open recipe review" in detail.text
-    assert "Source test" in detail.text
+    assert "Review what it reads" in detail.text
+    assert "Reading plan review" in detail.text
+    assert "Open saved review" in detail.text
+    assert "Safe source test" in detail.text
     assert "Daily run" in detail.text
     assert "Source settings" in detail.text
     assert "Save source settings" in detail.text
-    assert "Capture one page" in detail.text
-    assert "Selected recipe" in detail.text
-    assert "Use selected recipe" in detail.text
-    assert "Compatibility check" in detail.text
+    assert "Capture sample only" in detail.text
+    assert "Reading plan" in detail.text
+    assert "Use selected plan" in detail.text
+    assert "Compatibility evidence" in detail.text
     assert "Recipe editor" in detail.text
-    assert "Extraction" in detail.text
-    assert "Saved review details" in detail.text
-    assert "Generate or replace recipe" in detail.text
-    assert "Draft recipes" in detail.text
+    assert "Review evidence and fields" in detail.text
+    assert "Advanced: regenerate or inspect plans" in detail.text
+    assert "Generated plans" in detail.text
     assert "Historical Results" in detail.text
     assert "No jobs have been saved from this source yet" in detail.text
-    assert "Daily Run" in detail.text
     assert "/recipe-preview" in detail.text
     assert "auto_run=1" in detail.text
     assert "selected_source_id=eursap-jobs" in detail.text
+
+
+def test_add_source_workflow_creates_review_source(client: TestClient, project_root: Path) -> None:
+    from job_agent.services.source_registry_service import SourceRegistryService
+
+    form = client.get("/sources/new")
+    response = client.post(
+        "/sources/new",
+        data={
+            "name": "Accuro Projects",
+            "url": "https://www.accuro.dk/freelance-projects",
+            "recipe_path": "",
+            "notes": "Potential Nordic freelance source.",
+        },
+        follow_redirects=False,
+    )
+
+    assert form.status_code == 200
+    assert "Save source" in form.text
+    assert response.status_code == 303
+    assert response.headers["location"].startswith("/sources/accuro-projects")
+    source = SourceRegistryService(project_root).get_source("accuro-projects")
+    assert source is not None
+    assert source.kind == "job_board"
+    assert source.status == "needs_review"
+    assert source.enabled is False
+    assert source.url == "https://www.accuro.dk/freelance-projects"
 
 
 def test_source_detail_updates_selected_recipe(client: TestClient, project_root: Path) -> None:
@@ -409,7 +445,7 @@ def test_source_archive_hides_source_from_default_overview_and_disables_executio
 
     assert restore_response.status_code == 303
     detail = client.get("/sources/whitehall-sap-contract")
-    assert "Needs review" in detail.text
+    assert "Needs setup" in detail.text
 
 
 def test_source_detail_capture_calibration_action_is_bounded(
@@ -499,10 +535,9 @@ def test_source_routes_render_saved_health(client: TestClient, project_root: Pat
     )
 
     assert overview.status_code == 200
-    assert "good" in overview.text
     assert "9 jobs extracted, 9 useful titles, no generic labels." in overview.text
     assert detail.status_code == 200
-    assert "Saved review details" in detail.text
+    assert "Review evidence and fields" in detail.text
     assert "output/recipe-calibration/eursap/page.html" in detail.text
     assert "9 jobs extracted, 9 useful titles, no generic labels." in detail.text
     assert "auto_run=1" not in detail.text
@@ -657,8 +692,8 @@ def test_source_detail_shows_dry_run_link_when_execution_entry_exists(client: Te
     detail = client.get("/sources/eursap-jobs")
 
     assert detail.status_code == 200
-    assert "/sources/eursap-jobs/test-run" in detail.text
-    assert "Test source without saving jobs" in detail.text
+    assert "Review what it reads" in detail.text
+    assert "Safe source test" in detail.text
 
 
 def test_source_test_run_view_and_api_save_readiness(monkeypatch: pytest.MonkeyPatch, client: TestClient) -> None:

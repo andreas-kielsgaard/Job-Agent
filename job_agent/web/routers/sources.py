@@ -44,6 +44,14 @@ def source_overview(
         for source in execution_source_service().list_sources()
         if isinstance(source, dict)
     }
+    source_cards = [
+        _source_card_context(source, execution_by_source.get(source.id))
+        for source in sources
+    ]
+    archived_source_cards = [
+        _source_card_context(source, execution_by_source.get(source.id))
+        for source in archived_sources
+    ]
     return templates.TemplateResponse(
         request,
         "sources.html",
@@ -51,11 +59,78 @@ def source_overview(
             "request": request,
             "sources": sources,
             "archived_sources": archived_sources,
+            "source_cards": source_cards,
+            "archived_source_cards": archived_source_cards,
             "message": message,
             "warning": warning,
             "execution_by_source": execution_by_source,
+            "daily_run_enabled_count": sum(
+                1 for source in execution_by_source.values() if bool(source.get("enabled", True))
+            ),
         },
     )
+
+
+@router.get("/sources/new", response_class=HTMLResponse)
+def new_source_form(
+    request: Request,
+    name: str = "",
+    url: str = "",
+    recipe_path: str = "",
+    notes: str = "",
+    warning: str = "",
+) -> HTMLResponse:
+    return templates.TemplateResponse(
+        request,
+        "source_new.html",
+        {
+            "request": request,
+            "name": name,
+            "url": url,
+            "recipe_path": recipe_path,
+            "notes": notes,
+            "warning": warning,
+            "recipe_options": recipe_options(execution_source_service().root),
+        },
+    )
+
+
+@router.post("/sources/new", response_class=HTMLResponse)
+def create_source(
+    request: Request,
+    name: str = Form(""),
+    url: str = Form(""),
+    recipe_path: str = Form(""),
+    notes: str = Form(""),
+):
+    try:
+        created = source_registry_service().add_source(
+            name=name,
+            url=url,
+            recipe_path=recipe_path,
+            notes=notes,
+        )
+    except ValueError as exc:
+        return templates.TemplateResponse(
+            request,
+            "source_new.html",
+            {
+                "request": request,
+                "name": name,
+                "url": url,
+                "recipe_path": recipe_path,
+                "notes": notes,
+                "warning": str(exc),
+                "recipe_options": recipe_options(execution_source_service().root),
+            },
+            status_code=400,
+        )
+    message = "Source added. It is saved only for setup and is not included in the daily run yet."
+    if created.recipe_path:
+        message += " Review the reading plan next."
+    else:
+        message += " Teach the app how to read it next."
+    return _redirect_to_source(created.id, message=message)
 
 
 @router.get("/sources/{source_id}", response_class=HTMLResponse)
@@ -70,7 +145,14 @@ def source_detail(request: Request, source_id: str, message: str = "", warning: 
     go_live_readiness = source_execution_readiness_service().evaluate(source.id)
     best_artifact_dir = generation_status.best_artifact.artifact_dir if generation_status.best_artifact else ""
     recipe_explanation = explain_recipe(source.recipe_path, root=execution_source_service().root) if source.recipe_path else None
-    source_status = _source_page_status(source, execution_entry, go_live_readiness, _recipe_preview_url(source, auto_run=True))
+    source_status = _source_page_status(
+        source,
+        execution_entry,
+        go_live_readiness,
+        _recipe_preview_url(source, auto_run=True),
+        generation_status,
+    )
+    source_setup_steps = _source_setup_steps(source, execution_entry, go_live_readiness, generation_status)
     response = templates.TemplateResponse(
         request,
         "source_detail.html",
@@ -87,12 +169,14 @@ def source_detail(request: Request, source_id: str, message: str = "", warning: 
             "recipe_explanation": recipe_explanation,
             "recipe_capabilities": _recipe_capabilities(recipe_explanation),
             "source_status": source_status,
+            "source_setup_steps": source_setup_steps,
             "go_live_readiness": go_live_readiness,
             "recipe_options": recipe_options(execution_source_service().root),
             "kind_options": SOURCE_KIND_DEFINITIONS,
             "status_options": SOURCE_STATUS_DEFINITIONS,
             "compatibility_url": _compatibility_url(source),
             "recipe_editor_url": _recipe_editor_url(source, best_artifact_dir),
+            "recipe_preview_auto_url": _recipe_preview_url(source, auto_run=True),
         },
     )
     response.headers["Cache-Control"] = "no-store"
@@ -183,6 +267,34 @@ def capture_recipe_calibration_artifact(
     if result.detail_sample_url:
         message += " One detail page sample was captured."
     return _redirect_to_source(source_id, message=message)
+
+
+@router.post("/sources/{source_id}/reading-plan/learn")
+def learn_source_reading_plan(
+    source_id: str,
+    rendered: str = Form("1"),
+    capture_detail: str = Form("1"),
+    max_candidates: int = Form(30),
+    refine: str = Form("1"),
+    max_attempts: int = Form(3),
+) -> RedirectResponse:
+    source = _registry_source_or_404(source_id)
+    _require_not_archived(source)
+    if not source.url:
+        return _redirect_to_source(source_id, warning="Save a source URL before teaching the app how to read it.")
+    bounded_candidates = max(5, min(max_candidates, 50))
+    try:
+        run = recipe_generation_run_service().start_from_source_capture(
+            source_id,
+            rendered=bool(rendered),
+            capture_detail=bool(capture_detail),
+            max_candidates=bounded_candidates,
+            refine=bool(refine),
+            max_attempts=max_attempts,
+        )
+    except (RuntimeError, ValueError) as exc:
+        return _redirect_to_source(source_id, warning=f"Could not learn this source yet: {exc}")
+    return RedirectResponse(f"/sources/{source_id}/recipe-generation/{run['run_id']}", status_code=303)
 
 
 @router.post("/sources/{source_id}/recipe/update")
@@ -278,6 +390,7 @@ def source_dry_run(request: Request, source_id: str, force_disabled: bool = Fals
 @router.get("/sources/{source_id}/test-run", response_class=HTMLResponse)
 def source_test_run(request: Request, source_id: str) -> HTMLResponse:
     source = _registry_source_or_404(source_id)
+    _ensure_disabled_execution_entry(source)
     execution_entry = execution_source_service().find_by_source_id(source.id)
     response = templates.TemplateResponse(
         request,
@@ -296,6 +409,7 @@ def source_test_run(request: Request, source_id: str) -> HTMLResponse:
 @router.post("/sources/{source_id}/test-run")
 def run_source_test(source_id: str) -> JSONResponse:
     source = _registry_source_or_404(source_id)
+    _ensure_disabled_execution_entry(source)
     execution_entry = execution_source_service().find_by_source_id(source.id)
     force_disabled = bool(execution_entry and not bool(execution_entry.get("enabled", True)))
     result = SourceDryRunService(execution_source_service().root).dry_run(
@@ -309,6 +423,7 @@ def run_source_test(source_id: str) -> JSONResponse:
 @router.post("/sources/{source_id}/test-run/stream")
 def run_source_test_stream(source_id: str) -> StreamingResponse:
     source = _registry_source_or_404(source_id)
+    _ensure_disabled_execution_entry(source)
     execution_entry = execution_source_service().find_by_source_id(source.id)
     force_disabled = bool(execution_entry and not bool(execution_entry.get("enabled", True)))
 
@@ -453,6 +568,13 @@ def recipe_candidate_detail(request: Request, candidate_id: str, source_id: str 
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     source = source_registry_service().get_source(source_id) if source_id else _source_for_candidate(candidate)
     approval_recipe_path = recipe_candidate_approval_service().suggested_recipe_path(candidate, source)
+    candidate_can_be_used = (
+        candidate.status == "pending"
+        and bool(candidate.suggested_recipe_yaml.strip())
+        and bool(candidate.schema_valid)
+        and candidate.quality_status != "poor"
+        and (not candidate.refinement_used or candidate.refinement_accepted)
+    )
     return templates.TemplateResponse(
         request,
         "recipe_candidate_detail.html",
@@ -461,6 +583,7 @@ def recipe_candidate_detail(request: Request, candidate_id: str, source_id: str 
             "candidate": candidate,
             "source": source,
             "approval_recipe_path": approval_recipe_path,
+            "candidate_can_be_used": candidate_can_be_used,
         },
     )
 
@@ -522,11 +645,19 @@ def approve_recipe_candidate(
             status_code=303,
         )
     if source_id:
+        try:
+            adoption = approved_recipe_adoption_service().adopt(
+                candidate_id,
+                source_id,
+                prepare_disabled_execution_entry=False,
+            )
+        except ValueError as exc:
+            return _redirect_to_source(source_id, warning=f"Reading plan was saved, but could not be selected: {exc}")
         return _redirect_to_source(
             source_id,
             message=(
-                f"Recipe candidate approved: {result.candidate.candidate_id}. "
-                f"Preview extracted {result.preview.extracted_job_count if result.preview else 0} jobs."
+                f"Reading plan saved and selected for {adoption.source_name}. "
+                f"Review extracted {result.preview.extracted_job_count if result.preview else 0} jobs."
             ),
         )
     return RedirectResponse(f"/recipe-candidates/{candidate_id}", status_code=303)
@@ -566,13 +697,39 @@ def _recipe_editor_url(source, artifact_dir: str = "") -> str:
     return f"/recipe-editor?{urlencode(params)}"
 
 
-def _source_page_status(source, execution_entry, readiness, recipe_preview_url: str) -> dict:
+def _source_card_context(source, execution_entry) -> dict:
+    readiness = source_execution_readiness_service().evaluate(source.id)
+    return {
+        "source": source,
+        "execution": execution_entry,
+        "status": _source_page_status(
+            source,
+            execution_entry,
+            readiness,
+            _recipe_preview_url(source, auto_run=True),
+            recipe_generation_status_service().build_for_source(source.id),
+        ),
+    }
+
+
+def _source_page_status(source, execution_entry, readiness, recipe_preview_url: str, generation_status=None) -> dict:
     execution_enabled = bool(execution_entry and execution_entry.get("enabled", True))
+    latest_reviewable_candidate_id = (
+        getattr(generation_status, "latest_reviewable_candidate_id", "") if generation_status else ""
+    )
+    reviewable_pending_candidates = (
+        int(getattr(generation_status, "reviewable_pending_candidates", 0) or 0) if generation_status else 0
+    )
+    latest_approved_candidate_id = getattr(generation_status, "latest_approved_candidate_id", "") if generation_status else ""
+    approved_recipe_path = getattr(generation_status, "latest_approved_recipe_path", "") if generation_status else ""
+    approved_matches_source = bool(
+        getattr(generation_status, "approved_matches_source_recipe_path", False)
+    ) if generation_status else False
     status = {
         "title": "Ready for review",
-        "summary": "This source is configured, but it still needs a saved recipe review and source test before the daily run can use it.",
-        "badge": source.status_label,
-        "badge_class": source.status_badge,
+        "summary": "This source is saved, but it still needs a reading plan review and source test before the daily run can use it.",
+        "badge": "In setup",
+        "badge_class": "medium",
         "primary_action": None,
         "secondary_action": {"type": "link", "label": "Edit settings", "href": "#source-settings"},
         "preview_label": _status_label(source.health.health_status),
@@ -595,6 +752,30 @@ def _source_page_status(source, execution_entry, readiness, recipe_preview_url: 
                 "blockers": ["Restore this source before testing or enabling it."],
             }
         )
+    elif source.kind == "manual":
+        status.update(
+            {
+                "title": "Manual intake",
+                "summary": "Use this for recruiter emails, copied postings, and sources that should not be automated.",
+                "badge": "Manual",
+                "badge_class": "high",
+                "preview_label": "Not needed",
+                "dry_run_label": "Not needed",
+                "automation_label": "Manual only",
+            }
+        )
+    elif source.kind == "local_yaml":
+        status.update(
+            {
+                "title": "Local sample source",
+                "summary": "Jobs come from a local YAML file for samples or controlled imports.",
+                "badge": "Local file",
+                "badge_class": "high",
+                "preview_label": "Not needed",
+                "dry_run_label": "Not needed",
+                "automation_label": "Configured locally",
+            }
+        )
     elif not source.url:
         status.update(
             {
@@ -607,38 +788,74 @@ def _source_page_status(source, execution_entry, readiness, recipe_preview_url: 
             }
         )
     elif not source.recipe_path:
+        if reviewable_pending_candidates and latest_reviewable_candidate_id:
+            status.update(
+                {
+                    "title": "Review generated reading plan",
+                    "summary": "A generated reading plan is waiting for you to review and select.",
+                    "badge": "Review plan",
+                    "badge_class": "medium",
+                    "primary_action": {
+                        "type": "link",
+                        "label": "Review reading plan",
+                        "href": f"/recipe-candidates/{latest_reviewable_candidate_id}?source_id={source.id}",
+                    },
+                    "blockers": ["No reading plan is selected yet."],
+                }
+            )
+            return status
+        if approved_recipe_path and latest_approved_candidate_id and not approved_matches_source:
+            status.update(
+                {
+                    "title": "Use saved reading plan",
+                    "summary": "A reviewed reading plan exists, but this source is not using it yet.",
+                    "badge": "Select plan",
+                    "badge_class": "medium",
+                    "primary_action": {
+                        "type": "link",
+                        "label": "Use reading plan",
+                        "href": f"/recipe-candidates/{latest_approved_candidate_id}?source_id={source.id}",
+                    },
+                    "blockers": ["No reading plan is selected yet."],
+                }
+            )
+            return status
         status.update(
             {
-                "title": "Needs a recipe",
-                "summary": "Choose or create a recipe so the app knows how to read this source.",
+                "title": "Teach the app how to read this source",
+                "summary": "The app needs a reading plan before it can find jobs, follow pagination, or open job details.",
                 "badge": "Needs setup",
                 "badge_class": "medium",
-                "primary_action": {"type": "link", "label": "Choose recipe", "href": "#recipe"},
-                "blockers": ["No extraction recipe is selected."],
+                "primary_action": {
+                    "type": "post",
+                    "label": "Learn source",
+                    "action": f"/sources/{source.id}/reading-plan/learn",
+                },
+                "blockers": ["No reading plan is selected."],
             }
         )
     elif source.health.health_status != "good":
         status.update(
             {
                 "title": "Not ready yet",
-                "summary": "The recipe has not passed a saved review. Run the recipe review first.",
-                "badge": "Needs preview",
+                "summary": "The reading plan has not passed a saved review. Review what it reads before testing the whole source.",
+                "badge": "Needs review",
                 "badge_class": "medium",
-                "primary_action": {"type": "link", "label": "Run recipe review", "href": recipe_preview_url},
+                "primary_action": {"type": "link", "label": "Review what it reads", "href": recipe_preview_url},
                 "blockers": [source.health.health_summary],
             }
         )
     elif not execution_entry:
         status.update(
             {
-                "title": "Preview passed",
-                "summary": "Extraction looks usable. Prepare this source before adding it to the daily run.",
-                "badge": "Preview passed",
+                "title": "Ready for a safe source test",
+                "summary": "The reading plan review passed. Test the source end-to-end without saving jobs.",
+                "badge": "Review passed",
                 "badge_class": "high",
                 "primary_action": {
-                    "type": "post",
-                    "label": "Prepare daily-run entry",
-                    "action": f"/sources/{source.id}/execution/create",
+                    "type": "link",
+                    "label": "Test source safely",
+                    "href": f"/sources/{source.id}/test-run",
                 },
             }
         )
@@ -646,12 +863,12 @@ def _source_page_status(source, execution_entry, readiness, recipe_preview_url: 
         status.update(
             {
                 "title": "Needs a source test",
-                "summary": "Recipe review passed. Now test this configured source the way the daily run would use it, without saving jobs.",
+                "summary": "Review passed. Now test this source the way the daily run would use it, without saving jobs.",
                 "badge": "Needs source test",
                 "badge_class": "medium",
                 "primary_action": {
                     "type": "link",
-                    "label": "Test source without saving jobs",
+                    "label": "Test source safely",
                     "href": f"/sources/{source.id}/test-run",
                 },
                 "blockers": list(readiness.blockers[:3]),
@@ -686,6 +903,130 @@ def _source_page_status(source, execution_entry, readiness, recipe_preview_url: 
             }
         )
     return status
+
+
+def _source_setup_steps(source, execution_entry, readiness, generation_status) -> list[dict[str, object]]:
+    if source.kind == "manual":
+        return [
+            {
+                "title": "Manual intake",
+                "summary": "This source is for jobs you add by hand from emails, recruiters, or copied postings.",
+                "badge": "Ready",
+                "badge_class": "high",
+                "state": "complete",
+                "action": None,
+            }
+        ]
+    if source.kind == "local_yaml":
+        return [
+            {
+                "title": "Local source",
+                "summary": "This source reads controlled local YAML data rather than a public job-board page.",
+                "badge": "Ready",
+                "badge_class": "high",
+                "state": "complete",
+                "action": None,
+            }
+        ]
+    latest_reviewable_candidate_id = (
+        getattr(generation_status, "latest_reviewable_candidate_id", "") if generation_status else ""
+    )
+    reviewable_pending_candidates = (
+        int(getattr(generation_status, "reviewable_pending_candidates", 0) or 0) if generation_status else 0
+    )
+    execution_enabled = bool(execution_entry and execution_entry.get("enabled", True))
+    steps = [
+        {
+            "title": "Add source",
+            "summary": "The job-board URL is saved for review.",
+            "badge": "Done" if source.url else "Needs URL",
+            "badge_class": "high" if source.url else "medium",
+            "state": "complete" if source.url else "todo",
+            "action": {"type": "link", "label": "Edit URL", "href": "#source-settings"} if not source.url else None,
+        }
+    ]
+    if source.recipe_path:
+        learn_badge = "Selected"
+        learn_state = "complete"
+        learn_action = None
+        learn_summary = "A reading plan is selected for this source."
+    elif reviewable_pending_candidates and latest_reviewable_candidate_id:
+        learn_badge = "Review"
+        learn_state = "active"
+        learn_action = {
+            "type": "link",
+            "label": "Review plan",
+            "href": f"/recipe-candidates/{latest_reviewable_candidate_id}?source_id={source.id}",
+        }
+        learn_summary = "A generated reading plan is waiting for review."
+    else:
+        learn_badge = "Next"
+        learn_state = "active" if source.url else "blocked"
+        learn_action = (
+            {"type": "post", "label": "Learn source", "action": f"/sources/{source.id}/reading-plan/learn"}
+            if source.url and source.status != "archived"
+            else None
+        )
+        learn_summary = "Teach the app where job cards, pagination, detail pages, and fields are."
+    steps.append(
+        {
+            "title": "Learn source",
+            "summary": learn_summary,
+            "badge": learn_badge,
+            "badge_class": "high" if learn_state == "complete" else "medium",
+            "state": learn_state,
+            "action": learn_action,
+        }
+    )
+    review_ready = source.recipe_path and source.health.health_status == "good"
+    steps.append(
+        {
+            "title": "Review what it reads",
+            "summary": source.health.health_summary if source.recipe_path else "Select a reading plan before reviewing extraction.",
+            "badge": "Passed" if review_ready else ("Run review" if source.recipe_path else "Waiting"),
+            "badge_class": "high" if review_ready else "medium",
+            "state": "complete" if review_ready else ("active" if source.recipe_path else "blocked"),
+            "action": (
+                {"type": "link", "label": "Review extraction", "href": _recipe_preview_url(source, auto_run=True)}
+                if source.recipe_path and not review_ready
+                else None
+            ),
+        }
+    )
+    test_ready = readiness.readiness_status == "ready"
+    steps.append(
+        {
+            "title": "Test safely",
+            "summary": readiness.readiness_summary if source.recipe_path else "A source test runs the plan without saving jobs.",
+            "badge": "Passed" if test_ready else ("Run test" if review_ready else "Waiting"),
+            "badge_class": "high" if test_ready else "medium",
+            "state": "complete" if test_ready else ("active" if review_ready else "blocked"),
+            "action": (
+                {"type": "link", "label": "Test source", "href": f"/sources/{source.id}/test-run"}
+                if review_ready and not test_ready
+                else None
+            ),
+        }
+    )
+    steps.append(
+        {
+            "title": "Include in daily run",
+            "summary": (
+                "This source is included in automatic job checks."
+                if execution_enabled
+                else "Keep it off until the review and source test both pass."
+            ),
+            "badge": "Included" if execution_enabled else ("Ready" if test_ready else "Off"),
+            "badge_class": "high" if execution_enabled or test_ready else "medium",
+            "state": "complete" if execution_enabled else ("active" if test_ready else "blocked"),
+            "action": (
+                {"type": "post", "label": "Include in daily run", "action": f"/sources/{source.id}/enable-when-ready"}
+                if test_ready and not execution_enabled
+                else None
+            ),
+        }
+    )
+    return steps
 
 
 def _recipe_capabilities(recipe_explanation) -> list[dict[str, str]]:
@@ -832,6 +1173,14 @@ def _require_not_archived(source) -> None:
         raise HTTPException(status_code=400, detail="Archived sources cannot be prepared, enabled, or run.")
 
 
+def _ensure_disabled_execution_entry(source) -> None:
+    _require_recipe_source(source)
+    _require_not_archived(source)
+    if execution_source_service().find_by_source_id(source.id):
+        return
+    execution_source_service().create_or_update_recipe_source(source, enabled=False)
+
+
 def _disable_execution_entry_if_present(source_id: str) -> bool:
     try:
         execution_source_service().disable(source_id)
@@ -904,3 +1253,10 @@ def _same_host_path(left: str, right: str) -> bool:
     left_path = left_parsed.path.rstrip("/")
     right_path = right_parsed.path.rstrip("/")
     return not left_path or right_path == left_path or right_path.startswith(f"{left_path}/")
+
+
+def _display_path(path, root) -> str:
+    try:
+        return path.relative_to(root).as_posix()
+    except ValueError:
+        return path.as_posix()

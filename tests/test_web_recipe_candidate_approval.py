@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 from job_agent.services.recipe_candidate_service import RecipeCandidateStore
 from job_agent.services.recipe_suggestion_service import RecipeSuggestionResult
 from job_agent.services.source_health_service import SourceHealthService
+from job_agent.services.source_registry_service import SourceRegistryService
 
 VALID_RECIPE_YAML = """source_name: Eursap Jobs
 start_url: https://eursap.eu/jobs
@@ -30,10 +31,10 @@ def test_candidate_detail_shows_approval_form_for_pending_candidate(client: Test
     response = client.get(f"/recipe-candidates/{candidate.candidate_id}?source_id=eursap-jobs")
 
     assert response.status_code == 200
-    assert "Approve Candidate" in response.text
-    assert "Approve candidate and preview recipe" in response.text
+    assert "Review Reading Plan" in response.text
+    assert "Use this reading plan" in response.text
     assert 'value="sources/recipes/experimental/eursap-jobs.yaml"' in response.text
-    assert "does not enable daily runs" in response.text
+    assert "not included in the daily run by itself" in response.text
 
 
 def test_web_approval_writes_recipe_saves_health_updates_candidate_and_redirects(
@@ -58,6 +59,9 @@ def test_web_approval_writes_recipe_saves_health_updates_candidate_and_redirects
     assert approved.approved_source_id == "eursap-jobs"
     assert approved.preview_saved is True
     assert approved.preview_extracted_job_count == 1
+    assert approved.adopted_source_id == "eursap-jobs"
+    source = SourceRegistryService(project_root).get_source("eursap-jobs")
+    assert source.recipe_path == "sources/recipes/experimental/eursap-approved.yaml"
     health = SourceHealthService(project_root).get_health("eursap-jobs")
     assert health.extracted_job_count == 1
     assert health.health_status == "good"
@@ -72,8 +76,8 @@ def test_rejected_candidate_does_not_show_active_approval_form(client: TestClien
     response = client.get(f"/recipe-candidates/{candidate.candidate_id}?source_id=eursap-jobs")
 
     assert response.status_code == 200
-    assert "This candidate is rejected and cannot be approved" in response.text
-    assert "Approve candidate and preview recipe" not in response.text
+    assert "Reading plan discarded" in response.text
+    assert "Use this reading plan" not in response.text
 
 
 def test_approved_candidate_does_not_show_active_approval_form(client: TestClient, project_root: Path) -> None:
@@ -87,9 +91,9 @@ def test_approved_candidate_does_not_show_active_approval_form(client: TestClien
     response = client.get(f"/recipe-candidates/{candidate.candidate_id}?source_id=eursap-jobs")
 
     assert response.status_code == 200
-    assert "This candidate is approved and cannot be approved" in response.text
-    assert "Approved recipe path" in response.text
-    assert "Approve candidate and preview recipe" not in response.text
+    assert "Reading plan saved" in response.text
+    assert "Saved recipe path" in response.text
+    assert "Use this reading plan" not in response.text
 
 
 def _save_candidate(project_root: Path):

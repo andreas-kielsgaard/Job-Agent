@@ -80,6 +80,46 @@ class LlmServiceTests(unittest.TestCase):
             self.assertEqual(records[0].output_tokens, 4)
             self.assertEqual(records[0].associated_job_id, "stable-1")
 
+    def test_model_not_found_raises_setup_guidance(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / ".env").write_text(
+                "ANTHROPIC_API_KEY=test-key\nCLAUDE_MODEL=claude-3-5-haiku-20241022\n",
+                encoding="utf-8",
+            )
+            original = sys.modules.get("anthropic")
+            sys.modules["anthropic"] = self._fake_anthropic_not_found_module()
+            try:
+                with self.assertRaisesRegex(RuntimeError, "Tried `claude-3-5-haiku-20241022`, `claude-3-5-haiku-latest`"):
+                    LlmService(root).complete("prompt", max_tokens=10, purpose="recipe_suggestion")
+            finally:
+                if original is None:
+                    sys.modules.pop("anthropic", None)
+                else:
+                    sys.modules["anthropic"] = original
+
+    def test_dated_model_retries_latest_alias_when_unavailable(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / ".env").write_text(
+                "ANTHROPIC_API_KEY=test-key\nCLAUDE_MODEL=claude-3-5-haiku-20241022\n",
+                encoding="utf-8",
+            )
+            original = sys.modules.get("anthropic")
+            fake_module, calls = self._fake_anthropic_alias_fallback_module()
+            sys.modules["anthropic"] = fake_module
+            try:
+                completion = LlmService(root).complete("prompt", max_tokens=10, purpose="recipe_suggestion")
+            finally:
+                if original is None:
+                    sys.modules.pop("anthropic", None)
+                else:
+                    sys.modules["anthropic"] = original
+
+            self.assertEqual(calls, ["claude-3-5-haiku-20241022", "claude-3-5-haiku-latest"])
+            self.assertEqual(completion.model, "claude-3-5-haiku-latest")
+            self.assertEqual(completion.text, "fallback response")
+
     @staticmethod
     def _fake_anthropic_module() -> types.ModuleType:
         module = types.ModuleType("anthropic")
@@ -99,6 +139,54 @@ class LlmServiceTests(unittest.TestCase):
 
         module.Anthropic = FakeAnthropic
         return module
+
+    @staticmethod
+    def _fake_anthropic_not_found_module() -> types.ModuleType:
+        module = types.ModuleType("anthropic")
+
+        class FakeMessages:
+            @staticmethod
+            def create(**kwargs):
+                raise RuntimeError(
+                    "Error code: 404 - {'type': 'error', 'error': {'type': 'not_found_error', "
+                    "'message': 'model: claude-3-5-haiku-20241022'}}"
+                )
+
+        class FakeAnthropic:
+            def __init__(self, api_key: str) -> None:
+                self.api_key = api_key
+                self.messages = FakeMessages()
+
+        module.Anthropic = FakeAnthropic
+        return module
+
+    @staticmethod
+    def _fake_anthropic_alias_fallback_module() -> tuple[types.ModuleType, list[str]]:
+        module = types.ModuleType("anthropic")
+        calls: list[str] = []
+
+        class FakeMessages:
+            @staticmethod
+            def create(**kwargs):
+                model = kwargs["model"]
+                calls.append(model)
+                if model == "claude-3-5-haiku-20241022":
+                    raise RuntimeError(
+                        "Error code: 404 - {'type': 'error', 'error': {'type': 'not_found_error', "
+                        "'message': 'model: claude-3-5-haiku-20241022'}}"
+                    )
+                return SimpleNamespace(
+                    usage=SimpleNamespace(input_tokens=2, output_tokens=1),
+                    content=[SimpleNamespace(type="text", text="fallback response")],
+                )
+
+        class FakeAnthropic:
+            def __init__(self, api_key: str) -> None:
+                self.api_key = api_key
+                self.messages = FakeMessages()
+
+        module.Anthropic = FakeAnthropic
+        return module, calls
 
 
 if __name__ == "__main__":

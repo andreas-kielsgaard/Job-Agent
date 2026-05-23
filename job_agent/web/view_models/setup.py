@@ -20,5 +20,4 @@ def build_setup_view(root: Path = ROOT) -> dict:
         "model_options": CLAUDE_MODELS,
         "template_variables": TEMPLATE_VARIABLES,
         "cv_reference": CvReferenceService(root).get_cv_reference(),
-        "sources": setup.load_source_entries(),
     }

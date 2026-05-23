@@ -146,6 +146,37 @@ def test_refinement_retries_after_schema_valid_poor_extraction(project_root: Pat
     assert result.attempts[1].quality_status == "good"
 
 
+def test_refinement_retries_when_table_headers_contradict_fields(project_root: Path) -> None:
+    artifact = _write_artifact(project_root, page_html=_accuro_like_table_page())
+    client = FakeRecipeSuggestionClient(
+        [
+            _llm_response(_accuro_wrong_semantic_recipe_yaml()),
+            _llm_response(_accuro_semantic_recipe_yaml()),
+        ]
+    )
+
+    result = suggest_recipe_with_refinement(artifact, llm_client=client, max_attempts=3)
+
+    assert result.accepted is True
+    assert len(result.attempts) == 2
+    assert result.attempts[0].quality_status == "poor"
+    assert any("Category" in warning for warning in result.attempts[0].quality_warnings)
+    assert any("Application deadline" in warning for warning in result.attempts[0].quality_warnings)
+    assert result.attempts[1].quality_status in {"good", "warning"}
+    assert "Previous suggested YAML" in client.prompts[1]
+
+
+def test_refinement_rejects_footer_media_links_that_look_like_projects(project_root: Path) -> None:
+    artifact = _write_artifact(project_root, page_html=_footer_media_project_page())
+    client = FakeRecipeSuggestionClient(_llm_response(_footer_media_project_recipe_yaml()))
+
+    result = suggest_recipe_with_refinement(artifact, llm_client=client, max_attempts=1)
+
+    assert result.accepted is False
+    assert result.attempts[0].quality_status == "poor"
+    assert any("non-job URLs" in warning for warning in result.attempts[0].quality_warnings)
+
+
 def test_refinement_stops_at_max_attempts_when_still_poor(project_root: Path) -> None:
     artifact = _write_artifact(project_root, page_html=_job_card_page())
     client = FakeRecipeSuggestionClient(_llm_response(_wrong_selector_recipe_yaml()))
@@ -196,6 +227,20 @@ def test_refinement_rejects_non_positive_max_attempts(project_root: Path) -> Non
         assert "positive integer" in str(exc)
     else:
         raise AssertionError("Expected ValueError for max_attempts=0")
+
+
+def test_refinement_does_not_call_llm_when_capture_has_no_job_evidence(project_root: Path) -> None:
+    artifact = _write_not_recommended_artifact(project_root)
+    client = FakeRecipeSuggestionClient(_llm_response(VALID_RECIPE_YAML))
+
+    result = suggest_recipe_with_refinement(artifact, llm_client=client, max_attempts=3)
+
+    assert client.prompts == []
+    assert result.accepted is False
+    assert result.final_result.selected_strategy == "not_recommended"
+    assert result.final_result.schema_valid is False
+    assert result.attempts[0].quality_status == "poor"
+    assert "browser-rendered capture" in " ".join(result.final_result.warnings)
 
 
 def test_invalid_suggested_recipe_yaml_returns_validation_errors(project_root: Path) -> None:
@@ -451,6 +496,32 @@ def _write_artifact(project_root: Path, page_html: str = "<html><body>large page
     return artifact
 
 
+def _write_not_recommended_artifact(project_root: Path) -> Path:
+    artifact = project_root / "output" / "recipe-calibration" / "empty-capture"
+    artifact.mkdir(parents=True, exist_ok=True)
+    (artifact / "summary.md").write_text("# Empty\nWarning: No job-detail link was found.\n", encoding="utf-8")
+    (artifact / "visible-text.txt").write_text("Search Jobs Contact Us", encoding="utf-8")
+    (artifact / "candidate-elements.html").write_text("", encoding="utf-8")
+    (artifact / "page.html").write_text("<html><body>Search Jobs Contact Us</body></html>", encoding="utf-8")
+    (artifact / "selector-report.json").write_text(
+        json.dumps(
+            {
+                "url": "https://example.com/search",
+                "capture_mode": "static_html",
+                "candidates": [],
+                "detail_sample_captured": False,
+                "recipe_blueprint": {
+                    "status": "not_recommended",
+                    "warnings": ["No stable repeated listing card selector was found."],
+                    "recipe": {},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    return artifact
+
+
 def _llm_response(recipe_yaml: str) -> str:
     return json.dumps(
         {
@@ -476,6 +547,107 @@ def _job_card_page() -> str:
       </body>
     </html>
     """
+
+
+def _accuro_like_table_page() -> str:
+    return """
+    <html>
+      <body>
+        <table>
+          <thead>
+            <tr>
+              <th>Position</th>
+              <th>Category</th>
+              <th>Location</th>
+              <th>Application deadline</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><a href="/freelance_projects/senior-iam/">Senior IAM / IGA Engineer</a></td>
+              <td>IT</td>
+              <td>Copenhagen</td>
+              <td>28 May, 2026</td>
+            </tr>
+            <tr>
+              <td><a href="/freelance_projects/test-manager/">Test Manager</a></td>
+              <td>Test Management &amp; Test</td>
+              <td>København</td>
+              <td>26 May, 2026</td>
+            </tr>
+          </tbody>
+        </table>
+      </body>
+    </html>
+    """
+
+
+def _accuro_wrong_semantic_recipe_yaml() -> str:
+    return """source_name: Accuro
+start_url: https://accuro.dk/en/consultant/freelance-projects/
+mode: static_html
+listing:
+  card_selector: tbody tr
+  title_selector: td:nth-of-type(1) a
+  link_selector: td:nth-of-type(1) a
+  location_selector: td:nth-of-type(3)
+  workload_selector: td:nth-of-type(2)
+  posted_date_selector: td:nth-of-type(4)
+accept:
+  url_contains:
+    - /freelance_projects/
+limits:
+  max_cards: 25
+"""
+
+
+def _accuro_semantic_recipe_yaml() -> str:
+    return """source_name: Accuro
+start_url: https://accuro.dk/en/consultant/freelance-projects/
+mode: static_html
+listing:
+  card_selector: tbody tr
+  title_selector: td:nth-of-type(1) a
+  link_selector: td:nth-of-type(1) a
+  location_selector: td:nth-of-type(3)
+accept:
+  url_contains:
+    - /freelance_projects/
+limits:
+  max_cards: 25
+"""
+
+
+def _footer_media_project_page() -> str:
+    return """
+    <html>
+      <body>
+        <footer>
+          <div class="row">
+            <p>ManpowerGroup helps organizations transform in a fast-changing world of work.</p>
+            <a href="/-/media/project/manpowergroup/legal/sap-project-report.pdf">SAP Project Report</a>
+            <a href="/en/privacy-policy">Privacy Policy</a>
+          </div>
+        </footer>
+      </body>
+    </html>
+    """
+
+
+def _footer_media_project_recipe_yaml() -> str:
+    return """source_name: Experis
+start_url: https://www.experis.pl/en/search?page=1&searchKeyword=SAP
+mode: rendered_html
+listing:
+  card_selector: div.row
+  title_selector: a[href*="/project/"]
+  link_selector: a[href*="/project/"]
+accept:
+  url_contains:
+    - /project/
+limits:
+  max_cards: 25
+"""
 
 
 def _wrong_selector_recipe_yaml() -> str:

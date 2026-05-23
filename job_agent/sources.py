@@ -187,7 +187,7 @@ class RecipeHtmlAdapter(SourceAdapter):
                 "completed",
                 f"Using {recipe.source_name} from {recipe_path}.",
             )
-            max_results = _positive_int(self.source.get("max_results"), recipe.limits.max_cards)
+            max_results = _optional_positive_int(self.source.get("max_results"))
             result = extract_jobs_with_recipe_from_url(
                 url,
                 recipe,
@@ -207,7 +207,7 @@ class RecipeHtmlAdapter(SourceAdapter):
         except (OSError, ValueError) as exc:
             return SourceRunResult(warnings=[SourceWarning(source_name, f"Recipe extraction failed: {exc}", url)])
 
-        jobs = result.jobs[: _positive_int(self.source.get("max_results"), len(result.jobs))]
+        jobs = result.jobs if max_results is None else result.jobs[:max_results]
         for job in jobs:
             job.source = source_name
             job.source_id = str(self.source.get("source_id") or "").strip()
@@ -470,7 +470,7 @@ def _recipe_result_metadata(
     recipe: Any,
     result: Any,
     retained_job_count: int,
-    max_results: int,
+    max_results: int | None,
 ) -> dict[str, Any]:
     return {
         "adapter": "recipe_html",
@@ -631,3 +631,11 @@ def _positive_int(value, default: int) -> int:
     except (TypeError, ValueError):
         return default
     return parsed if parsed > 0 else default
+
+
+def _optional_positive_int(value) -> int | None:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None

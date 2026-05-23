@@ -1,13 +1,105 @@
 sources:
-  - id: manual-intake
-    name: Manual Intake
-    kind: manual
-    status: active
-    url: ""
-    recipe_path: ""
-    added_at: "2026-05-09"
-    enabled: true
-    notes: Manual fallback for recruiter emails, copied postings, and sources that are not safe to automate.
-    tags:
-      - manual
-      - fallback
+- id: manual-intake
+  name: Manual Intake
+  kind: manual
+  status: archived
+  url: ''
+  recipe_path: ''
+  added_at: '2026-05-09'
+  enabled: false
+  notes: Manual fallback for recruiter emails, copied postings, and sources that are
+    not safe to automate.
+  tags:
+  - manual
+  - fallback
+  archived_at: '2026-05-22T19:33:02+00:00'
+- id: sample-jobs
+  name: Sample Jobs
+  kind: local_yaml
+  status: archived
+  url: ''
+  recipe_path: ''
+  added_at: '2026-05-09'
+  enabled: false
+  notes: Existing local YAML sample source used by daily runs and tests.
+  tags:
+  - local
+  - sample
+  archived_at: '2026-05-22T19:33:38+00:00'
+- id: eursap-jobs
+  name: Eursap Jobs
+  kind: recipe
+  status: archived
+  url: https://eursap.eu/jobs
+  recipe_path: sources/recipes/experimental/eursap-jobs.yaml
+  added_at: '2026-05-09'
+  enabled: false
+  notes: Recipe-backed source from saved local calibration artifacts. Not connected
+    to daily runs.
+  tags:
+  - sap
+  - recipe
+  - live-calibrated
+  archived_at: '2026-05-22T19:33:43+00:00'
+- id: montreal-associates-jobs
+  name: Montreal Associates Job Search
+  kind: recipe
+  status: archived
+  url: https://www.montrealassociates.com/uk/candidates/job-search/
+  recipe_path: sources/recipes/experimental/montreal-associates-jobs.yaml
+  added_at: '2026-05-09'
+  enabled: false
+  notes: Partial rendered recipe. Saved preview works, but broad results include non-SAP
+    roles.
+  tags:
+  - sap
+  - recipe
+  - partial
+  archived_at: '2026-05-22T19:33:46+00:00'
+- id: whitehall-sap-contract
+  name: Whitehall Resources SAP Jobs
+  kind: recipe
+  status: testing
+  url: https://www.whitehallresources.com/sap-jobs/
+  recipe_path: sources/recipes/experimental/whitehall-sap-contract.yaml
+  added_at: '2026-05-09'
+  enabled: false
+  notes: Recipe-backed source using saved Whitehall SAP job-item listing blocks. Not
+    connected to daily runs.
+  tags:
+  - sap
+  - recipe
+  - live-calibrated
+- id: freelancermap
+  name: FreelancerMap
+  kind: recipe
+  status: needs_review
+  url: https://www.freelancermap.com/projects?created=30&excludeDachProjects=true&query=sap&sort=2&pagenr=1
+  recipe_path: sources/recipes/experimental/freelancermap.yaml
+  added_at: '2026-05-22T22:48:43+00:00'
+  enabled: false
+  notes: ''
+  tags: []
+- id: accuro
+  name: Accuro
+  kind: recipe
+  status: testing
+  url: https://accuro.dk/en/consultant/freelance-projects/
+  recipe_path: sources/recipes/experimental/accuro.yaml
+  added_at: '2026-05-22T23:43:24+00:00'
+  enabled: false
+  notes: Adopted recipe from candidate 20260522-234338-070268-accuro.
+  tags:
+  - recipe
+  - adopted
+- id: experis
+  name: Experis
+  kind: job_board
+  status: needs_review
+  url: https://www.experis.pl/en/search?page=1&searchKeyword=SAP
+  recipe_path: ''
+  added_at: '2026-05-23T00:08:02+00:00'
+  enabled: false
+  notes: Previous generated reading plan was discarded because it matched footer/legal
+    links instead of job postings.
+  tags: []

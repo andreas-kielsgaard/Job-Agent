@@ -97,10 +97,27 @@ def test_source_detail_shows_lifecycle_status_and_mismatch_warning(client: TestC
     response = client.get("/sources/eursap-jobs")
 
     assert response.status_code == 200
-    assert "Recipe setup details" in response.text
+    assert "Generated plans" in response.text
     assert "generated-eursap.yaml" in response.text
     assert "differs from the source registry recipe_path" in response.text
-    assert "Execution enabled" in response.text
+    assert "Plan notes" in response.text
+
+
+def test_generation_status_separates_unusable_attempts_from_reviewable_plans(project_root: Path) -> None:
+    artifact = _write_artifact(project_root)
+    store = RecipeCandidateStore(project_root)
+    unusable = store.save_candidate_from_suggestion(_unusable_suggestion_result(artifact))
+    rejected = store.save_candidate_from_suggestion(_suggestion_result(artifact))
+    store.reject_candidate(rejected.candidate_id, reason="Wrong block")
+
+    status = RecipeGenerationStatusService(project_root).build_for_source("eursap-jobs")
+
+    assert status.pending_candidates == 1
+    assert status.rejected_candidates == 1
+    assert status.latest_candidate_id in {unusable.candidate_id, rejected.candidate_id}
+    assert status.reviewable_pending_candidates == 0
+    assert status.latest_reviewable_candidate_id == ""
+    assert unusable.candidate_id != status.latest_reviewable_candidate_id
 
 
 def test_approved_candidate_detail_shows_summary_and_no_approval_form(client: TestClient, project_root: Path) -> None:
@@ -115,10 +132,9 @@ def test_approved_candidate_detail_shows_summary_and_no_approval_form(client: Te
     response = client.get(f"/recipe-candidates/{candidate.candidate_id}?source_id=eursap-jobs")
 
     assert response.status_code == 200
-    assert "Approval did not enable daily-run execution" in response.text
-    assert "python -m job_agent.cli test-recipe" in response.text
-    assert "python -m job_agent.cli dry-run-source eursap-jobs" in response.text
-    assert "Approve candidate and preview recipe" not in response.text
+    assert "Reading plan saved" in response.text
+    assert "Technical details" in response.text
+    assert "Use this reading plan" not in response.text
 
 
 def test_recipe_generation_status_cli_prints_workflow_state(capsys, project_root: Path) -> None:
@@ -183,6 +199,21 @@ def _suggestion_result(artifact: Path, source_name: str = "Eursap Jobs"):
         schema_valid=True,
         selected_strategy="selector_based",
         confidence="high",
+    )
+
+
+def _unusable_suggestion_result(artifact: Path):
+    from job_agent.services.recipe_suggestion_service import RecipeSuggestionResult
+
+    return RecipeSuggestionResult(
+        source_name="Eursap Jobs",
+        start_url="https://eursap.eu/jobs",
+        artifact_dir=artifact,
+        suggested_recipe_yaml="",
+        schema_valid=False,
+        validation_errors=["No stable repeated listing card selector was found."],
+        selected_strategy="not_recommended",
+        confidence="low",
     )
 
 
