@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+import re
+
 from fastapi import APIRouter, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
 
 from job_agent.services.recipe_preview_service import explain_recipe, preview_recipe
+from job_agent.services.source_execution_readiness_service import SourceExecutionReadinessService
 from job_agent.services.source_health_service import SourceHealthService
 from job_agent.web.debug_state import record_debug_event
 from job_agent.web.dependencies import current_root, templates
 from job_agent.web.form_options import default_recipe_for_source, include_selected_recipe_option, recipe_options, source_options
+from job_agent.web.source_workflow import SourceWorkflowHandler
 from job_agent.web.view_models.source_debug import recipe_label, source_debug_option, source_debug_options
 
 router = APIRouter()
@@ -29,14 +33,21 @@ def recipe_preview_form(
     recipes = recipe_options(root)
     source_key = selected_source_id.strip() or source_id.strip()
     selected_source = next((source for source in sources if source.id == source_key), None)
+    normalized_source_mode = source_mode if source_mode in {"configured", "custom"} else "configured"
+    normalized_tab = tab if tab in {"execute", "explain"} else "execute"
     recipe_path = recipe_path or default_recipe_for_source(selected_source, recipes)
     recipes = include_selected_recipe_option(recipes, recipe_path)
     if selected_source and not input_path_or_url:
         input_path_or_url = selected_source.url
     saved_health = SourceHealthService(root).get_health(selected_source.id) if selected_source else None
+    readiness = SourceExecutionReadinessService(root).evaluate(selected_source.id) if selected_source else None
+    source_review = (
+        _source_review_from_readiness(readiness, selected_source, root=root)
+        if selected_source and normalized_source_mode != "custom" and readiness
+        else None
+    )
     recipe_explanation = explain_recipe(recipe_path, root=root) if recipe_path else None
-    normalized_source_mode = source_mode if source_mode in {"configured", "custom"} else "configured"
-    normalized_tab = tab if tab in {"execute", "explain"} else "execute"
+    use_latest_review = bool(source_review and source_review.get("worked"))
     record_debug_event(
         root,
         feature="recipe_preview",
@@ -61,6 +72,7 @@ def recipe_preview_form(
         {
             "request": request,
             "preview": None,
+            "source_review": source_review,
             "recipe_explanation": recipe_explanation,
             "recipe_path": recipe_path,
             "input_path_or_url": input_path_or_url,
@@ -70,7 +82,12 @@ def recipe_preview_form(
             "sources": sources,
             "recipe_options": recipes,
             "tab": normalized_tab,
-            "auto_run": auto_run and normalized_tab == "execute" and bool(recipe_path and input_path_or_url),
+            "auto_run": (
+                auto_run
+                and normalized_tab == "execute"
+                and bool(recipe_path and input_path_or_url)
+                and not use_latest_review
+            ),
             "saved_health": saved_health,
         },
     )
@@ -98,6 +115,56 @@ def run_recipe_preview(
             input_path_or_url = input_path_or_url or selected_source.url
             source_id = source_id or selected_source.id
     recipes = include_selected_recipe_option(recipes, recipe_path)
+    if selected_source and source_mode != "custom":
+        execution = SourceWorkflowHandler(root).run_source_test(selected_source.id)
+        recipe_explanation = explain_recipe(recipe_path, root=root) if recipe_path else None
+        source_review = _source_review_from_payload(execution.payload, selected_source)
+        readiness = execution.readiness
+        saved_health = SourceHealthService(root).get_health(selected_source.id)
+        record_debug_event(
+            root,
+            feature="recipe_preview",
+            action="source_test_review_completed",
+            method=request.method,
+            request_path=str(request.url),
+            state=_recipe_preview_debug_state(
+                recipe_path=recipe_path,
+                input_path_or_url=input_path_or_url,
+                source_mode=source_mode,
+                selected_source=selected_source,
+                selected_source_id=selected_source.id,
+                sources=sources,
+                recipes=recipes,
+                tab="execute",
+                recipe_explanation=recipe_explanation,
+                source_review=source_review,
+                health_saved=False,
+            ),
+        )
+        response = templates.TemplateResponse(
+            request,
+            "recipe_preview.html",
+            {
+                "request": request,
+                "preview": None,
+                "source_review": source_review,
+                "recipe_explanation": recipe_explanation,
+                "recipe_path": recipe_path,
+                "input_path_or_url": input_path_or_url,
+                "source_id": selected_source.id,
+                "source_mode": "configured",
+                "selected_source_id": selected_source.id,
+                "sources": sources,
+                "recipe_options": recipes,
+                "health_saved": False,
+                "tab": "execute",
+                "auto_run": False,
+                "saved_health": saved_health,
+                "readiness": readiness,
+            },
+        )
+        response.headers["Cache-Control"] = "no-store"
+        return response
     if not input_path_or_url.strip().startswith(("http://", "https://")):
         record_debug_event(
             root,
@@ -187,6 +254,7 @@ def run_recipe_preview(
         {
             "request": request,
             "preview": preview,
+            "source_review": None,
             "recipe_explanation": recipe_explanation,
             "recipe_path": recipe_path,
             "input_path_or_url": input_path_or_url,
@@ -217,6 +285,7 @@ def _recipe_preview_debug_state(
     tab: str,
     recipe_explanation=None,
     preview=None,
+    source_review=None,
     health_saved: bool = False,
     error: str = "",
 ) -> dict:
@@ -312,4 +381,123 @@ def _recipe_preview_debug_state(
                 for job in preview.jobs[:10]
             ],
         }
+    if source_review:
+        state["source_review"] = {
+            "source_id": source_review.get("source_id", ""),
+            "status": source_review.get("status", ""),
+            "readiness_status": source_review.get("readiness_status", ""),
+            "job_count": source_review.get("job_count", 0),
+            "warning_count": source_review.get("warning_count", 0),
+            "worked": bool(source_review.get("worked")),
+            "capability_count": len(source_review.get("capability_checks") or []),
+            "pagination_fetch_count": source_review.get("pagination_fetch_count", 0),
+            "detail_fetch_count": source_review.get("detail_fetch_count", 0),
+        }
     return state
+
+
+def _source_review_from_readiness(readiness, selected_source, *, root) -> dict | None:
+    if not readiness or not getattr(readiness, "last_checked_at", ""):
+        return None
+    stale = bool(getattr(readiness, "checks", {}).get("recipe_changed_after_source_test"))
+    status = str(getattr(readiness, "readiness_status", "") or "")
+    insight = SourceWorkflowHandler(root).source_test_insight(selected_source, readiness=readiness)
+    return {
+        "source_id": selected_source.id,
+        "source_name": selected_source.name,
+        "status": str(getattr(readiness, "dry_run_status", "") or status),
+        "readiness_status": status,
+        "worked": status == "ready" and not stale,
+        "stale": stale,
+        "last_checked_at": getattr(readiness, "last_checked_at", ""),
+        "summary": getattr(readiness, "readiness_summary", ""),
+        "job_count": int(getattr(readiness, "dry_run_job_count", 0) or 0),
+        "warning_count": int(getattr(readiness, "dry_run_warning_count", 0) or 0),
+        "warnings": list(getattr(readiness, "dry_run_warnings", []) or []),
+        "blockers": list(getattr(readiness, "blockers", []) or []),
+        "sample_titles": list(getattr(readiness, "sample_titles", []) or []),
+        "sample_urls": list(getattr(readiness, "sample_urls", []) or []),
+        "capability_checks": list(getattr(readiness, "dry_run_capability_checks", []) or []),
+        "pagination_fetch_count": _int_from_checks(readiness, "pagination_fetch_count"),
+        "pagination_unique_jobs_from_fetched_pages": int(
+            getattr(readiness, "dry_run_pagination_unique_jobs_from_fetched_pages", 0) or 0
+        ),
+        "pagination_duplicate_ratio": float(getattr(readiness, "dry_run_pagination_duplicate_ratio", 0.0) or 0.0),
+        "detail_fetch_count": _int_from_checks(readiness, "detail_fetch_count"),
+        "detail_verified_listing_page_count": _int_from_checks(readiness, "detail_verified_listing_page_count"),
+        "run_steps": [],
+        "jobs": [],
+        "source_test_insight": insight,
+        "source_test_url": f"/sources/{selected_source.id}/test-run",
+        "run_source_test_url": f"/sources/{selected_source.id}/test-run?start=1",
+        "review_source": "latest_source_test",
+    }
+
+
+def _source_review_from_payload(payload: dict, selected_source) -> dict:
+    readiness = payload.get("readiness") if isinstance(payload.get("readiness"), dict) else {}
+    return {
+        "source_id": selected_source.id,
+        "source_name": selected_source.name,
+        "status": str(payload.get("status") or ""),
+        "readiness_status": str(payload.get("readiness_status") or readiness.get("status") or ""),
+        "worked": str(payload.get("readiness_status") or readiness.get("status") or "") == "ready",
+        "stale": False,
+        "last_checked_at": str(readiness.get("last_checked_at") or ""),
+        "summary": str(payload.get("readiness_summary") or readiness.get("summary") or ""),
+        "job_count": int(payload.get("job_count") or 0),
+        "warning_count": int(payload.get("warning_count") or 0),
+        "warnings": list(payload.get("warnings") or []),
+        "blockers": list(payload.get("readiness_blockers") or []),
+        "sample_titles": [str(job.get("title") or "") for job in (payload.get("jobs") or [])[:5] if isinstance(job, dict)],
+        "sample_urls": [str(job.get("url") or "") for job in (payload.get("jobs") or [])[:5] if isinstance(job, dict) and job.get("url")],
+        "capability_checks": list(payload.get("capability_checks") or []),
+        "pagination_fetch_count": int(payload.get("pagination_fetch_count") or 0),
+        "pagination_unique_jobs_from_fetched_pages": int(payload.get("pagination_unique_jobs_from_fetched_pages") or 0),
+        "pagination_duplicate_ratio": float(payload.get("pagination_duplicate_ratio") or 0.0),
+        "detail_fetch_count": int(payload.get("detail_fetch_count") or 0),
+        "detail_verified_listing_page_count": int(payload.get("detail_verified_listing_page_count") or 0),
+        "run_steps": list(payload.get("run_steps") or []),
+        "jobs": list(payload.get("jobs") or [])[:12],
+        "source_test_insight": payload.get("source_test_insight") or {},
+        "source_test_url": f"/sources/{selected_source.id}/test-run",
+        "run_source_test_url": f"/sources/{selected_source.id}/test-run?start=1",
+        "review_source": "fresh_source_test",
+    }
+
+
+def _int_from_checks(readiness, key: str) -> int:
+    checks = getattr(readiness, "checks", {}) or {}
+    try:
+        value = int(checks.get(key) or 0)
+    except (TypeError, ValueError):
+        value = 0
+    if value:
+        return value
+    return _int_from_capability_checks(list(getattr(readiness, "dry_run_capability_checks", []) or []), key)
+
+
+def _int_from_capability_checks(capability_checks: list[dict], key: str) -> int:
+    patterns = {
+        "pagination_fetch_count": [
+            r"proof fetched\s+(\d+)\s+page",
+            r"Fetched\s+(\d+)\s+pagination page",
+        ],
+        "detail_fetch_count": [
+            r"Attempted\s+(\d+)\s+detail page",
+        ],
+        "detail_verified_listing_page_count": [
+            r"Verified details on\s+(\d+)\s*/\s*\d+\s+listing page",
+            r"(\d+)\s+yielded configured detail fields",
+        ],
+    }.get(key, [])
+    for check in capability_checks:
+        detail = str(check.get("detail") or "")
+        for pattern in patterns:
+            match = re.search(pattern, detail, flags=re.IGNORECASE)
+            if match:
+                try:
+                    return int(match.group(1))
+                except (TypeError, ValueError):
+                    continue
+    return 0

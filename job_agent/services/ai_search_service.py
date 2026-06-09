@@ -8,7 +8,7 @@ from typing import Any
 from job_agent.config import ROOT
 from job_agent.models import Job, MatchResult, normalize_text
 
-from .llm_service import LlmService
+from job_agent.llm import LlmService
 
 
 @dataclass

@@ -7,8 +7,10 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from job_agent.config import ROOT
+from job_agent.web import dependencies
 from job_agent.web.app import create_app
-from job_agent.web.dependencies import reset_root, set_root
+from job_agent.web.runtime import runtime
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 APP_STATE_PATHS = ("jobs", "sources", "output")
@@ -61,12 +63,17 @@ def project_root(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def client(project_root: Path, minimal_profile: Path):
-    set_root(project_root)
+    _set_app_root(project_root)
     try:
         with TestClient(create_app()) as test_client:
             yield test_client
     finally:
-        reset_root()
+        _set_app_root(ROOT)
+
+
+def _set_app_root(root: Path) -> None:
+    dependencies._current_root = root
+    runtime.root = root
 
 
 @pytest.fixture

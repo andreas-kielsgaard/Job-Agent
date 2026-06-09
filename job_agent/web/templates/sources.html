@@ -18,8 +18,10 @@
 <div class="panel">
   <div class="grid">
     <div class="stat"><span>Active sources</span><strong>{{ sources|length }}</strong></div>
+    <div class="stat"><span>Implemented</span><strong>{{ implemented_source_count }}</strong></div>
+    <div class="stat"><span>Indexed</span><strong>{{ indexed_source_count }}</strong></div>
+    <div class="stat"><span>Detail complete</span><strong>{{ detail_complete_source_count }}</strong></div>
     <div class="stat"><span>With reading plan</span><strong>{{ sources|selectattr("recipe_path")|list|length }}</strong></div>
-    <div class="stat"><span>Included in daily run</span><strong>{{ daily_run_enabled_count }}</strong></div>
     <div class="stat"><span>Archived</span><strong>{{ archived_sources|length }}</strong></div>
   </div>
 </div>
@@ -29,7 +31,10 @@
   {% set source = card.source %}
   {% set execution = card.execution %}
   {% set status = card.status %}
-  <article class="source-card{% if source.status == 'archived' %} archived{% endif %}">
+  {% set index = card.index %}
+  {% set detail = card.detail %}
+  {% set lifecycle = card.lifecycle %}
+  <article class="source-card {{ lifecycle.state }}{% if source.status == 'archived' %} archived{% endif %}">
     <div class="source-card-main">
       <div class="source-title-row">
         <div>
@@ -37,6 +42,7 @@
           <div class="muted">{{ source.id }}</div>
         </div>
         <div class="badge-row">
+          <span class="badge {{ lifecycle.badge_class }}">{{ lifecycle.label }}</span>
           <span class="badge {{ status.badge_class }}">{{ status.badge }}</span>
           {% if source.recipe_path %}
           <span class="badge high">reading plan</span>
@@ -46,28 +52,58 @@
           {% endif %}
         </div>
       </div>
-      <div class="source-fact-grid">
-        <div>
-          <span class="fact-label">Next step</span>
-          <strong>{{ status.title }}</strong>
-          <span>{{ status.summary }}</span>
+      {% if lifecycle.state == "implemented" %}
+        <div class="source-fact-grid operational">
+          <div>
+            <span class="fact-label">Indexing</span>
+            <strong>{{ index.status_label }}</strong>
+            <span>{{ index.summary }}</span>
+          </div>
+          <div>
+            <span class="fact-label">Detail review</span>
+            <strong>{{ detail.reviewed_count }}/{{ detail.total_count or index.indexed_count or detail.reviewed_count }}</strong>
+            <span>{{ detail.summary }}</span>
+          </div>
+          <div>
+            <span class="fact-label">High matches</span>
+            <strong>{{ source.stats.strong_matches }}</strong>
+            <span>{{ source.stats.exploratory_matches }} exploratory, best {{ source.stats.best_match_score }}%</span>
+          </div>
+          <div>
+            <span class="fact-label">Follow-up</span>
+            <strong>{{ source.stats.interesting_count }} interesting</strong>
+            <span>{{ source.stats.applied_count }} applied, {{ source.stats.not_interesting_count }} not interesting</span>
+          </div>
         </div>
-        <div>
-          <span class="fact-label">Reading plan review</span>
-          <strong>{{ status.preview_label }}</strong>
-          <span>{{ source.health.health_summary }}</span>
+      {% else %}
+        <div class="source-fact-grid setup">
+          <div>
+            <span class="fact-label">Setup status</span>
+            <strong>{{ status.title }}</strong>
+            <span>{{ status.summary }}</span>
+          </div>
+          <div>
+            <span class="fact-label">Indexing</span>
+            <strong>{{ index.status_label }}</strong>
+            <span>{{ index.summary }}</span>
+          </div>
+          <div>
+            <span class="fact-label">Detail review</span>
+            <strong>{{ detail.status_label }}</strong>
+            <span>{{ detail.summary }}</span>
+          </div>
+          <div>
+            <span class="fact-label">Reading plan</span>
+            <strong>{{ status.preview_label }}</strong>
+            <span>{{ status.source_test_label }} source test</span>
+          </div>
+          <div>
+            <span class="fact-label">Match history</span>
+            <strong>{{ source.stats.value_label }}</strong>
+            <span>{{ source.stats.strong_matches }} high, {{ source.stats.interesting_count }} interesting</span>
+          </div>
         </div>
-        <div>
-          <span class="fact-label">Safe source test</span>
-          <strong>{{ status.source_test_label }}</strong>
-          <span>{{ status.automation_label }}</span>
-        </div>
-        <div>
-          <span class="fact-label">Historical results</span>
-          <strong>{{ source.stats.value_label }}</strong>
-          <span>{{ source.stats.jobs_found_total }} saved jobs. Avg/best score: {{ source.stats.average_match_score }}/{{ source.stats.best_match_score }}</span>
-        </div>
-      </div>
+      {% endif %}
       {% if source.url %}
       <a class="source-url" href="{{ source.url }}" target="_blank" rel="noreferrer">{{ source.url }}</a>
       {% endif %}

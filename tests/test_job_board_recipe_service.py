@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
 
+from job_agent.models import Job
 from job_agent.services.extraction_quality import ExtractionQuality, candidate_quality
 from job_agent.services.job_board_recipe_service import (
     AcceptRecipe,
+    AccessRecipe,
     DetailRecipe,
     JobBoardRecipe,
     ListingRecipe,
@@ -15,6 +18,7 @@ from job_agent.services.job_board_recipe_service import (
     PatternsRecipe,
     RejectRecipe,
     check_recipe_against_html,
+    discover_visible_total_job_count,
     enrich_jobs_with_detail_pages,
     extract_job_detail_from_html,
     extract_jobs_with_recipe,
@@ -22,6 +26,7 @@ from job_agent.services.job_board_recipe_service import (
     extract_jobs_with_recipe_from_url,
     find_pagination_links,
     load_job_board_recipe,
+    _pagination_urls_to_fetch,
 )
 from job_agent.sources import extract_generic_jobs_from_html
 
@@ -55,6 +60,71 @@ def test_recipe_extraction_result_explains_listing_count_mismatch() -> None:
     assert result.listing_duplicate_count == 1
     assert result.listing_rejected_count == 1
     assert result.listing_missing_url_count == 1
+
+
+def test_visible_total_count_failure_when_extractor_reaches_too_few_jobs() -> None:
+    cards = "\n".join(
+        (
+            "<article class='job-card'>"
+            f"<h2><a class='job-link' href='/jobs/job-{index}'>SAP Consultant {index}</a></h2>"
+            "<p class='summary'>SAP contract role with delivery context.</p>"
+            "</article>"
+        )
+        for index in range(1, 24)
+    )
+    html = f"<main><p>66 projects found</p>{cards}</main>"
+
+    result = extract_jobs_with_recipe_from_html(html, "https://example.com", _recipe())
+
+    checks = {check.capability: check for check in result.capability_checks}
+    assert result.visible_total_job_count == 66
+    assert len(result.jobs) == 23
+    assert checks["listing_total_access"].status == "fail"
+    assert "advertise 66 posting" in checks["listing_total_access"].detail
+
+
+def test_visible_total_count_reads_formatted_showing_total() -> None:
+    html = "<main><p>Showing 1-25 of 1,234 projects</p></main>"
+
+    assert discover_visible_total_job_count(html) == 1234
+
+
+def test_pagination_urls_skip_first_page_links() -> None:
+    links = [
+        PaginationLink(label="1", url="https://example.com/jobs?pagenr=1"),
+        PaginationLink(label="2", url="https://example.com/jobs?pagenr=2"),
+        PaginationLink(label="3", url="https://example.com/jobs?pagenr=3"),
+    ]
+
+    assert _pagination_urls_to_fetch(links, max_pages=4) == [
+        "https://example.com/jobs?pagenr=2",
+        "https://example.com/jobs?pagenr=3",
+    ]
+
+
+def test_recipe_access_requirement_becomes_capability_failure() -> None:
+    html = """
+    <article class="job-card">
+      <h2><a class="job-link" href="/jobs/sap-abap">SAP ABAP Consultant</a></h2>
+      <p class="summary">ABAP listing one with useful context.</p>
+    </article>
+    """
+    recipe = _recipe(
+        access=AccessRecipe(
+            requires_session=True,
+            session_scope="example-projects",
+            setup_hint="Sign in before verifying this source.",
+        )
+    )
+
+    result = extract_jobs_with_recipe_from_html(html, "https://example.com", recipe)
+
+    checks = {check.capability: check for check in result.capability_checks}
+    assert [job.title for job in result.jobs] == ["SAP ABAP Consultant"]
+    assert checks["source_access"].status == "fail"
+    assert checks["source_access"].expected is True
+    assert "requires a connected session" in checks["source_access"].detail
+    assert "example-projects" in checks["source_access"].detail
 
 
 def test_recipe_separates_title_selector_from_generic_link_selector() -> None:
@@ -381,6 +451,231 @@ def test_recipe_can_proof_fetch_one_pagination_page(monkeypatch: pytest.MonkeyPa
     assert result.pagination_fetch_count == 1
 
 
+def test_recipe_flags_pagination_pages_that_return_duplicates(monkeypatch: pytest.MonkeyPatch) -> None:
+    page_1 = """
+    <div class="job-card"><h2><a class="job-link" href="/jobs/sap-abap">SAP ABAP Consultant</a></h2><p class="summary">ABAP listing one with useful context.</p></div>
+    <a class="page-numbers" href="https://example.com/jobs/page/2/">2</a>
+    """
+    page_2 = """
+    <div class="job-card"><h2><a class="job-link" href="/jobs/sap-abap">SAP ABAP Consultant</a></h2><p class="summary">ABAP listing one with useful context.</p></div>
+    """
+
+    def fake_fetch(url: str, timeout_seconds: int):
+        if url.endswith("/page/2/"):
+            return page_2, url, []
+        return page_1, "https://example.com/jobs", []
+
+    recipe = _recipe(
+        pagination=PaginationRecipe(
+            page_link_selector="a.page-numbers",
+            max_pages=2,
+            request_delay_seconds=0,
+        )
+    )
+    monkeypatch.setattr("job_agent.services.job_board_recipe_service._fetch_static_html", fake_fetch)
+
+    result = extract_jobs_with_recipe_from_url(
+        "https://example.com/jobs",
+        recipe,
+        fetch_pagination=True,
+        pagination_page_limit=2,
+    )
+
+    checks = {check.capability: check for check in result.capability_checks}
+    assert [job.title for job in result.jobs] == ["SAP ABAP Consultant"]
+    assert result.pagination_fetch_count == 1
+    assert result.pagination_duplicate_page_count == 1
+    assert result.pagination_duplicate_ratio == 1.0
+    assert checks["pagination_strategy"].status == "fail"
+    assert checks["pagination_navigation"].status == "fail"
+    assert checks["pagination_duplicate_pages"].status == "fail"
+    assert "returned only duplicate listings" in checks["pagination_strategy"].detail
+    assert "logged-in session or client-side pagination" in checks["pagination_navigation"].detail
+    assert any("returned only listings already seen" in warning for warning in result.warnings)
+
+
+def test_connected_session_passes_source_access_even_when_pagination_strategy_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    page_1 = """
+    <div class="job-card"><h2><a class="job-link" href="/jobs/sap-abap">SAP ABAP Consultant</a></h2><p class="summary">ABAP listing one with useful context.</p></div>
+    <a class="page-numbers" href="https://example.com/jobs/page/2/">2</a>
+    """
+    page_2 = """
+    <div class="job-card"><h2><a class="job-link" href="/jobs/sap-abap">SAP ABAP Consultant</a></h2><p class="summary">ABAP listing one with useful context.</p></div>
+    """
+
+    def fake_fetch(url: str, timeout_seconds: int, **kwargs):
+        if url.endswith("/page/2/"):
+            return page_2, url, []
+        return page_1, "https://example.com/jobs", []
+
+    recipe = _recipe(
+        access=AccessRecipe(requires_session=True, session_scope="example.com"),
+        pagination=PaginationRecipe(
+            page_link_selector="a.page-numbers",
+            max_pages=2,
+            request_delay_seconds=0,
+        ),
+    )
+    monkeypatch.setattr("job_agent.services.job_board_recipe_service._fetch_static_html", fake_fetch)
+
+    result = extract_jobs_with_recipe_from_url(
+        "https://example.com/jobs",
+        recipe,
+        fetch_pagination=True,
+        pagination_page_limit=2,
+        session_state_path=Path("sources/sessions/example.storage-state.json"),
+    )
+
+    checks = {check.capability: check for check in result.capability_checks}
+    assert checks["source_access"].status == "pass"
+    assert checks["source_access"].observed is True
+    assert checks["pagination_strategy"].status == "fail"
+    assert "Pagination still returned duplicate pages" in checks["source_access"].detail
+
+
+def test_connected_session_fails_source_access_when_page_still_shows_login_gate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    html = """
+    <main>
+      <div class="registration-modal">Create your account to see more results</div>
+      <div class="modal-backdrop show"></div>
+      <div class="job-card">
+        <h2><a class="job-link" href="/jobs/sap-abap">SAP ABAP Consultant</a></h2>
+        <p class="summary">ABAP listing one with useful context.</p>
+      </div>
+    </main>
+    """
+
+    def fake_fetch(url: str, timeout_seconds: int, **kwargs):
+        return html, "https://example.com/jobs", []
+
+    recipe = _recipe(access=AccessRecipe(requires_session=True, session_scope="example.com"))
+    monkeypatch.setattr("job_agent.services.job_board_recipe_service._fetch_static_html", fake_fetch)
+
+    result = extract_jobs_with_recipe_from_url(
+        "https://example.com/jobs",
+        recipe,
+        session_state_path=Path("sources/sessions/example.storage-state.json"),
+    )
+
+    checks = {check.capability: check for check in result.capability_checks}
+    assert result.source_access_session_used is True
+    assert result.source_access_login_gate_detected is True
+    assert checks["source_access"].status == "fail"
+    assert checks["source_access"].observed is False
+    assert "still showed a sign-in or registration gate" in checks["source_access"].detail
+
+
+def test_ajax_pagination_template_fetches_payload_and_passes_capability(monkeypatch: pytest.MonkeyPatch) -> None:
+    page_1 = """
+    <div class="job-card"><h2><a class="job-link" href="/jobs/sap-abap">SAP ABAP Consultant</a></h2><p class="summary">ABAP listing one with useful context.</p></div>
+    """
+    page_2_payload = {
+        "html": """
+        <div class="job-card"><h2><a class="job-link" href="/jobs/sap-basis">SAP Basis Consultant</a></h2><p class="summary">Basis listing two with useful context.</p></div>
+        """
+    }
+    calls = []
+
+    def fake_fetch(url: str, timeout_seconds: int):
+        calls.append(url)
+        if "page=2" in url:
+            return json.dumps(page_2_payload), url, []
+        return page_1, "https://example.com/jobs", []
+
+    recipe = _recipe(
+        pagination=PaginationRecipe(
+            strategy="ajax",
+            ajax_url_template="/api/jobs?page={page}",
+            max_pages=2,
+            request_delay_seconds=0,
+        )
+    )
+    monkeypatch.setattr("job_agent.services.job_board_recipe_service._fetch_static_html", fake_fetch)
+
+    result = extract_jobs_with_recipe_from_url("https://example.com/jobs", recipe, fetch_pagination=True)
+
+    checks = {check.capability: check for check in result.capability_checks}
+    pagination_step = next(step for step in result.steps if step.phase == "Pagination detection")
+    assert calls == ["https://example.com/jobs", "https://example.com/api/jobs?page=2"]
+    assert [job.title for job in result.jobs] == ["SAP ABAP Consultant", "SAP Basis Consultant"]
+    assert pagination_step.status == "completed"
+    assert "Proof fetched 1 pagination page(s)" in pagination_step.detail
+    assert checks["ajax_pagination"].status == "pass"
+    assert checks["pagination_strategy"].status == "pass"
+
+
+def test_browser_click_pagination_fetch_marks_detection_completed(monkeypatch: pytest.MonkeyPatch) -> None:
+    page_1 = """
+    <div class="job-card"><h2><a class="job-link" href="/jobs/sap-abap">SAP ABAP Consultant</a></h2><p class="summary">ABAP listing one with useful context.</p></div>
+    <button class="pagination-next" type="button">Next page</button>
+    """
+
+    def fake_fetch(url: str, timeout_seconds: int):
+        return page_1, "https://example.com/jobs", []
+
+    def fake_browser_click_fetch(
+        start_url: str,
+        recipe: JobBoardRecipe,
+        *,
+        timeout_seconds: int,
+        max_pages: int | None,
+        existing_jobs: list[Job],
+        job_limit: int | None,
+        use_recipe_card_limit: bool,
+        session_state_path: str | Path | None = None,
+        progress_callback=None,
+        step_collector=None,
+    ):
+        jobs = [
+            *existing_jobs,
+            Job(title="SAP Basis Consultant", url="https://example.com/jobs/sap-basis", source_confidence="recipe"),
+        ]
+        return [], jobs, ["browser-click:https://example.com/jobs?page=2"], []
+
+    recipe = _recipe(
+        pagination=PaginationRecipe(
+            strategy="browser_click",
+            click_selector=".pagination-next",
+            max_pages=2,
+            request_delay_seconds=0,
+        )
+    )
+    monkeypatch.setattr("job_agent.services.job_board_recipe_service._fetch_static_html", fake_fetch)
+    monkeypatch.setattr(
+        "job_agent.services.job_board_recipe_service._fetch_browser_click_pagination_job_pages",
+        fake_browser_click_fetch,
+    )
+
+    result = extract_jobs_with_recipe_from_url("https://example.com/jobs", recipe, fetch_pagination=True)
+
+    checks = {check.capability: check for check in result.capability_checks}
+    pagination_step = next(step for step in result.steps if step.phase == "Pagination detection")
+    assert [job.title for job in result.jobs] == ["SAP ABAP Consultant", "SAP Basis Consultant"]
+    assert pagination_step.status == "completed"
+    assert "Proof fetched 1 pagination page(s)" in pagination_step.detail
+    assert checks["browser_click_pagination"].status == "pass"
+    assert checks["pagination_strategy"].status == "pass"
+
+
+def test_click_only_pagination_controls_require_browser_click_strategy() -> None:
+    html = """
+    <div class="job-card"><h2><a class="job-link" href="/jobs/sap-abap">SAP ABAP Consultant</a></h2><p class="summary">ABAP listing one with useful context.</p></div>
+    <button class="pagination-next" type="button">Next page</button>
+    """
+
+    result = extract_jobs_with_recipe_from_html(html, "https://example.com/jobs", _recipe())
+
+    checks = {check.capability: check for check in result.capability_checks}
+    assert result.interactive_pagination_control_count == 1
+    assert checks["pagination_strategy"].status == "fail"
+    assert "browser-click pagination" in checks["pagination_strategy"].detail
+    assert checks["browser_click_pagination"].status == "fail"
+
+
 def test_pagination_detection_reads_embedded_json_html_fragments() -> None:
     html = """
     <script type="application/json">
@@ -427,6 +722,30 @@ def test_pagination_detection_dedupes_link_rel_next_against_embedded_page_links(
         ("2", "https://www.freelancermap.com/projects?pagenr=2#list", True),
         ("3", "https://www.freelancermap.com/projects?pagenr=3#list", False),
         ("4", "https://www.freelancermap.com/projects?pagenr=4#list", False),
+    ]
+
+
+def test_pagination_detection_dedupes_falsey_query_variants() -> None:
+    html = """
+    <div class='paginator'>
+      <a href='/projects?query=sap&hideAppliedProjects=&showHiddenProjects=&pagenr=2#list'>2</a>
+      <a href='/projects?query=sap&hideAppliedProjects=0&showHiddenProjects=0&pagenr=2#list'>2</a>
+      <a href='/projects?query=sap&hideAppliedProjects=0&showHiddenProjects=0&pagenr=3#list'>3</a>
+    </div>
+    """
+    recipe = _recipe(pagination=PaginationRecipe(page_link_selector='a[href*="pagenr="]', max_pages=4))
+
+    links = find_pagination_links(html, "https://www.freelancermap.com/projects", recipe)
+
+    assert [(link.label, link.url) for link in links] == [
+        (
+            "2",
+            "https://www.freelancermap.com/projects?query=sap&hideAppliedProjects=&showHiddenProjects=&pagenr=2#list",
+        ),
+        (
+            "3",
+            "https://www.freelancermap.com/projects?query=sap&hideAppliedProjects=0&showHiddenProjects=0&pagenr=3#list",
+        ),
     ]
 
 
@@ -632,6 +951,7 @@ def test_cli_local_fixture_ignores_rendered_recipe_mode(capsys: pytest.CaptureFi
 
 def _recipe(
     card_selector: str = ".job-card",
+    access: AccessRecipe | None = None,
     detail: DetailRecipe | None = None,
     mode: str = "static_html",
     pagination: PaginationRecipe | None = None,
@@ -640,6 +960,7 @@ def _recipe(
     return JobBoardRecipe(
         source_name="Test Board",
         mode=mode,
+        access=access or AccessRecipe(),
         listing=ListingRecipe(
             card_selector=card_selector,
             title_selector=[".job-heading", ".job-title", "h2"],

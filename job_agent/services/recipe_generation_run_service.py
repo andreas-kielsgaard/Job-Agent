@@ -4,7 +4,7 @@ import re
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
@@ -12,8 +12,8 @@ from urllib.parse import urlencode
 from job_agent.config import ROOT
 from job_agent.io.atomic import atomic_write_text
 from job_agent.io.json_store import read_json, write_json
-from job_agent.services.recipe_calibration_service import capture_recipe_calibration
 from job_agent.services.recipe_artifact_service import RecipeArtifactService
+from job_agent.services.recipe_calibration_service import capture_recipe_calibration
 from job_agent.services.recipe_candidate_service import RecipeCandidateStore
 from job_agent.services.recipe_suggestion_service import (
     RecipeRefinementResult,
@@ -61,11 +61,12 @@ class RecipeGenerationRunService:
         self,
         source_id: str,
         *,
-        rendered: bool = True,
+        rendered: bool | None = None,
         capture_detail: bool = True,
         max_candidates: int = 30,
         refine: bool = True,
         max_attempts: int = 3,
+        source_test_insight: dict[str, Any] | None = None,
         run_async: bool = True,
     ) -> dict[str, Any]:
         source = SourceRegistryService(self.root).get_source(source_id)
@@ -75,15 +76,19 @@ class RecipeGenerationRunService:
             raise ValueError("Source URL is required before learning a source.")
         bounded_attempts = max(1, min(int(max_attempts or 1), 8))
         bounded_candidates = max(5, min(int(max_candidates or 30), 50))
+        capture_rendered = rendered
+        if capture_rendered is None and _source_test_insight_prefers_rendered_capture(source_test_insight or {}):
+            capture_rendered = True
         run = self._initial_run(
             source,
             artifact_dir="Pending live capture",
             refine=bool(refine),
             max_attempts=bounded_attempts,
             capture_source=True,
-            capture_rendered=bool(rendered),
+            capture_rendered=capture_rendered,
             capture_detail=bool(capture_detail),
             max_candidates=bounded_candidates,
+            source_test_insight=source_test_insight or {},
         )
         return self._queue_run(run, run_async=run_async)
 
@@ -115,15 +120,12 @@ class RecipeGenerationRunService:
                     run_id,
                     "Resolve source and capture",
                     "running",
-                    (
-                        f"Opening {source.name} at {source.url} with "
-                        f"{'browser rendering' if run.get('capture_rendered') else 'normal HTML'}."
-                    ),
+                    (f"Opening {source.name} at {source.url} with {_capture_mode_label(run.get('capture_rendered'))}."),
                 )
                 capture = capture_recipe_calibration(
                     source.url,
                     recipe_path=source.recipe_path or None,
-                    rendered=bool(run.get("capture_rendered")),
+                    rendered=_capture_rendered_value(run.get("capture_rendered")),
                     root=self.root,
                     max_candidates=int(run.get("max_candidates") or 30),
                     capture_detail=bool(run.get("capture_detail")),
@@ -158,11 +160,15 @@ class RecipeGenerationRunService:
                 "running",
                 "Reading selector report, visible text, pagination evidence, and any captured detail page.",
             )
+            source_test_insight = (
+                run.get("source_test_insight") if isinstance(run.get("source_test_insight"), dict) else {}
+            )
             evidence = load_recipe_suggestion_evidence(
                 artifact_path,
                 source_name=source.name,
                 start_url=source.url,
                 existing_recipe_path=(self.root / source.recipe_path) if source.recipe_path else None,
+                source_test_insight=source_test_insight,
             )
             observations = _evidence_observations(evidence.prompt_payload)
             self._update_run(
@@ -194,6 +200,7 @@ class RecipeGenerationRunService:
                     source_name=source.name,
                     start_url=source.url,
                     existing_recipe_path=(self.root / source.recipe_path) if source.recipe_path else None,
+                    source_test_insight=source_test_insight,
                     max_attempts=int(run["max_attempts"]),
                     root=self.root,
                 )
@@ -217,6 +224,7 @@ class RecipeGenerationRunService:
                     source_name=source.name,
                     start_url=source.url,
                     existing_recipe_path=(self.root / source.recipe_path) if source.recipe_path else None,
+                    source_test_insight=source_test_insight,
                     root=self.root,
                 )
                 candidate = RecipeCandidateStore(self.root).save_candidate_from_suggestion(result)
@@ -229,8 +237,10 @@ class RecipeGenerationRunService:
 
             candidate_path = RecipeCandidateStore(self.root).candidate_path(candidate.candidate_id)
             generated_recipe_path = ""
-            ready_for_checks = result.schema_valid and result.suggested_recipe_yaml.strip() and (
-                not bool(run.get("refine")) or bool(refinement and refinement.accepted)
+            ready_for_checks = (
+                result.schema_valid
+                and result.suggested_recipe_yaml.strip()
+                and (not bool(run.get("refine")) or bool(refinement and refinement.accepted))
             )
             if ready_for_checks:
                 generated_recipe_path = self._write_generated_recipe(run_id, result.suggested_recipe_yaml)
@@ -244,7 +254,9 @@ class RecipeGenerationRunService:
             payload = _result_payload(
                 run_id=run_id,
                 source_id=source.id,
+                source_name=source.name,
                 source_url=source.url,
+                source_recipe_path=source.recipe_path,
                 result=result,
                 candidate_id=candidate.candidate_id,
                 candidate_path=_display_path(candidate_path, self.root),
@@ -324,6 +336,7 @@ class RecipeGenerationRunService:
             "quality_warnings": [],
             "evidence_summary": "",
             "evidence_observations": {},
+            "source_test_insight": {},
         }
         run.update(extra)
         return run
@@ -379,7 +392,7 @@ class RecipeGenerationRunService:
 
     def _new_run_id(self, source_id: str) -> str:
         slug = re.sub(r"[^a-z0-9]+", "-", source_id.lower()).strip("-") or "source"
-        stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S-%f")
+        stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S-%f")
         return f"{stamp}-{slug}"[:90].strip("-")
 
 
@@ -387,7 +400,9 @@ def _result_payload(
     *,
     run_id: str,
     source_id: str,
+    source_name: str,
     source_url: str,
+    source_recipe_path: str,
     result: RecipeSuggestionResult,
     candidate_id: str,
     candidate_path: str,
@@ -409,6 +424,9 @@ def _result_payload(
             "input_path_or_url": source_url,
             "recipe_path": generated_recipe_path,
         }
+    approval_recipe_path = (
+        source_recipe_path or f"sources/recipes/experimental/{_path_slug(source_id or source_name)}.yaml"
+    )
     attempts = []
     if refinement:
         attempts = [
@@ -430,6 +448,8 @@ def _result_payload(
         "candidate_id": candidate_id,
         "candidate_path": candidate_path,
         "candidate_url": f"/recipe-candidates/{candidate_id}?{urlencode({'source_id': source_id})}",
+        "candidate_approval_url": f"/recipe-candidates/{candidate_id}/approve",
+        "approval_recipe_path": approval_recipe_path,
         "generated_recipe_path": generated_recipe_path,
         "compatibility_url": f"/compatibility?{urlencode(params)}" if generated_recipe_path else "",
         "recipe_review_url": f"/recipe-preview?{urlencode({**preview_params, 'tab': 'execute', 'auto_run': '1'})}"
@@ -463,11 +483,13 @@ def _result_payload(
 def _evidence_observations(payload: dict[str, Any]) -> dict[str, Any]:
     candidates = payload.get("top_candidates") if isinstance(payload, dict) else []
     pagination = payload.get("observed_pagination_links") if isinstance(payload, dict) else []
+    ajax_pagination = payload.get("observed_ajax_pagination_templates") if isinstance(payload, dict) else []
     applications = payload.get("observed_application_entries") if isinstance(payload, dict) else []
     blueprint = payload.get("recipe_blueprint") if isinstance(payload, dict) else {}
     return {
         "top_candidate_count": len(candidates) if isinstance(candidates, list) else 0,
         "pagination_link_count": len(pagination) if isinstance(pagination, list) else 0,
+        "ajax_pagination_template_count": len(ajax_pagination) if isinstance(ajax_pagination, list) else 0,
         "application_entry_count": len(applications) if isinstance(applications, list) else 0,
         "detail_sample_captured": bool(payload.get("detail_sample_captured")) if isinstance(payload, dict) else False,
         "blueprint_present": bool(blueprint) if isinstance(blueprint, dict) else False,
@@ -478,6 +500,7 @@ def _observation_summary(observations: dict[str, Any]) -> str:
     parts = [
         f"{observations.get('top_candidate_count', 0)} candidate selector region(s)",
         f"{observations.get('pagination_link_count', 0)} pagination link(s)",
+        f"{observations.get('ajax_pagination_template_count', 0)} AJAX pagination template(s)",
         "detail sample captured" if observations.get("detail_sample_captured") else "no detail sample captured",
     ]
     if observations.get("blueprint_present"):
@@ -501,6 +524,58 @@ def _suggestion_summary(result: RecipeSuggestionResult) -> str:
     return f"Generated a {status} reading plan using {result.selected_strategy or 'unknown strategy'}."
 
 
+def _capture_rendered_value(value: Any) -> bool | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text in {"auto", ""}:
+        return None
+    return text in {"1", "true", "yes", "rendered"}
+
+
+def _capture_mode_label(value: Any) -> str:
+    rendered = _capture_rendered_value(value)
+    if rendered is True:
+        return "browser rendering"
+    if rendered is False:
+        return "normal HTML"
+    return "automatic static/rendered detection"
+
+
+def _source_test_insight_prefers_rendered_capture(insight: dict[str, Any]) -> bool:
+    if not isinstance(insight, dict) or not insight:
+        return False
+    text_parts = [
+        str(insight.get("insight_title") or ""),
+        str(insight.get("summary") or ""),
+        str(insight.get("recommendation") or ""),
+    ]
+    for warning in insight.get("warnings", []) if isinstance(insight.get("warnings"), list) else []:
+        text_parts.append(str(warning))
+    for item in insight.get("failed_capabilities", []) if isinstance(insight.get("failed_capabilities"), list) else []:
+        if isinstance(item, dict):
+            text_parts.append(str(item.get("detail") or ""))
+            text_parts.append(str(item.get("capability") or ""))
+    haystack = " ".join(text_parts).lower()
+    strategy = str(insight.get("pagination_strategy_tested") or "").strip().lower()
+    duplicate_ratio = _float_value(insight.get("pagination_duplicate_ratio"))
+    return (
+        "client-side pagination" in haystack
+        or "browser-click" in haystack
+        or "interactive browser pagination" in haystack
+        or (strategy == "url" and duplicate_ratio >= 0.8)
+    )
+
+
+def _float_value(value: Any) -> float:
+    try:
+        return float(value or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def _display_path(path: Path, root: Path) -> str:
     try:
         return path.relative_to(root).as_posix()
@@ -508,5 +583,9 @@ def _display_path(path: Path, root: Path) -> str:
         return path.as_posix()
 
 
+def _path_slug(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-") or "source"
+
+
 def _now() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    return datetime.now(UTC).replace(microsecond=0).isoformat()

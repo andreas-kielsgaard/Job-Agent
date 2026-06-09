@@ -134,7 +134,7 @@ def test_approved_candidate_detail_shows_summary_and_no_approval_form(client: Te
     assert response.status_code == 200
     assert "Reading plan saved" in response.text
     assert "Technical details" in response.text
-    assert "Use this reading plan" not in response.text
+    assert "Use plan and run source test" not in response.text
 
 
 def test_recipe_generation_status_cli_prints_workflow_state(capsys, project_root: Path) -> None:

@@ -33,6 +33,8 @@ class SourceProgressEvent:
     jobs_found: int = 0
     warnings_count: int = 0
     elapsed_time_seconds: float | None = None
+    page_explored_count: int = 0
+    page_total: int = 0
 
 
 SourceProgressCallback = Callable[[SourceProgressEvent], None]
@@ -40,6 +42,19 @@ SourceFetchProgressCallback = Callable[[dict[str, Any]], None]
 
 _HOST_LOCKS: dict[str, Lock] = {}
 _HOST_LOCKS_GUARD = Lock()
+
+
+@dataclass
+class SourceFetchOptions:
+    fetch_details: bool = True
+    use_source_job_limit: bool = True
+    use_recipe_card_limit: bool = True
+    detail_page_limit: int | None = None
+    detail_success_target: int | None = None
+    detail_listing_page_sample_target: int | None = None
+    pagination_page_limit: int | None = None
+    session_state_path: str | Path | None = None
+    enforce_saved_readiness: bool = False
 
 
 @dataclass
@@ -75,12 +90,20 @@ class SourceAdapter(ABC):
         self.root = root
 
     @abstractmethod
-    def fetch(self, progress_callback: SourceFetchProgressCallback | None = None) -> SourceRunResult:
+    def fetch(
+        self,
+        progress_callback: SourceFetchProgressCallback | None = None,
+        options: SourceFetchOptions | None = None,
+    ) -> SourceRunResult:
         raise NotImplementedError
 
 
 class LocalYamlAdapter(SourceAdapter):
-    def fetch(self, progress_callback: SourceFetchProgressCallback | None = None) -> SourceRunResult:
+    def fetch(
+        self,
+        progress_callback: SourceFetchProgressCallback | None = None,
+        options: SourceFetchOptions | None = None,
+    ) -> SourceRunResult:
         path = self.root / self.source["path"]
         _emit_fetch_progress(progress_callback, "Local YAML read", "running", f"Reading {path}.")
         with path.open("r", encoding="utf-8") as handle:
@@ -106,7 +129,11 @@ class GenericHtmlAdapter(SourceAdapter):
     whole page.
     """
 
-    def fetch(self, progress_callback: SourceFetchProgressCallback | None = None) -> SourceRunResult:
+    def fetch(
+        self,
+        progress_callback: SourceFetchProgressCallback | None = None,
+        options: SourceFetchOptions | None = None,
+    ) -> SourceRunResult:
         url = self.source.get("url", "")
         source_name = self.source.get("name", "Generic HTML")
         if not url:
@@ -118,9 +145,12 @@ class GenericHtmlAdapter(SourceAdapter):
             response.raise_for_status()
         except requests.RequestException as exc:
             return SourceRunResult(warnings=[SourceWarning(source_name, f"Fetch failed: {exc}", url)])
-        _emit_fetch_progress(progress_callback, "Listing page fetched", "completed", f"Fetched {response.url}.", "listing")
+        _emit_fetch_progress(
+            progress_callback, "Listing page fetched", "completed", f"Fetched {response.url}.", "listing"
+        )
 
-        max_results = _positive_int(self.source.get("max_results"), 25)
+        options = options or SourceFetchOptions()
+        max_results = _positive_int(self.source.get("max_results"), 25) if options.use_source_job_limit else None
         all_jobs = extract_generic_jobs_from_html(
             response.text,
             base_url=url,
@@ -128,7 +158,7 @@ class GenericHtmlAdapter(SourceAdapter):
             source_id=self.source.get("source_id", ""),
             max_results=None,
         )
-        jobs = all_jobs[:max_results]
+        jobs = all_jobs[:max_results] if max_results is not None else all_jobs
         listing_limit_skipped_count = max(0, len(all_jobs) - len(jobs))
         _emit_fetch_progress(
             progress_callback,
@@ -152,7 +182,7 @@ class GenericHtmlAdapter(SourceAdapter):
                         "Generic HTML adapter found no plausible job links. Add a site-specific adapter or selectors.",
                         url,
                     )
-                ]
+                ],
             )
         return SourceRunResult(jobs=jobs, metadata=metadata)
 
@@ -168,7 +198,11 @@ class WhitehallResourcesAdapter(GenericHtmlAdapter):
 class RecipeHtmlAdapter(SourceAdapter):
     """Opt-in recipe-backed source adapter for configured daily-run sources."""
 
-    def fetch(self, progress_callback: SourceFetchProgressCallback | None = None) -> SourceRunResult:
+    def fetch(
+        self,
+        progress_callback: SourceFetchProgressCallback | None = None,
+        options: SourceFetchOptions | None = None,
+    ) -> SourceRunResult:
         source_name = self.source.get("name", "Recipe HTML")
         url = self.source.get("url", "")
         recipe_path = self.source.get("recipe_path", "")
@@ -178,30 +212,84 @@ class RecipeHtmlAdapter(SourceAdapter):
             return SourceRunResult(warnings=[SourceWarning(source_name, "Recipe source has no recipe_path.", url)])
 
         try:
-            from .services.job_board_recipe_service import extract_jobs_with_recipe_from_url, load_job_board_recipe
+            from .services.job_board_recipe_service import extract_jobs_with_recipe_from_url
+            from .services.recipes.mapping import load_job_board_recipe
+            from .services.source_session_service import SourceSessionService
 
             recipe = load_job_board_recipe(self.root / recipe_path)
+            options = options or SourceFetchOptions()
             _emit_fetch_progress(
                 progress_callback,
                 "Recipe selected",
                 "completed",
                 f"Using {recipe.source_name} from {recipe_path}.",
             )
-            max_results = _optional_positive_int(self.source.get("max_results"))
+            session_state_path = options.session_state_path
+            session_status = None
+            if not session_state_path:
+                candidate_session_status = SourceSessionService(self.root).status_for_source(
+                    str(self.source.get("source_id") or ""),
+                    session_scope=recipe.access.session_scope,
+                )
+                if recipe.access.requires_session or candidate_session_status.usable:
+                    session_status = candidate_session_status
+            if recipe.access.requires_session and not session_state_path:
+                if not session_status.usable:
+                    message = (
+                        f"Connected source session required for {recipe.access.session_scope or recipe.source_name}; "
+                        f"current status is {session_status.label}. {session_status.summary}"
+                    )
+                    _emit_fetch_progress(
+                        progress_callback, "Source session required", "failed", message, "source_access"
+                    )
+                    return SourceRunResult(
+                        warnings=[SourceWarning(source_name, message, url)],
+                        metadata=_session_required_metadata(
+                            source=self.source,
+                            recipe_path=recipe_path,
+                            recipe=recipe,
+                            session_status=session_status,
+                        ),
+                    )
+                session_state_path = session_status.storage_state_path
+            elif session_status and session_status.usable and not session_state_path:
+                session_state_path = session_status.storage_state_path
+            if session_state_path and session_status and session_status.usable:
+                _emit_fetch_progress(
+                    progress_callback,
+                    "Source session selected",
+                    "completed",
+                    f"Using connected session for {session_status.session_scope or recipe.source_name}.",
+                    "source_access",
+                )
+            max_results = (
+                _optional_positive_int(self.source.get("max_results")) if options.use_source_job_limit else None
+            )
             result = extract_jobs_with_recipe_from_url(
                 url,
                 recipe,
+                timeout_seconds=30
+                if recipe.mode == "rendered_html" or recipe.pagination.strategy == "browser_click"
+                else 15,
                 use_recipe_detail_limit=False,
-                detail_page_limit=None,
+                detail_page_limit=options.detail_page_limit,
+                detail_success_target=options.detail_success_target,
+                detail_listing_page_sample_target=options.detail_listing_page_sample_target,
                 fetch_pagination=True,
-                pagination_page_limit=recipe.pagination.max_pages,
+                pagination_page_limit=options.pagination_page_limit,
                 job_limit=max_results,
+                fetch_details=options.fetch_details,
+                use_recipe_card_limit=options.use_recipe_card_limit,
+                session_state_path=self.root / session_state_path if session_state_path else None,
                 progress_callback=lambda step: _emit_fetch_progress(
                     progress_callback,
                     step.phase,
                     step.status,
                     step.detail,
                     step.capability,
+                    page_explored_count=step.page_explored_count,
+                    page_total=step.page_total,
+                    jobs_found=step.jobs_found,
                 ),
             )
         except (OSError, ValueError) as exc:
@@ -226,6 +314,7 @@ class RecipeHtmlAdapter(SourceAdapter):
                 result=result,
                 retained_job_count=len(jobs),
                 max_results=max_results,
+                session_status=session_status,
             ),
         )
 
@@ -236,23 +325,20 @@ def load_sources(root: Path = ROOT) -> list[dict]:
     return [source for source in ExecutionSourceService(root).list_sources() if source.get("enabled", True)]
 
 
-def load_jobs_from_sources(
-    root: Path = ROOT,
-    progress_callback: SourceProgressCallback | None = None,
-) -> SourceRunResult:
-    result = SourceRunResult()
-    for source_result in iter_source_results(root, progress_callback=progress_callback):
-        result.jobs.extend(source_result.result.jobs)
-        result.warnings.extend(source_result.result.warnings)
-    return result
+def _load_all_sources(root: Path = ROOT) -> list[dict]:
+    from .services.execution_source_service import ExecutionSourceService
+
+    return ExecutionSourceService(root).list_sources()
 
 
 def iter_source_results(
     root: Path = ROOT,
     progress_callback: SourceProgressCallback | None = None,
     source_id: str = "",
+    include_disabled: bool = False,
+    fetch_options: SourceFetchOptions | None = None,
 ):
-    sources = load_sources(root)
+    sources = load_sources(root) if not include_disabled else _load_all_sources(root)
     if source_id:
         sources = [source for source in sources if str(source.get("source_id") or "") == source_id]
     source_count = len(sources)
@@ -270,23 +356,29 @@ def iter_source_results(
     if not items:
         return
     if len(items) == 1:
-        yield _run_source_item(items[0], root, progress_callback)
+        yield _run_source_item(items[0], root, progress_callback, fetch_options)
         return
 
-    yield from _iter_source_results_parallel(items, root, progress_callback)
+    yield from _iter_source_results_parallel(items, root, progress_callback, fetch_options)
 
 
 def _iter_source_results_parallel(
     items: list[_SourceWorkItem],
     root: Path,
     progress_callback: SourceProgressCallback | None,
+    fetch_options: SourceFetchOptions | None,
 ):
     queue: Queue[_SourceQueueItem] = Queue()
     completed = 0
     max_workers = min(3, len(items))
 
     def worker(item: _SourceWorkItem) -> None:
-        result = _run_source_item(item, root, lambda event: queue.put(_SourceQueueItem("event", event=event)))
+        result = _run_source_item(
+            item,
+            root,
+            lambda event: queue.put(_SourceQueueItem("event", event=event)),
+            fetch_options,
+        )
         queue.put(_SourceQueueItem("result", result=result))
 
     with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="source-fetch") as executor:
@@ -305,6 +397,7 @@ def _run_source_item(
     item: _SourceWorkItem,
     root: Path,
     progress_callback: SourceProgressCallback | None,
+    fetch_options: SourceFetchOptions | None = None,
 ) -> SourceFetchResult:
     started_at = perf_counter()
     _emit_source_progress(
@@ -321,12 +414,23 @@ def _run_source_item(
     )
     adapter = adapter_for_source(item.source, root)
     try:
-        host_lock = _host_lock(item.source_url)
-        with host_lock:
-            source_result = _fetch_adapter(
-                adapter,
-                lambda progress: _emit_adapter_progress(progress_callback, item, progress),
+        readiness_warning = saved_readiness_warning_for_source(
+            item.source,
+            root,
+            enforce=bool(fetch_options and fetch_options.enforce_saved_readiness),
+        )
+        if readiness_warning:
+            source_result = SourceRunResult(
+                warnings=[SourceWarning(item.source_name, readiness_warning, item.source_url)]
             )
+        else:
+            host_lock = _host_lock(item.source_url)
+            with host_lock:
+                source_result = _fetch_adapter(
+                    adapter,
+                    lambda progress: _emit_adapter_progress(progress_callback, item, progress),
+                    fetch_options,
+                )
     except Exception as exc:
         elapsed = round(perf_counter() - started_at, 3)
         warning = SourceWarning(item.source_name, f"Source failed unexpectedly: {exc}", item.source_url)
@@ -414,6 +518,9 @@ def _emit_adapter_progress(
             source_type=item.source_type,
             source_url=item.source_url,
             message=f"{phase}: {detail}" if detail else phase,
+            jobs_found=_int(progress.get("jobs_found")),
+            page_explored_count=_int(progress.get("page_explored_count")),
+            page_total=_int(progress.get("page_total")),
         ),
     )
 
@@ -428,21 +535,55 @@ def _host_lock(url: str) -> Lock:
         return _HOST_LOCKS[host]
 
 
-def _fetch_adapter(adapter: SourceAdapter, progress_callback: SourceFetchProgressCallback) -> SourceRunResult:
-    if _adapter_accepts_progress_callback(adapter):
-        return adapter.fetch(progress_callback=progress_callback)
-    return adapter.fetch()
+def _fetch_adapter(
+    adapter: SourceAdapter,
+    progress_callback: SourceFetchProgressCallback,
+    fetch_options: SourceFetchOptions | None,
+) -> SourceRunResult:
+    kwargs: dict[str, Any] = {}
+    if _adapter_accepts_parameter(adapter, "progress_callback"):
+        kwargs["progress_callback"] = progress_callback
+    if _adapter_accepts_parameter(adapter, "options"):
+        kwargs["options"] = fetch_options
+    return adapter.fetch(**kwargs)
 
 
-def _adapter_accepts_progress_callback(adapter: SourceAdapter) -> bool:
+def saved_readiness_warning_for_source(
+    source: dict,
+    root: Path,
+    *,
+    enforce: bool = False,
+) -> str:
+    if not enforce:
+        return ""
+    source_id = str(source.get("source_id") or "").strip()
+    if not source_id or not str(source.get("recipe_path") or "").strip():
+        return ""
+    try:
+        from .services.source_execution_readiness_service import SourceExecutionReadinessService
+
+        service = SourceExecutionReadinessService(root)
+        saved = service.load(source_id)
+        if not saved.last_checked_at:
+            return ""
+        readiness = service.evaluate(source_id)
+    except Exception as exc:
+        return f"Saved source readiness could not be checked before execution: {exc}"
+    if readiness.readiness_status == "ready":
+        return ""
+    detail = readiness.blockers[0] if readiness.blockers else readiness.readiness_summary
+    return (
+        f"Saved source readiness is {readiness.readiness_status}; {detail} "
+        "Rerun the safe source test or refresh source access before this source is used."
+    )
+
+
+def _adapter_accepts_parameter(adapter: SourceAdapter, name: str) -> bool:
     try:
         parameters = signature(adapter.fetch).parameters.values()
     except (TypeError, ValueError):
         return True
-    return any(
-        parameter.kind == Parameter.VAR_KEYWORD or parameter.name == "progress_callback"
-        for parameter in parameters
-    )
+    return any(parameter.kind == Parameter.VAR_KEYWORD or parameter.name == name for parameter in parameters)
 
 
 def _emit_source_progress(callback: SourceProgressCallback | None, event: SourceProgressEvent) -> None:
@@ -472,6 +613,7 @@ def _recipe_result_metadata(
     result: Any,
     retained_job_count: int,
     max_results: int | None,
+    session_status: Any | None = None,
 ) -> dict[str, Any]:
     return {
         "adapter": "recipe_html",
@@ -491,11 +633,31 @@ def _recipe_result_metadata(
             }
             for step in result.steps
         ],
-        "pagination_configured": bool(recipe.pagination.page_link_selector or recipe.pagination.next_selector),
+        "pagination_configured": bool(
+            recipe.pagination.strategy in {"ajax", "browser_click"}
+            or recipe.pagination.page_link_selector
+            or recipe.pagination.next_selector
+        ),
+        "pagination_strategy": recipe.pagination.strategy,
+        "pagination_ajax_url_template_present": bool(recipe.pagination.ajax_url_template),
+        "pagination_click_selector_configured": bool(
+            recipe.pagination.click_selector or recipe.pagination.next_selector or recipe.pagination.page_link_selector
+        ),
         "pagination_link_count": len(result.pagination_links),
         "pagination_max_pages": recipe.pagination.max_pages,
         "pagination_fetch_count": result.pagination_fetch_count,
         "pagination_fetch_attempts": list(result.pagination_fetch_attempts),
+        "pagination_duplicate_page_count": result.pagination_duplicate_page_count,
+        "pagination_duplicate_ratio": result.pagination_duplicate_ratio,
+        "pagination_unique_jobs_from_fetched_pages": result.pagination_unique_jobs_from_fetched_pages,
+        "interactive_pagination_control_count": result.interactive_pagination_control_count,
+        "source_access_requires_session": bool(recipe.access.requires_session),
+        "source_access_session_used": bool(result.source_access_session_used),
+        "source_access_session_scope": recipe.access.session_scope,
+        "source_access_setup_hint": recipe.access.setup_hint,
+        "source_access_session_status": getattr(session_status, "status", ""),
+        "source_access_session_label": getattr(session_status, "label", ""),
+        "source_access_login_gate_detected": bool(getattr(result, "source_access_login_gate_detected", False)),
         "listing_observed_count": result.listing_observed_count,
         "listing_extracted_count": result.listing_extracted_count,
         "listing_missing_url_count": result.listing_missing_url_count,
@@ -504,6 +666,7 @@ def _recipe_result_metadata(
         "listing_limit_skipped_count": (
             result.listing_limit_skipped_count + max(0, len(result.jobs) - retained_job_count)
         ),
+        "visible_total_job_count": result.visible_total_job_count,
         "listing_pages": [
             {
                 "page_url": page.page_url,
@@ -521,6 +684,8 @@ def _recipe_result_metadata(
         "detail_fetch_limit": result.detail_fetch_limit,
         "detail_fetch_count": result.detail_fetch_count,
         "detail_enriched_count": result.detail_enriched_count,
+        "detail_listing_page_sample_target": result.detail_listing_page_sample_target,
+        "detail_verified_listing_page_count": result.detail_verified_listing_page_count,
         "detail_request_delay_seconds": recipe.detail.request_delay_seconds,
         "detail_attempts": [
             {
@@ -561,8 +726,48 @@ def _recipe_result_metadata(
     }
 
 
+def _session_required_metadata(
+    *,
+    source: dict,
+    recipe_path: str,
+    recipe: Any,
+    session_status: Any,
+) -> dict[str, Any]:
+    detail = (
+        f"Recipe declares that this source requires a connected session. "
+        f"Current session status: {session_status.label}. {session_status.summary}"
+    )
+    return {
+        "adapter": "recipe_html",
+        "recipe_path": recipe_path,
+        "recipe_source_name": recipe.source_name,
+        "base_url": source.get("url", ""),
+        "configured_source_url": source.get("url", ""),
+        "source_access_requires_session": True,
+        "source_access_session_used": False,
+        "source_access_session_scope": recipe.access.session_scope,
+        "source_access_setup_hint": recipe.access.setup_hint,
+        "source_access_session_status": session_status.status,
+        "source_access_session_label": session_status.label,
+        "capability_checks": [
+            {
+                "capability": "source_access",
+                "label": "Source access",
+                "expected": True,
+                "observed": False,
+                "status": "fail",
+                "detail": detail,
+            }
+        ],
+    }
+
+
 class UnsupportedSourceAdapter(SourceAdapter):
-    def fetch(self, progress_callback: SourceFetchProgressCallback | None = None) -> SourceRunResult:
+    def fetch(
+        self,
+        progress_callback: SourceFetchProgressCallback | None = None,
+        options: SourceFetchOptions | None = None,
+    ) -> SourceRunResult:
         return SourceRunResult(
             warnings=[
                 SourceWarning(
@@ -580,9 +785,23 @@ def _emit_fetch_progress(
     status: str,
     detail: str,
     capability: str = "",
+    *,
+    page_explored_count: int = 0,
+    page_total: int = 0,
+    jobs_found: int = 0,
 ) -> None:
     if callback:
-        callback({"phase": phase, "status": status, "detail": detail, "capability": capability})
+        callback(
+            {
+                "phase": phase,
+                "status": status,
+                "detail": detail,
+                "capability": capability,
+                "page_explored_count": page_explored_count,
+                "page_total": page_total,
+                "jobs_found": jobs_found,
+            }
+        )
 
 
 JOB_HINTS = ("job", "career", "vacancy", "contract", "sap", "abap", "consultant")
@@ -640,3 +859,10 @@ def _optional_positive_int(value) -> int | None:
     except (TypeError, ValueError):
         return None
     return parsed if parsed > 0 else None
+
+
+def _int(value) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0

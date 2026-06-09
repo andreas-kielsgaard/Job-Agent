@@ -23,3 +23,123 @@ role_preferences:
 
 thresholds:
   minimum_digest_score: 45
+
+match_engine:
+  remote_policy: slight_preference
+  permanent_policy: penalize
+  permanent_penalty: -25
+  technical_cap: 55
+  module_cap: 25
+  technical_keyword_groups:
+    - label: ABAP core
+      terms:
+        - abap
+        - sap abap
+        - abap oo
+      score: 22
+      mode: bonus
+    - label: RAP
+      terms:
+        - rap
+        - restful application programming
+      score: 12
+      mode: bonus
+    - label: CDS
+      terms:
+        - cds
+        - cds views
+      score: 10
+      mode: bonus
+    - label: OData / Gateway
+      terms:
+        - odata
+        - gateway
+        - sap gateway
+      score: 10
+      mode: bonus
+    - label: S/4HANA or ECC
+      terms:
+        - s/4hana
+        - s4hana
+        - ecc
+      score: 8
+      mode: bonus
+    - label: Debugging / quality
+      terms:
+        - debugging
+        - aunit
+        - hana performance
+        - clean core
+      score: 8
+      mode: bonus
+    - label: Classic ABAP APIs
+      terms:
+        - bapi
+        - badi
+        - user exits
+      score: 6
+      mode: bonus
+  module_keyword_groups:
+    - label: QM
+      terms:
+        - qm
+        - quality management
+      score: 7
+      mode: bonus
+    - label: WM
+      terms:
+        - wm
+        - warehouse management
+      score: 7
+      mode: bonus
+    - label: EWM
+      terms:
+        - ewm
+        - extended warehouse management
+      score: 7
+      mode: bonus
+    - label: MM
+      terms:
+        - mm
+        - materials management
+      score: 7
+      mode: bonus
+    - label: SD
+      terms:
+        - sd
+        - sales and distribution
+      score: 5
+      mode: bonus
+    - label: PP
+      terms:
+        - pp
+        - production planning
+      score: 5
+      mode: bonus
+    - label: CATS
+      terms:
+        - cats
+      score: 5
+      mode: bonus
+    - label: MDG
+      terms:
+        - mdg
+      score: 5
+      mode: bonus
+  contract_keyword_groups:
+    - label: Contract / freelance
+      terms:
+        - contract
+        - freelance
+      score: 8
+      mode: bonus
+    - label: Interim
+      terms:
+        - interim
+      score: 6
+      mode: bonus
+    - label: Temporary
+      terms:
+        - temporary
+      score: 4
+      mode: bonus

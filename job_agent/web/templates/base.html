@@ -15,6 +15,8 @@
       }, 30000);
 
       let aiEditState = {};
+      let localWorkStatusItems = [];
+      const WORK_STATUS_LOCAL_KEY = "job-agent:local-work-status";
 
       async function openAiEdit(button) {
         const targetId = button.dataset.target;
@@ -99,6 +101,255 @@
 
       function toggleAll(source, selector) {
         document.querySelectorAll(selector).forEach(box => box.checked = source.checked);
+      }
+
+      function escapeHtml(value) {
+        return String(value || "")
+          .replaceAll("&", "&amp;")
+          .replaceAll("<", "&lt;")
+          .replaceAll(">", "&gt;")
+          .replaceAll('"', "&quot;")
+          .replaceAll("'", "&#039;");
+      }
+
+      function loadLocalWorkStatusItems() {
+        try {
+          const parsed = JSON.parse(sessionStorage.getItem(WORK_STATUS_LOCAL_KEY) || "[]");
+          localWorkStatusItems = Array.isArray(parsed) ? parsed : [];
+        } catch {
+          localWorkStatusItems = [];
+        }
+      }
+
+      function saveLocalWorkStatusItems() {
+        try {
+          sessionStorage.setItem(WORK_STATUS_LOCAL_KEY, JSON.stringify(localWorkStatusItems));
+        } catch {
+          // Ignore storage failures; the live in-memory widget still works.
+        }
+      }
+
+      function mergeLocalWorkStatus(items) {
+        const now = Date.now();
+        const serverIds = new Set(items.map((item) => item.task_id).filter(Boolean));
+        localWorkStatusItems = localWorkStatusItems.filter((item) => {
+          if (serverIds.has(item.task_id)) return false;
+          if (!item.finished_at) return now - Number(item.started_at_ms || now) < 600000;
+          return now - Number(item.finished_at) < 20000;
+        });
+        saveLocalWorkStatusItems();
+        return [...items, ...localWorkStatusItems];
+      }
+
+      function startWorkStatusDock() {
+        const dock = document.getElementById("work-status-dock");
+        if (!dock) return;
+
+        async function refreshWorkStatus() {
+          try {
+            const response = await fetch("/api/work-status", { cache: "no-store" });
+            const data = await response.json();
+            renderWorkStatus(mergeLocalWorkStatus(data.sources || []));
+          } catch {
+            renderWorkStatus(localWorkStatusItems);
+          }
+        }
+
+        function renderWorkStatus(items) {
+          dock.hidden = !items.length;
+          dock.innerHTML = items.map(renderWorkStatusCard).join("");
+          maybeRefreshCompletedSourceWork(items);
+        }
+
+        function renderWorkStatusCard(item) {
+          if (item.kind === "profile" || item.progress_percent !== undefined) {
+            const status = String(item.status || "running").toLowerCase();
+            const progress = Math.max(8, Math.min(100, Math.round(Number(item.progress_percent || 18))));
+            const statusLine = item.stage || item.message || "Working on profile settings.";
+            const href = item.href || item.url || "";
+            const tag = href ? "a" : "article";
+            const hrefAttr = href ? ` href="${escapeHtml(href)}"` : "";
+            return `
+              <${tag} class="work-status-card ${escapeHtml(status)} ${href ? "actionable" : ""}"${hrefAttr}>
+                <div class="work-status-title">
+                  <span>${escapeHtml(item.title || "Drafting profile from CV")}</span>
+                  <span class="badge ${escapeHtml(status)}">${escapeHtml(item.status || "running")}</span>
+                </div>
+                <p class="work-status-line">${escapeHtml(statusLine)}</p>
+                ${item.message && item.message !== statusLine ? `<p class="work-status-line">${escapeHtml(item.message)}</p>` : ""}
+                <div class="work-status-bar"><span style="width:${progress}%"></span></div>
+              </${tag}>
+            `;
+          }
+          const explored = Number(item.page_explored_count || 0);
+          const total = Number(item.page_total || 0);
+          const jobs = Number(item.jobs_found || 0);
+          const duplicatePages = Number(item.pagination_duplicate_page_count || 0);
+          const detailRead = Number(item.detail_read_count || 0);
+          const detailTotal = Number(item.detail_total || 0);
+          const title = item.kind === "index"
+            ? `Indexing ${item.source_name || "source"}:`
+            : `Checking ${item.source_name || "source"}:`;
+          const pageText = duplicatePages > 0
+            ? `${explored || 0}/${total || "?"} pages checked, ${duplicatePages} duplicate or inaccessible`
+            : `${explored || 0}/${total || "?"} pages explored`;
+          const statusLine = detailTotal > 0
+            ? `Indexing complete. Details read for ${detailRead}/${detailTotal} postings.`
+            : `${pageText}, found ${jobs} job posting${jobs === 1 ? "" : "s"}.`;
+          const progress = detailTotal > 0
+            ? Math.max(8, Math.min(100, Math.round((detailRead / detailTotal) * 100)))
+            : total > 0 ? Math.max(8, Math.min(100, Math.round((explored / total) * 100))) : 18;
+          const status = String(item.status || "running").toLowerCase();
+          return `
+            <article class="work-status-card ${escapeHtml(status)}">
+              <div class="work-status-title">
+                <span>${escapeHtml(title)}</span>
+                <span class="badge ${escapeHtml(status)}">${escapeHtml(item.status || "running")}</span>
+              </div>
+              <p class="work-status-line">${escapeHtml(statusLine)}</p>
+              ${item.message ? `<p class="work-status-line">${escapeHtml(item.message)}</p>` : ""}
+              <div class="work-status-bar"><span style="width:${progress}%"></span></div>
+            </article>
+          `;
+        }
+
+        function maybeRefreshCompletedSourceWork(items) {
+          const match = window.location.pathname.match(/^\/sources\/([^/]+)$/);
+          const sessionMatch = window.location.pathname.match(/^\/sources\/([^/]+)\/session$/);
+          if (!match && !sessionMatch) return;
+          const sourceId = decodeURIComponent((match || sessionMatch)[1]);
+          const finishedStatuses = new Set(["completed", "completed_with_warnings", "failed"]);
+          items.forEach((item) => {
+            const status = String(item.status || "").toLowerCase();
+            const refreshableKind = match ? item.kind === "index" : item.kind === "session";
+            if (!item.task_id || !refreshableKind || item.source_id !== sourceId || !finishedStatuses.has(status)) {
+              return;
+            }
+            const key = `source-work-refresh:${item.task_id}`;
+            if (sessionStorage.getItem(key)) return;
+            sessionStorage.setItem(key, "1");
+            window.setTimeout(() => window.location.reload(), 900);
+          });
+        }
+
+        refreshWorkStatus();
+        window.setInterval(refreshWorkStatus, 2000);
+      }
+
+      function attachAsyncWorkForms() {
+        document.querySelectorAll("form[data-work-status-form]").forEach((form) => {
+          form.addEventListener("submit", async (event) => {
+            const requiredField = form.dataset.workRequires || "";
+            if (requiredField) {
+              const control = form.querySelector(`[name="${requiredField}"]`);
+              if (control && control.type === "checkbox" && !control.checked) return;
+            }
+            event.preventDefault();
+            const taskId = ensureWorkTaskId(form);
+            const title = form.dataset.workTitle || "Drafting profile from CV";
+            localWorkStatusItems = [
+              ...localWorkStatusItems.filter((item) => item.task_id !== taskId),
+              {
+                kind: "profile",
+                task_id: taskId,
+                title,
+                status: "running",
+                stage: "Submitting",
+                message: "Sending CV data to the profile draft flow.",
+                progress_percent: 8,
+                started_at_ms: Date.now()
+              }
+            ];
+            saveLocalWorkStatusItems();
+            renderExternalWorkStatus();
+            setFormBusy(form, true);
+            try {
+              const response = await fetch(form.action, {
+                method: form.method || "POST",
+                body: new FormData(form),
+                cache: "no-store"
+              });
+              if (response.redirected) {
+                window.location.href = response.url;
+                return;
+              }
+              const contentType = response.headers.get("content-type") || "";
+              if (!response.ok) {
+                const text = await response.text();
+                throw new Error(text || `Request failed with ${response.status}`);
+              }
+              if (contentType.includes("text/html")) {
+                const html = await response.text();
+                document.open();
+                document.write(html);
+                document.close();
+                if (!window.location.hash) window.history.replaceState(null, "", "/setup#cv-profile-draft");
+                return;
+              }
+              window.location.reload();
+            } catch (error) {
+              localWorkStatusItems = localWorkStatusItems.map((item) => item.task_id === taskId
+                ? { ...item, status: "failed", stage: "Failed", message: error.message || "Profile draft failed.", progress_percent: 100, finished_at: Date.now() }
+                : item
+              );
+              saveLocalWorkStatusItems();
+              renderExternalWorkStatus();
+              setFormBusy(form, false);
+            }
+          });
+        });
+      }
+
+      function renderExternalWorkStatus() {
+        const dock = document.getElementById("work-status-dock");
+        if (!dock) return;
+        const items = mergeLocalWorkStatus([]);
+        dock.hidden = !items.length;
+        dock.innerHTML = items.map((item) => {
+          const status = String(item.status || "running").toLowerCase();
+          const progress = Math.max(8, Math.min(100, Math.round(Number(item.progress_percent || 18))));
+          const statusLine = item.stage || item.message || "Working.";
+          const href = item.href || item.url || "";
+          const tag = href ? "a" : "article";
+          const hrefAttr = href ? ` href="${escapeHtml(href)}"` : "";
+          return `
+            <${tag} class="work-status-card ${escapeHtml(status)} ${href ? "actionable" : ""}"${hrefAttr}>
+              <div class="work-status-title">
+                <span>${escapeHtml(item.title || "Working")}</span>
+                <span class="badge ${escapeHtml(status)}">${escapeHtml(item.status || "running")}</span>
+              </div>
+              <p class="work-status-line">${escapeHtml(statusLine)}</p>
+              ${item.message && item.message !== statusLine ? `<p class="work-status-line">${escapeHtml(item.message)}</p>` : ""}
+              <div class="work-status-bar"><span style="width:${progress}%"></span></div>
+            </${tag}>
+          `;
+        }).join("");
+      }
+
+      function ensureWorkTaskId(form) {
+        let input = form.querySelector('input[name="work_task_id"]');
+        if (!input) {
+          input = document.createElement("input");
+          input.type = "hidden";
+          input.name = "work_task_id";
+          form.appendChild(input);
+        }
+        if (!input.value) {
+          input.value = `profile-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+        }
+        return input.value;
+      }
+
+      function setFormBusy(form, busy) {
+        form.querySelectorAll('button[type="submit"]').forEach((button) => {
+          button.disabled = busy;
+          if (busy) {
+            button.dataset.originalText = button.textContent;
+            button.textContent = "Working...";
+          } else if (button.dataset.originalText) {
+            button.textContent = button.dataset.originalText;
+          }
+        });
       }
 
       function refreshSourceForms() {
@@ -245,6 +496,9 @@
           form.addEventListener("submit", () => sendFrontendDebug("form_submitted"));
         });
         sendFrontendDebug("page_loaded");
+        attachAsyncWorkForms();
+        loadLocalWorkStatusItems();
+        startWorkStatusDock();
       });
     </script>
   </head>
@@ -258,12 +512,12 @@
         <a class="nav-button" href="/jobs">Jobs</a>
         <a class="nav-button" href="/runs">Runs</a>
         <a class="nav-button" href="/stats">Stats</a>
-        <a class="nav-button" href="/setup">Profile</a>
+        <a class="nav-button nav-profile-button {% if profile_unreviewed_draft %}has-alert{% endif %}" href="{{ profile_draft_url if profile_unreviewed_draft else '/setup' }}" {% if profile_unreviewed_draft %}title="CV profile draft ready for review"{% endif %}>Profile</a>
         <details class="nav-advanced">
           <summary>Advanced</summary>
           <div>
             <a href="/compatibility">Compatibility</a>
-            <a href="/recipe-preview">Recipe review</a>
+            <a href="/recipe-preview">Source review</a>
             <a href="/recipe-editor">Recipe editor</a>
           </div>
         </details>
@@ -272,6 +526,7 @@
     <main class="shell">
       {% block content %}{% endblock %}
     </main>
+    <div class="work-status-dock" id="work-status-dock" hidden></div>
     <div class="modal-backdrop" id="ai-edit-modal">
       <div class="modal">
         <div class="row">
@@ -293,7 +548,7 @@
         </div>
         <div class="compare">
           <div>
-            <label>Old text</label>
+            <label>Current text</label>
             <textarea id="ai-old-text"></textarea>
           </div>
           <div>

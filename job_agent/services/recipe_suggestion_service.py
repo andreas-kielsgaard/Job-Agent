@@ -2,23 +2,35 @@ from __future__ import annotations
 
 import json
 import re
+from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 
 import yaml
 from bs4 import BeautifulSoup
 
 from job_agent.config import ROOT
+from job_agent.llm import LlmService
 from job_agent.services.extraction_quality import job_url_quality
-from job_agent.services.recipe_calibration_service import classify_recipe_field_label, label_unsupported_reason
 from job_agent.services.job_board_recipe_service import (
     check_recipe_against_html,
     extract_job_detail_from_html,
-    job_board_recipe_from_mapping,
-    _selectors,
 )
-from job_agent.services.llm_service import LlmService
+from job_agent.services.recipe_calibration_service import classify_recipe_field_label, label_unsupported_reason
+from job_agent.services.recipes.mapping import _selectors, job_board_recipe_from_mapping
+from job_agent.services.recipes.source_test_insight import (
+    apply_source_test_insight_to_recipe as _apply_source_test_insight_to_recipe,
+)
+from job_agent.services.recipes.source_test_insight import (
+    source_test_insight_from_payload as _source_test_insight_from_payload,
+)
+from job_agent.services.recipes.source_test_insight import (
+    source_test_recipe_warnings as _source_test_recipe_warnings,
+)
+from job_agent.services.recipes.source_test_insight import (
+    suggestion_conflicts_with_source_test_insight as _suggestion_conflicts_with_source_test_insight,
+)
 
 EXPECTED_ARTIFACT_FILES = [
     "summary.md",
@@ -77,6 +89,7 @@ class RecipeSuggestionResult:
     referenced_artifact_files: list[str] = field(default_factory=list)
     validation_errors: list[str] = field(default_factory=list)
     schema_valid: bool = False
+    source_test_insight: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -107,6 +120,7 @@ def suggest_recipe_from_artifact(
     source_name: str = "",
     start_url: str = "",
     existing_recipe_path: Path | None = None,
+    source_test_insight: dict[str, Any] | None = None,
     llm_client: RecipeSuggestionLlmClient | None = None,
     root: Path = ROOT,
 ) -> RecipeSuggestionResult:
@@ -115,6 +129,7 @@ def suggest_recipe_from_artifact(
         source_name=source_name,
         start_url=start_url,
         existing_recipe_path=existing_recipe_path,
+        source_test_insight=source_test_insight,
     )
     if no_evidence := _no_recipe_evidence_result(evidence):
         return no_evidence
@@ -124,7 +139,11 @@ def suggest_recipe_from_artifact(
     try:
         raw_response = client.suggest(prompt)
     except RuntimeError as exc:
-        if deterministic and deterministic.schema_valid:
+        if (
+            deterministic
+            and deterministic.schema_valid
+            and not _suggestion_conflicts_with_source_test_insight(deterministic)
+        ):
             deterministic.warnings.append(f"LLM refinement unavailable; saved deterministic draft instead: {exc}")
             return deterministic
         raise
@@ -136,6 +155,7 @@ def suggest_recipe_with_refinement(
     source_name: str = "",
     start_url: str = "",
     existing_recipe_path: Path | None = None,
+    source_test_insight: dict[str, Any] | None = None,
     llm_client: RecipeSuggestionLlmClient | None = None,
     max_attempts: int = 3,
     root: Path = ROOT,
@@ -148,6 +168,7 @@ def suggest_recipe_with_refinement(
         source_name=source_name,
         start_url=start_url,
         existing_recipe_path=existing_recipe_path,
+        source_test_insight=source_test_insight,
     )
     if no_evidence := _no_recipe_evidence_result(evidence):
         attempt = RecipeRefinementAttempt(
@@ -272,6 +293,12 @@ def evaluate_suggestion_against_artifact(result: RecipeSuggestionResult) -> Reci
         warnings.extend(semantic_warnings)
         revision_reason = revision_reason or "Recipe selectors contradict visible page labels."
 
+    source_test_warnings = _source_test_recipe_warnings(recipe, result.source_test_insight)
+    if source_test_warnings:
+        quality_status = "poor"
+        warnings.extend(source_test_warnings)
+        revision_reason = revision_reason or "Recipe keeps a pagination strategy that the source test already rejected."
+
     if detail_path.exists():
         detail_report = _read_json(result.artifact_dir / "selector-report.json")
         detail_url = str(detail_report.get("detail_sample_url") or result.start_url or recipe.start_url)
@@ -313,6 +340,7 @@ def load_recipe_suggestion_evidence(
     source_name: str = "",
     start_url: str = "",
     existing_recipe_path: Path | None = None,
+    source_test_insight: dict[str, Any] | None = None,
 ) -> RecipeSuggestionEvidence:
     artifact_dir = Path(artifact_dir)
     warnings: list[str] = []
@@ -347,11 +375,23 @@ def load_recipe_suggestion_evidence(
         "observed_pagination_links": selector_report.get("observed_pagination_links", [])[:10]
         if isinstance(selector_report, dict)
         else [],
+        "observed_ajax_pagination_templates": selector_report.get("observed_ajax_pagination_templates", [])[:10]
+        if isinstance(selector_report, dict)
+        else [],
+        "observed_interactive_pagination_controls": selector_report.get(
+            "observed_interactive_pagination_controls", []
+        )[:10]
+        if isinstance(selector_report, dict)
+        else [],
         "observed_application_entries": selector_report.get("observed_application_entries", [])[:10]
         if isinstance(selector_report, dict)
         else [],
-        "detail_sample_url": str(selector_report.get("detail_sample_url") or "") if isinstance(selector_report, dict) else "",
-        "detail_sample_captured": bool(selector_report.get("detail_sample_captured")) if isinstance(selector_report, dict) else False,
+        "detail_sample_url": str(selector_report.get("detail_sample_url") or "")
+        if isinstance(selector_report, dict)
+        else "",
+        "detail_sample_captured": bool(selector_report.get("detail_sample_captured"))
+        if isinstance(selector_report, dict)
+        else False,
         "detail_visible_text_sample": detail_visible_text,
         "recipe_blueprint": selector_report.get("recipe_blueprint", {}) if isinstance(selector_report, dict) else {},
         "field_observations": (selector_report.get("recipe_blueprint", {}) or {}).get("field_observations", {})
@@ -361,6 +401,7 @@ def load_recipe_suggestion_evidence(
         "candidate_elements_sample": candidate_html,
         "summary": summary,
         "existing_recipe_yaml": existing_recipe,
+        "source_test_insight": source_test_insight or {},
         "recipe_schema_summary": _recipe_schema_summary(),
     }
     evidence_summary = _evidence_summary(report_url, report_mode, candidates, visible_text)
@@ -380,16 +421,24 @@ def build_recipe_suggestion_prompt(evidence: RecipeSuggestionEvidence) -> str:
         "You suggest constrained Job-Agent recipe YAML from local calibration artifacts only.\n"
         "Return only strict JSON with keys: suggested_recipe_yaml, explanation, confidence, "
         "assumptions, warnings, selected_strategy.\n"
-        "The YAML may use only this schema: source_name, start_url, mode, listing, pagination, accept, reject, "
-        "patterns, limits, detail. Do not include Python code, browser scripts, arbitrary adapters, "
-        "login/session/cookie handling, hidden endpoint assumptions, or network/API discovery.\n"
+        "The YAML may use only this schema: source_name, start_url, mode, access, listing, pagination, accept, "
+        "reject, patterns, limits, detail. Do not include Python code, browser scripts, arbitrary adapters, "
+        "credentials, cookie values, hidden endpoint assumptions, or network/API discovery. If local evidence "
+        "shows that pagination or listings require signing in, set access.requires_session true with a short "
+        "setup_hint.\n"
         "A deterministic recipe_blueprint may be included. Prefer preserving selectors from that blueprint when "
         "the local evidence supports them; revise only when the evidence contradicts it.\n"
+        "If source_test_insight is present, it is the latest live source-test diagnosis. Address it directly; "
+        "for example, do not preserve URL pagination when the test proved URL pagination returns duplicate pages, "
+        "and use browser_click when the live test says interactive pagination controls require browser-click "
+        "pagination.\n"
         "Use table headers and detail label/value observations to map fields semantically. Do not map `Category` "
         "to workload, `Application deadline` or `Closing date` to posted_date, or `End date` to start_date. "
         "If the schema lacks a matching report field, omit that selector and mention the unsupported field.\n"
-        "Include pagination selectors when visible evidence shows page/next links. Use detail.follow only when "
-        "a detail sample URL or detail sample text justifies job-detail enrichment.\n"
+        "Set pagination.strategy to url for normal href page links, ajax only when the local evidence exposes a "
+        "page URL template that can be fetched directly, and browser_click when visible next/page controls require "
+        "clicking rather than href navigation. Include pagination selectors or templates that match that strategy. "
+        "Use detail.follow only when a detail sample URL or detail sample text justifies job-detail enrichment.\n"
         "Prefer selectors and regex patterns visible in the local evidence. If automation is not recommended, "
         "choose selected_strategy not_recommended and explain why.\n\n"
         f"Evidence JSON:\n{json.dumps(evidence.prompt_payload, ensure_ascii=False, indent=2)}"
@@ -414,13 +463,19 @@ def build_recipe_refinement_prompt(evidence: RecipeSuggestionEvidence, attempt: 
         "the deterministic validation report below.\n"
         "Return only strict JSON with keys: suggested_recipe_yaml, explanation, confidence, "
         "assumptions, warnings, selected_strategy.\n"
-        "The YAML may use only this schema: source_name, start_url, mode, listing, pagination, accept, reject, "
-        "patterns, limits, detail. Do not include Python code, browser scripts, arbitrary adapters, "
-        "login/session/cookie handling, hidden endpoint assumptions, or network/API discovery.\n"
+        "The YAML may use only this schema: source_name, start_url, mode, access, listing, pagination, accept, "
+        "reject, patterns, limits, detail. Do not include Python code, browser scripts, arbitrary adapters, "
+        "credentials, cookie values, hidden endpoint assumptions, or network/API discovery. If local evidence "
+        "shows that pagination or listings require signing in, set access.requires_session true with a short "
+        "setup_hint.\n"
+        "If source_test_insight is present, fix that live failure first and do not keep a pagination strategy "
+        "that the source test already proved returns duplicate or inaccessible pages. If the live test says "
+        "interactive controls require browser-click pagination, switch to browser_click.\n"
         "Use visible labels as ground truth: Category is not workload, Application deadline/Closing date is not "
         "posted_date, and End date is not start_date. Omit unsupported fields instead of forcing them into a "
         "nearby report field.\n"
-        "Include pagination selectors when visible evidence shows page/next links.\n"
+        "Set pagination.strategy to url, ajax, or browser_click according to the evidence, and include the matching "
+        "selectors or AJAX URL template. Visible controls without usable hrefs should use browser_click.\n"
         "Do not assume access to any page beyond the saved local artifact.\n\n"
         f"Evidence JSON:\n{json.dumps(evidence.prompt_payload, ensure_ascii=False, indent=2)}\n\n"
         f"Previous suggested YAML:\n{attempt.suggested_recipe_yaml}\n\n"
@@ -435,12 +490,15 @@ def _deterministic_suggestion_result(evidence: RecipeSuggestionEvidence) -> Reci
     recipe_data = blueprint.get("recipe")
     if not isinstance(recipe_data, dict) or not recipe_data:
         return None
-    recipe_data = dict(recipe_data)
+    recipe_data = deepcopy(recipe_data)
     recipe_data["source_name"] = evidence.source_name
     recipe_data["start_url"] = evidence.start_url or str(recipe_data.get("start_url") or "")
+    _normalize_recipe_capabilities(recipe_data)
+    insight_warnings = _apply_source_test_insight_to_recipe(recipe_data, evidence.prompt_payload)
+    _normalize_recipe_capabilities(recipe_data)
     recipe_yaml = yaml.safe_dump(recipe_data, sort_keys=False, allow_unicode=True).strip()
     validation_errors = validate_suggested_recipe_yaml(recipe_yaml)
-    warnings = list(evidence.warnings) + _list_value(blueprint.get("warnings"))
+    warnings = list(evidence.warnings) + _list_value(blueprint.get("warnings")) + insight_warnings
     if validation_errors:
         warnings.extend(validation_errors)
     listing = recipe_data.get("listing") or {}
@@ -450,9 +508,13 @@ def _deterministic_suggestion_result(evidence: RecipeSuggestionEvidence) -> Reci
         f"Deterministic draft selected listing cards with `{listing.get('card_selector', '')}`.",
     ]
     if detail.get("follow"):
-        explanation_parts.append("It includes one-detail-page enrichment because the calibration artifact captured a detail sample.")
+        explanation_parts.append(
+            "It includes one-detail-page enrichment because the calibration artifact captured a detail sample."
+        )
     if pagination.get("page_link_selector") or pagination.get("next_selector"):
         explanation_parts.append("It includes pagination selectors observed in the listing page.")
+    if insight_warnings:
+        explanation_parts.append("It applies the latest source-test pagination diagnosis.")
     return RecipeSuggestionResult(
         source_name=evidence.source_name,
         start_url=evidence.start_url,
@@ -470,6 +532,7 @@ def _deterministic_suggestion_result(evidence: RecipeSuggestionEvidence) -> Reci
         referenced_artifact_files=evidence.referenced_artifact_files,
         validation_errors=validation_errors,
         schema_valid=not validation_errors,
+        source_test_insight=_source_test_insight_from_payload(evidence.prompt_payload),
     )
 
 
@@ -507,6 +570,7 @@ def _no_recipe_evidence_result(evidence: RecipeSuggestionEvidence) -> RecipeSugg
         referenced_artifact_files=evidence.referenced_artifact_files,
         validation_errors=["No stable repeated listing card selector was found."],
         schema_valid=False,
+        source_test_insight=_source_test_insight_from_payload(evidence.prompt_payload),
     )
 
 
@@ -528,9 +592,12 @@ def validate_suggested_recipe_yaml(value: str) -> list[str]:
 
 def _suggestion_result_from_response(evidence: RecipeSuggestionEvidence, raw_response: str) -> RecipeSuggestionResult:
     parsed = _parse_llm_json(raw_response)
-    suggested_yaml = str(parsed.get("suggested_recipe_yaml") or "").strip()
+    suggested_yaml, insight_warnings = _normalize_suggested_recipe_yaml(
+        str(parsed.get("suggested_recipe_yaml") or "").strip(),
+        prompt_payload=evidence.prompt_payload,
+    )
     validation_errors = validate_suggested_recipe_yaml(suggested_yaml)
-    warnings = list(evidence.warnings) + _list_value(parsed.get("warnings"))
+    warnings = list(evidence.warnings) + _list_value(parsed.get("warnings")) + insight_warnings
     return RecipeSuggestionResult(
         source_name=evidence.source_name,
         start_url=evidence.start_url,
@@ -545,7 +612,48 @@ def _suggestion_result_from_response(evidence: RecipeSuggestionEvidence, raw_res
         referenced_artifact_files=evidence.referenced_artifact_files,
         validation_errors=validation_errors,
         schema_valid=not validation_errors,
+        source_test_insight=_source_test_insight_from_payload(evidence.prompt_payload),
     )
+
+
+def _normalize_suggested_recipe_yaml(
+    value: str,
+    *,
+    prompt_payload: dict[str, Any] | None = None,
+) -> tuple[str, list[str]]:
+    if not value.strip():
+        return value, []
+    try:
+        data = yaml.safe_load(value)
+    except yaml.YAMLError:
+        return value, []
+    if not isinstance(data, dict):
+        return value, []
+    _normalize_recipe_capabilities(data)
+    insight_warnings = _apply_source_test_insight_to_recipe(data, prompt_payload or {})
+    _normalize_recipe_capabilities(data)
+    return yaml.safe_dump(data, sort_keys=False, allow_unicode=True).strip(), insight_warnings
+
+
+def _normalize_recipe_capabilities(recipe_data: dict) -> None:
+    pagination = recipe_data.get("pagination")
+    if isinstance(pagination, dict) and not str(pagination.get("strategy") or "").strip():
+        if str(pagination.get("ajax_url_template") or "").strip():
+            pagination["strategy"] = "ajax"
+        elif str(pagination.get("click_selector") or "").strip():
+            pagination["strategy"] = "browser_click"
+        elif (
+            str(pagination.get("page_link_selector") or "").strip()
+            or str(pagination.get("next_selector") or "").strip()
+        ):
+            pagination["strategy"] = "url"
+    access = recipe_data.get("access")
+    if (
+        isinstance(access, dict)
+        and "requires_session" not in access
+        and str(access.get("session_scope") or access.get("setup_hint") or "").strip()
+    ):
+        access["requires_session"] = True
 
 
 def _attempt_is_acceptable(attempt: RecipeRefinementAttempt) -> bool:
@@ -628,9 +736,7 @@ def _detail_label_warnings(recipe, html: str) -> list[str]:
             if unsupported_reason:
                 warnings.append(f"detail.{field_name}_selector reads `{label}`. {unsupported_reason}")
             elif expected_field and expected_field != field_name:
-                warnings.append(
-                    f"detail.{field_name}_selector reads `{label}`, which matches `{expected_field}`."
-                )
+                warnings.append(f"detail.{field_name}_selector reads `{label}`, which matches `{expected_field}`.")
     return warnings
 
 
@@ -738,7 +844,16 @@ def _recipe_schema_summary() -> dict:
             "language_regex",
             "work_type_regex",
         ],
-        "pagination_fields": ["page_link_selector", "next_selector", "max_pages", "request_delay_seconds"],
+        "pagination_fields": [
+            "strategy",
+            "page_link_selector",
+            "next_selector",
+            "click_selector",
+            "ajax_url_template",
+            "max_pages",
+            "request_delay_seconds",
+        ],
+        "access_fields": ["requires_session", "session_scope", "setup_hint"],
         "detail_fields": [
             "follow",
             "use_json_ld",

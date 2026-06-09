@@ -1,18 +1,24 @@
 from __future__ import annotations
 
+import os
 import re
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
 from job_agent.run_store import RunEvent, RunOptions, RunStore
+from job_agent.services.cv_profile_draft_service import CvProfileDraftService
 
 
 def test_app_creation_health_and_basic_routes_use_temp_root(client: TestClient, project_root: Path) -> None:
     response = client.get("/api/health")
     assert response.status_code == 200
     assert response.json()["status"] == "ok"
+    work_status = client.get("/api/work-status")
+    assert work_status.status_code == 200
+    assert work_status.json()["sources"] == []
 
     for path in [
         "/",
@@ -20,6 +26,7 @@ def test_app_creation_health_and_basic_routes_use_temp_root(client: TestClient, 
         "/jobs",
         "/stats",
         "/setup",
+        "/match-sandbox",
         "/postings/new",
         "/compatibility",
         "/recipe-preview",
@@ -29,6 +36,7 @@ def test_app_creation_health_and_basic_routes_use_temp_root(client: TestClient, 
 
     assert (project_root / "output" / "runs" / "runs.json").exists()
     dashboard = client.get("/").text
+    assert 'id="work-status-dock"' in dashboard
     material_checkbox = re.search(r'<input[^>]+name="generate_materials_option"[^>]*>', dashboard)
     assert material_checkbox
     assert "checked" not in material_checkbox.group(0)
@@ -77,6 +85,32 @@ def test_setup_routes_write_to_temp_root_and_validate_inputs(client: TestClient,
     after = source_config.read_text(encoding="utf-8") if source_config.exists() else ""
     assert after == before
 
+    match_response = client.post(
+        "/setup/match-engine",
+        data={
+            "remote_policy": "required",
+            "permanent_policy": "exclude",
+            "permanent_penalty": "-30",
+            "technical_cap": "70",
+            "module_cap": "25",
+            "technical_rule_label": ["ABAP variants"],
+            "technical_rule_terms": ["abap\nsap abap"],
+            "technical_rule_score": ["40"],
+            "technical_rule_mode": ["required"],
+            "module_rule_label": ["QM"],
+            "module_rule_terms": ["qm"],
+            "module_rule_score": ["7"],
+            "module_rule_mode": ["bonus"],
+            "contract_rule_label": ["Contract"],
+            "contract_rule_terms": ["contract"],
+            "contract_rule_score": ["8"],
+            "contract_rule_mode": ["bonus"],
+        },
+        follow_redirects=False,
+    )
+    assert match_response.status_code == 303
+    assert "remote_policy: required" in (project_root / "profile" / "preferences.yaml").read_text(encoding="utf-8")
+
 
 def test_unsupported_cv_upload_suffix_returns_400(client: TestClient) -> None:
     response = client.post(
@@ -85,6 +119,177 @@ def test_unsupported_cv_upload_suffix_returns_400(client: TestClient) -> None:
         follow_redirects=False,
     )
     assert response.status_code == 400
+
+
+def test_cv_upload_can_auto_configure_selected_profile_sections(
+    monkeypatch: pytest.MonkeyPatch, client: TestClient, project_root: Path
+) -> None:
+    class FakeLlmService:
+        def __init__(self, root):
+            pass
+
+        def is_configured(self):
+            return True
+
+        def complete(self, prompt, **kwargs):
+            assert "Requested sections: canonical_cv, match_engine" in prompt
+            return type(
+                "Completion",
+                (),
+                {
+                    "text": (
+                        '{"canonical_cv":"# CV\\nABAP consultant",'
+                        '"match_engine":{"remote_policy":"required","permanent_policy":"exclude",'
+                        '"technical_keyword_groups":[{"label":"ABAP variants",'
+                        '"terms":["abap","abap coding"],"score":40,"mode":"required"}]}}'
+                    )
+                },
+            )()
+
+    monkeypatch.setattr("job_agent.services.setup_service.LlmService", FakeLlmService)
+
+    response = client.post(
+        "/setup/cv-reference",
+        data={
+            "auto_configure_profile": "on",
+            "configure_canonical_cv": "on",
+            "configure_match_engine": "on",
+        },
+        files={"cv_file": ("cv.md", b"ABAP consultant CV", "text/markdown")},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert "Configured+from+CV" in response.headers["location"]
+    assert "ABAP consultant" in (project_root / "profile" / "canonical-cv.md").read_text(encoding="utf-8")
+    preferences = (project_root / "profile" / "preferences.yaml").read_text(encoding="utf-8")
+    assert "remote_policy: required" in preferences
+    assert "ABAP variants" in preferences
+
+
+def test_cv_upload_preview_does_not_apply_profile_sections(
+    monkeypatch: pytest.MonkeyPatch, client: TestClient, project_root: Path
+) -> None:
+    class FakeLlmService:
+        def __init__(self, root):
+            pass
+
+        def is_configured(self):
+            return True
+
+        def complete(self, prompt, **kwargs):
+            assert "Requested sections: canonical_cv, skills" in prompt
+            return type(
+                "Completion",
+                (),
+                {
+                    "text": (
+                        '{"canonical_cv":"# CV\\nPreview only","skills_yaml":{"skills":{"strongest":["ABAP","RAP"]}}}'
+                    )
+                },
+            )()
+
+    monkeypatch.setattr("job_agent.services.setup_service.LlmService", FakeLlmService)
+
+    response = client.post(
+        "/setup/cv-reference",
+        data={
+            "auto_configure_profile": "on",
+            "preview_profile_configuration": "on",
+            "configure_canonical_cv": "on",
+            "configure_skills": "on",
+        },
+        files={"cv_file": ("cv.md", b"ABAP consultant CV", "text/markdown")},
+    )
+
+    assert response.status_code == 200
+    assert "Review CV Profile Draft" in response.text
+    assert "Apply selected draft sections" in response.text
+    assert "Discard draft" in response.text
+    assert "nav-profile-button has-alert" in response.text
+    assert "Draft ready" in response.text
+    assert "Preview only" not in (project_root / "profile" / "canonical-cv.md").read_text(encoding="utf-8")
+
+    refreshed = client.get("/setup")
+    assert refreshed.status_code == 200
+    assert "Review CV Profile Draft" in refreshed.text
+    assert "summary-action-link" in refreshed.text
+    assert "nav-profile-button has-alert" in refreshed.text
+
+    work_items = client.get("/api/work-status").json()["sources"]
+    assert any(
+        item.get("kind") == "profile"
+        and item.get("status") == "completed"
+        and item.get("href") == "/setup#cv-profile-draft"
+        for item in work_items
+    )
+
+    draft_id = re.search(r'name="draft_id" value="([^"]+)"', response.text).group(1)
+    discard = client.post("/setup/cv-reference/discard-draft", data={"draft_id": draft_id}, follow_redirects=False)
+    assert discard.status_code == 303
+    assert "Discarded+CV+profile+draft" in discard.headers["location"]
+    assert "Review CV Profile Draft" not in client.get("/setup").text
+    assert not any(
+        item.get("kind") == "profile" and item.get("href") == "/setup#cv-profile-draft"
+        for item in client.get("/api/work-status").json()["sources"]
+    )
+
+
+def test_cv_profile_draft_apply_clears_unreviewed_state(client: TestClient, project_root: Path) -> None:
+    draft = CvProfileDraftService(project_root).save_draft(
+        {
+            "targets": ["canonical_cv"],
+            "sections": [
+                {
+                    "key": "canonical_cv",
+                    "label": "CV narrative",
+                    "status": "Ready",
+                    "summary": "Applied preview",
+                }
+            ],
+            "data": {"canonical_cv": "# Applied preview"},
+        },
+        source_label="test CV",
+        task_id="profile-test",
+    )
+
+    response = client.post(
+        "/setup/cv-reference/apply-draft",
+        data={"draft_id": draft["id"], "configure_canonical_cv": "on"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert "Applied+CV+draft" in response.headers["location"]
+    assert "# Applied preview" in (project_root / "profile" / "canonical-cv.md").read_text(encoding="utf-8")
+    setup_page = client.get("/setup").text
+    assert "Review CV Profile Draft" not in setup_page
+    assert "nav-profile-button has-alert" not in setup_page
+
+
+def test_persisted_profile_draft_task_survives_work_status_refresh(client: TestClient, project_root: Path) -> None:
+    CvProfileDraftService(project_root).save_task(
+        {
+            "task_id": "profile-refresh-test",
+            "title": "Drafting profile from CV",
+            "status": "running",
+            "stage": "Calling Claude",
+            "message": "Asking Claude to draft structured profile settings from the CV.",
+            "progress_percent": 38,
+            "started_at": datetime.now(UTC).isoformat(),
+            "finished_at": "",
+            "error_message": "",
+        }
+    )
+
+    payload = client.get("/api/work-status").json()
+
+    assert any(
+        item.get("task_id") == "profile-refresh-test"
+        and item.get("kind") == "profile"
+        and item.get("stage") == "Calling Claude"
+        for item in payload["sources"]
+    )
 
 
 def test_run_detail_renders_source_progress(client: TestClient, project_root: Path) -> None:
@@ -121,6 +326,8 @@ def test_run_detail_renders_source_progress(client: TestClient, project_root: Pa
     assert "Local" in response.text
     assert "Checking source 1/1: Local" in response.text
     assert "Highlighted match" in response.text
+    assert f"/jobs?run_id={run.run_id}&dedupe=0" in response.text
+    assert "View jobs from this day" in response.text
 
 
 def test_batch_generate_route_redirects_with_counts(monkeypatch: pytest.MonkeyPatch, client: TestClient) -> None:
@@ -168,6 +375,55 @@ def test_manual_posting_route_creates_package_and_redirects(client: TestClient, 
     assert list((project_root / "output").glob("*/*/index.json"))
     manual_yaml = project_root / "jobs" / "manual" / "manual_jobs.yaml"
     assert manual_yaml.exists()
+
+    detail = client.get(response.headers["location"])
+    assert detail.status_code == 200
+    assert "/match-sandbox?job_id=" in detail.text
+
+    sandbox_href = re.search(r'href="(/match-sandbox\?[^"]+)"', detail.text).group(1)
+    sandbox = client.get(sandbox_href)
+    assert sandbox.status_code == 200
+    assert "SAP ABAP Consultant" in sandbox.text
+    assert "Score Result" in sandbox.text
+
+
+def test_match_sandbox_scores_current_form_values(client: TestClient) -> None:
+    response = client.post(
+        "/api/match-sandbox/score",
+        data={
+            "remote_policy": "required",
+            "permanent_policy": "penalize",
+            "permanent_penalty": "-25",
+            "technical_cap": "70",
+            "module_cap": "25",
+            "technical_rule_label": ["ABAP variants"],
+            "technical_rule_terms": ["abap\nsap abap"],
+            "technical_rule_score": ["40"],
+            "technical_rule_mode": ["required"],
+            "module_rule_label": [""],
+            "module_rule_terms": [""],
+            "module_rule_score": [""],
+            "module_rule_mode": ["bonus"],
+            "contract_rule_label": ["Contract"],
+            "contract_rule_terms": ["contract"],
+            "contract_rule_score": ["8"],
+            "contract_rule_mode": ["bonus"],
+            "title": "SAP OData Consultant",
+            "location": "",
+            "remote": "Remote",
+            "rate": "",
+            "contract_duration": "",
+            "workload": "",
+            "required_skills": "",
+            "required_modules": "",
+            "description": "OData Gateway contract role.",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["category"] == "excluded"
+    assert "ABAP variants" in payload["exclusion_reason"]
 
 
 def test_compatibility_route_renders_report(monkeypatch: pytest.MonkeyPatch, client: TestClient) -> None:
@@ -286,6 +542,139 @@ def test_recipe_preview_route_renders_preview(monkeypatch: pytest.MonkeyPatch, c
     assert "Extracted 1 jobs from the configured recipe." in response.text
 
 
+def test_configured_recipe_review_runs_source_test_workflow(
+    monkeypatch: pytest.MonkeyPatch,
+    client: TestClient,
+) -> None:
+    from types import SimpleNamespace
+
+    def fail_preview(*args, **kwargs):
+        raise AssertionError("configured source review should use the source-test workflow")
+
+    class FakeSourceWorkflow:
+        def __init__(self, root):
+            pass
+
+        def run_source_test(self, source_id):
+            assert source_id == "eursap-jobs"
+            return SimpleNamespace(
+                readiness=SimpleNamespace(readiness_status="ready"),
+                payload={
+                    "status": "success",
+                    "readiness_status": "ready",
+                    "readiness": {"last_checked_at": "2026-06-05T12:00:00+00:00"},
+                    "readiness_summary": "Ready: source test extracted 2 jobs and readiness checks passed.",
+                    "job_count": 2,
+                    "warning_count": 0,
+                    "warnings": [],
+                    "capability_checks": [
+                        {
+                            "capability": "listing_cards",
+                            "status": "pass",
+                            "expected": True,
+                            "observed": True,
+                            "detail": "2 jobs extracted from configured listing cards.",
+                        }
+                    ],
+                    "pagination_fetch_count": 1,
+                    "pagination_unique_jobs_from_fetched_pages": 1,
+                    "detail_fetch_count": 2,
+                    "detail_verified_listing_page_count": 2,
+                    "source_test_insight": {
+                        "title": "Source test passed",
+                        "summary": "The selected reading plan verified the source capabilities checked by this test.",
+                        "recommendation": "Review the result and include the source in the daily run when ready.",
+                        "action": {},
+                    },
+                    "jobs": [
+                        {
+                            "title": "SAP Basis Consultant",
+                            "url": "https://eursap.eu/jobs/sap-basis",
+                            "location": "Remote",
+                            "description_preview": "Detailed SAP Basis role.",
+                            "extraction_notes": ["Source test sample."],
+                        }
+                    ],
+                },
+            )
+
+    monkeypatch.setattr("job_agent.web.routers.recipe_preview.preview_recipe", fail_preview)
+    monkeypatch.setattr("job_agent.web.routers.recipe_preview.SourceWorkflowHandler", FakeSourceWorkflow)
+
+    response = client.post(
+        "/recipe-preview",
+        data={
+            "source_mode": "configured",
+            "selected_source_id": "eursap-jobs",
+            "recipe_path": "sources/recipes/experimental/eursap-jobs.yaml",
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 200
+    assert "Source Test Review" in response.text
+    assert "Fresh source test" in response.text
+    assert "Capability Proof" in response.text
+    assert "SAP Basis Consultant" in response.text
+
+
+def test_configured_recipe_review_shows_latest_source_test_evidence(
+    client: TestClient,
+    project_root: Path,
+) -> None:
+    from job_agent.services.execution_source_service import ExecutionSourceService
+    from job_agent.services.source_execution_readiness_service import SourceExecutionReadinessService
+    from job_agent.services.source_registry_service import SourceRegistryService
+    from job_agent.services.source_test_service import SourceTestJobPreview, SourceTestResult
+
+    source = SourceRegistryService(project_root).get_source("eursap-jobs")
+    ExecutionSourceService(project_root).create_or_update_recipe_source(source, enabled=False)
+    SourceExecutionReadinessService(project_root).save_from_source_test(
+        SourceTestResult(
+            source_id="eursap-jobs",
+            source_name="Eursap Jobs",
+            source_type="recipe_html",
+            source_enabled=False,
+            forced_disabled=True,
+            status="success",
+            job_count=2,
+            pagination_fetch_count=1,
+            pagination_unique_jobs_from_fetched_pages=1,
+            detail_fetch_count=2,
+            detail_verified_listing_page_count=2,
+            capability_checks=[
+                {
+                    "capability": "listing_cards",
+                    "status": "pass",
+                    "expected": True,
+                    "observed": True,
+                    "detail": "2 jobs extracted from configured listing cards.",
+                }
+            ],
+            jobs=[
+                SourceTestJobPreview(
+                    title="SAP Basis Consultant",
+                    url="https://eursap.eu/jobs/sap-basis",
+                    source="Eursap Jobs",
+                    source_id="eursap-jobs",
+                )
+            ],
+        )
+    )
+
+    response = client.get(
+        "/recipe-preview?source_mode=configured&selected_source_id=eursap-jobs"
+        "&recipe_path=sources/recipes/experimental/eursap-jobs.yaml"
+    )
+
+    assert response.status_code == 200
+    assert "Source Test Review" in response.text
+    assert "Latest source test" in response.text
+    assert "Source test passed" in response.text
+    assert "SAP Basis Consultant" in response.text
+    assert "Last Saved Review" not in response.text
+
+
 def test_frontend_debug_state_records_browser_snapshots(client: TestClient, project_root: Path) -> None:
     response = client.post(
         "/api/debug/frontend-state",
@@ -308,9 +697,12 @@ def test_frontend_debug_state_records_browser_snapshots(client: TestClient, proj
     payload = client.get("/api/debug/frontend-state").json()
 
     assert payload["latest_by_feature"]["compatibility_browser"]["action"] == "page_loaded"
-    assert payload["latest_by_feature"]["compatibility_browser"]["state"]["browser"]["source_forms"][0][
-        "selected_source_id"
-    ] == "whitehall-sap-contract"
+    assert (
+        payload["latest_by_feature"]["compatibility_browser"]["state"]["browser"]["source_forms"][0][
+            "selected_source_id"
+        ]
+        == "whitehall-sap-contract"
+    )
     assert (project_root / "output" / "debug" / "frontend-state.json").exists()
 
 
@@ -319,11 +711,12 @@ def test_source_overview_and_detail_routes_render(client: TestClient) -> None:
 
     assert overview.status_code == 200
     assert 'class="source-list"' in overview.text
-    assert 'class="source-card"' in overview.text
+    assert 'class="source-card' in overview.text
     assert "/sources/new" in overview.text
-    assert "Reading plan review" in overview.text
-    assert "Historical results" in overview.text
-    assert "Next step" in overview.text
+    assert "Implemented" in overview.text
+    assert "Setup status" in overview.text
+    assert "Indexing" in overview.text
+    assert "Detail review" in overview.text
     assert "Manual Intake" in overview.text
     assert "Eursap Jobs" in overview.text
     assert "Whitehall Resources SAP Jobs" in overview.text
@@ -332,12 +725,20 @@ def test_source_overview_and_detail_routes_render(client: TestClient) -> None:
     detail = client.get("/sources/eursap-jobs")
 
     assert detail.status_code == 200
-    assert "Not ready yet" in detail.text
-    assert "Review what it reads" in detail.text
-    assert "Reading plan review" in detail.text
-    assert "Open saved review" in detail.text
+    assert "Ready for a safe source test" in detail.text
+    assert "Review evidence" in detail.text
+    assert "Review found contents" in detail.text
     assert "Safe source test" in detail.text
     assert "Daily run" in detail.text
+    assert "View all jobs from this source" in detail.text
+    assert "Index job listings" in detail.text
+    assert "Initial complete ingestion" in detail.text
+    setup_section = detail.text.split('<div class="panel" id="reading-plan"', 1)[0]
+    safe_section = detail.text.split('<div class="panel" id="safe-test"', 1)[1]
+    assert "Index job listings" in setup_section
+    assert "Initial complete ingestion" in setup_section
+    assert "Index job listings" not in safe_section
+    assert "Investigate all jobs on source" not in safe_section
     assert "Source settings" in detail.text
     assert "Save source settings" in detail.text
     assert "Capture sample only" in detail.text
@@ -345,14 +746,107 @@ def test_source_overview_and_detail_routes_render(client: TestClient) -> None:
     assert "Use selected plan" in detail.text
     assert "Compatibility evidence" in detail.text
     assert "Recipe editor" in detail.text
-    assert "Review evidence and fields" in detail.text
+    assert "Source-test evidence and fields" in detail.text
     assert "Advanced: regenerate or inspect plans" in detail.text
     assert "Generated plans" in detail.text
     assert "Historical Results" in detail.text
     assert "No jobs have been saved from this source yet" in detail.text
     assert "/recipe-preview" in detail.text
-    assert "auto_run=1" in detail.text
+    assert "auto_run=1" not in detail.text
     assert "selected_source_id=eursap-jobs" in detail.text
+
+
+def test_source_session_route_records_storage_state(
+    monkeypatch: pytest.MonkeyPatch,
+    client: TestClient,
+    project_root: Path,
+) -> None:
+    from job_agent.io.yaml_store import read_yaml
+    from job_agent.services.source_test_service import SourceTestResult
+
+    state_path = project_root / "sources" / "sessions" / "eursap-jobs.storage-state.json"
+    state_path.parent.mkdir(parents=True)
+    state_path.write_text('{"cookies": [], "origins": []}', encoding="utf-8")
+
+    page = client.get("/sources/eursap-jobs/session")
+    assert page.status_code == 200
+    assert "Connect Source Session" in page.text
+    assert "Not connected" in page.text
+    assert "Open sign-in browser" in page.text
+
+    response = client.post(
+        "/sources/eursap-jobs/session/connect",
+        data={"storage_state_path": "sources/sessions/eursap-jobs.storage-state.json"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"].startswith("/sources/eursap-jobs/session")
+    data = read_yaml(project_root / "sources" / "source-sessions.yaml", {})
+    assert data["sources"]["eursap-jobs"]["storage_state_path"] == "sources/sessions/eursap-jobs.storage-state.json"
+    assert data["sources"]["eursap-jobs"]["verified_at"] == ""
+
+    def fake_run_test(self, source_id, *, force_disabled=False, progress_callback=None):
+        return SourceTestResult(
+            source_id=source_id,
+            source_name="Eursap Jobs",
+            source_type="recipe_html",
+            source_enabled=False,
+            forced_disabled=force_disabled,
+            status="success",
+            job_count=1,
+            source_access_requires_session=True,
+            source_access_session_status="connected",
+            capability_checks=[
+                {
+                    "capability": "source_access",
+                    "status": "pass",
+                    "expected": True,
+                    "observed": True,
+                    "detail": "Connected source session was used for this verification run.",
+                }
+            ],
+        )
+
+    monkeypatch.setattr("job_agent.web.source_workflow.SourceTestService.run_test", fake_run_test)
+    verify_response = client.post("/sources/eursap-jobs/session/verify", follow_redirects=False)
+
+    assert verify_response.status_code == 303
+    verified_data = read_yaml(project_root / "sources" / "source-sessions.yaml", {})
+    assert verified_data["sources"]["eursap-jobs"]["verified_at"]
+
+
+def test_source_session_capture_route_starts_guided_browser_capture(
+    monkeypatch: pytest.MonkeyPatch,
+    client: TestClient,
+) -> None:
+    class FakeTask:
+        task_id = "session-test"
+
+    launched = {}
+
+    def fake_capture(**kwargs):
+        launched.update(kwargs)
+        return FakeTask()
+
+    monkeypatch.setattr("job_agent.web.routers.sources.runtime.launch_source_session_capture", fake_capture)
+
+    response = client.post(
+        "/sources/eursap-jobs/session/capture",
+        data={
+            "storage_state_path": "sources/sessions/eursap-jobs.storage-state.json",
+            "expires_at": "2026-07-01T09:00:00+00:00",
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"].startswith("/sources/eursap-jobs/session")
+    assert launched["source_id"] == "eursap-jobs"
+    assert launched["source_name"] == "Eursap Jobs"
+    assert launched["source_url"]
+    assert launched["storage_state_path"] == "sources/sessions/eursap-jobs.storage-state.json"
+    assert launched["expires_at"] == "2026-07-01T09:00:00+00:00"
 
 
 def test_add_source_workflow_creates_review_source(client: TestClient, project_root: Path) -> None:
@@ -475,7 +969,7 @@ def test_source_detail_capture_calibration_action_is_bounded(
         )
         return FakeCalibrationResult()
 
-    monkeypatch.setattr("job_agent.web.routers.sources.capture_recipe_calibration", fake_capture)
+    monkeypatch.setattr("job_agent.web.workflows.capture_recipe_calibration", fake_capture)
 
     response = client.post(
         "/sources/eursap-jobs/recipe-calibration/capture",
@@ -535,22 +1029,90 @@ def test_source_routes_render_saved_health(client: TestClient, project_root: Pat
     )
 
     assert overview.status_code == 200
-    assert "9 jobs extracted, 9 useful titles, no generic labels." in overview.text
     assert detail.status_code == 200
-    assert "Review evidence and fields" in detail.text
-    assert "output/recipe-calibration/eursap/page.html" in detail.text
-    assert "9 jobs extracted, 9 useful titles, no generic labels." in detail.text
+    assert "Source-test evidence and fields" in detail.text
+    assert "No source test readiness has been saved yet." in detail.text
     assert "auto_run=1" not in detail.text
     assert compatibility.status_code == 200
     assert "Saved Source / Recipe Result" in compatibility.text
     assert "9 jobs extracted, 9 useful titles, no generic labels." in compatibility.text
     assert preview.status_code == 200
-    assert "Last Saved Review" in preview.text
-    assert "9 jobs extracted, 9 useful titles, no generic labels." in preview.text
+    assert "No Source-Test Review Yet" in preview.text
+    assert "Last Saved Review" not in preview.text
     assert auto_preview.status_code == 200
-    assert "Running review" in auto_preview.text
-    assert 'requestSubmit()' in auto_preview.text
+    assert "Running source test review" in auto_preview.text
+    assert "requestSubmit()" in auto_preview.text
     assert 'searchParams.delete("auto_run")' in auto_preview.text
+
+
+def test_source_detail_safe_test_panel_uses_session_cta_when_access_blocked(
+    client: TestClient, project_root: Path
+) -> None:
+    from job_agent.services.recipe_preview_service import RecipePreviewResult
+    from job_agent.services.source_execution_readiness_service import SourceExecutionReadinessService
+    from job_agent.services.source_health_service import SourceHealthService
+    from job_agent.services.source_session_service import SourceSessionService
+    from job_agent.services.source_test_service import SourceTestResult
+
+    client.post("/sources/eursap-jobs/execution/create", follow_redirects=False)
+    SourceHealthService(project_root).save_preview(
+        "eursap-jobs",
+        RecipePreviewResult(
+            recipe_source_name="Eursap Jobs",
+            recipe_path="sources/recipes/experimental/eursap-jobs.yaml",
+            recipe_status="experimental",
+            input_type="local artifact",
+            input_value="output/recipe-calibration/eursap/page.html",
+            base_url="https://eursap.eu/jobs",
+            mode_used="local_fixture_html",
+            extracted_job_count=22,
+            useful_titles=22,
+            generic_labels=0,
+            unique_urls=22,
+            average_description_length=120,
+            jobs=[],
+            warnings=[],
+        ),
+    )
+    state_path = project_root / "sources" / "sessions" / "eursap-jobs.storage-state.json"
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state_path.write_text('{"cookies": [], "origins": []}', encoding="utf-8")
+    SourceSessionService(project_root).record_storage_state(
+        "eursap-jobs",
+        session_scope="eursap.eu",
+        storage_state_path=state_path.relative_to(project_root).as_posix(),
+    )
+    SourceExecutionReadinessService(project_root).save_from_source_test(
+        SourceTestResult(
+            source_id="eursap-jobs",
+            source_name="Eursap Jobs",
+            source_type="recipe_html",
+            source_enabled=False,
+            forced_disabled=True,
+            status="warning",
+            job_count=22,
+            capability_checks=[
+                {
+                    "capability": "pagination_navigation",
+                    "status": "fail",
+                    "detail": "Fetched 2 pagination page(s), but later pages may require a logged-in session.",
+                },
+                {
+                    "capability": "source_access",
+                    "status": "fail",
+                    "detail": "The page still showed a sign-in gate.",
+                },
+            ],
+        )
+    )
+
+    detail = client.get("/sources/eursap-jobs")
+    safe_test_start = detail.text.index('<div class="panel" id="safe-test">')
+    safe_test_end = detail.text.index('<div class="panel">\n  <h2>Historical Results</h2>', safe_test_start)
+    safe_test_panel = detail.text[safe_test_start:safe_test_end]
+
+    assert 'href="/sources/eursap-jobs/test-run?start=1">Test source safely</a>' in safe_test_panel
+    assert 'href="/sources/eursap-jobs/session">Verify session</a>' not in safe_test_panel
 
 
 def test_source_routes_render_value_metrics(client: TestClient, project_root: Path) -> None:
@@ -579,7 +1141,7 @@ def test_source_routes_render_value_metrics(client: TestClient, project_root: Pa
 
     assert overview.status_code == 200
     assert "Promising results" in overview.text
-    assert "Avg/best score: 84/84" in overview.text
+    assert "1 high, 0 interesting" in overview.text
     assert detail.status_code == 200
     assert "Result history" in detail.text
     assert "SAP ABAP Consultant" in detail.text
@@ -589,10 +1151,7 @@ def test_source_routes_render_value_metrics(client: TestClient, project_root: Pa
 def test_viewing_source_pages_does_not_mutate_execution_config(client: TestClient, project_root: Path) -> None:
     source_config = project_root / "sources" / "recruiting-sites.yaml"
     source_config.write_text(
-        "sources:\n"
-        "  - name: Local Sample\n"
-        "    type: local_yaml\n"
-        "    path: jobs/raw/sample_jobs.yaml\n",
+        "sources:\n  - name: Local Sample\n    type: local_yaml\n    path: jobs/raw/sample_jobs.yaml\n",
         encoding="utf-8",
     )
     before = source_config.read_text(encoding="utf-8")
@@ -605,12 +1164,26 @@ def test_viewing_source_pages_does_not_mutate_execution_config(client: TestClien
 
 def test_source_execution_routes_create_guard_enable_and_disable(client: TestClient, project_root: Path) -> None:
     from job_agent.io.yaml_store import read_yaml
+    from job_agent.models import Job
     from job_agent.services.recipe_preview_service import RecipePreviewResult
-    from job_agent.services.source_test_service import SourceTestJobPreview, SourceTestResult
     from job_agent.services.source_execution_readiness_service import SourceExecutionReadinessService
     from job_agent.services.source_health_service import SourceHealthService
+    from job_agent.services.source_listing_index_store import SourceListingIndexStore
+    from job_agent.services.source_test_service import SourceTestJobPreview, SourceTestResult
 
     create_response = client.post("/sources/eursap-jobs/execution/create", follow_redirects=False)
+    recipe_file = project_root / "sources" / "recipes" / "experimental" / "eursap-jobs.yaml"
+    recipe_file.parent.mkdir(parents=True, exist_ok=True)
+    recipe_file.write_text(
+        "source_name: Eursap Jobs\n"
+        "mode: static_html\n"
+        "listing:\n"
+        "  card_selector: article.job-card\n"
+        "  title_selector: a\n"
+        "  link_selector: a\n",
+        encoding="utf-8",
+    )
+    os.utime(recipe_file, (1, 1))
 
     assert create_response.status_code == 303
     config = read_yaml(project_root / "sources" / "recruiting-sites.yaml", {})
@@ -664,12 +1237,33 @@ def test_source_execution_routes_create_guard_enable_and_disable(client: TestCli
             ],
         )
     )
+    SourceListingIndexStore(project_root).record_index(
+        source_id="eursap-jobs",
+        source_name="Eursap Jobs",
+        jobs=[
+            Job(
+                title="SAP Basis Consultant",
+                source="Eursap Jobs",
+                source_id="eursap-jobs",
+                url="https://eursap.eu/jobs/sap-basis",
+            )
+        ],
+    )
 
     enable_response = client.post("/sources/eursap-jobs/execution/enable", follow_redirects=False)
 
     assert enable_response.status_code == 303
     config = read_yaml(project_root / "sources" / "recruiting-sites.yaml", {})
     assert config["sources"][0]["enabled"] is True
+    future_timestamp = datetime.now(UTC).timestamp() + 5
+    os.utime(recipe_file, (future_timestamp, future_timestamp))
+    detail = client.get("/sources/eursap-jobs")
+    assert "Running in daily checks" not in detail.text
+    assert '<span class="badge high">Implemented</span>' not in detail.text
+    assert "Reading plan changed since the saved source test" in detail.text
+    assert "Safe Source Test" in detail.text
+    assert "Needs retest" in detail.text
+    assert "This source is included in automatic job checks." not in detail.text
 
     update_response = client.post("/sources/eursap-jobs/execution/update", follow_redirects=False)
 
@@ -692,7 +1286,7 @@ def test_source_detail_shows_dry_run_link_when_execution_entry_exists(client: Te
     detail = client.get("/sources/eursap-jobs")
 
     assert detail.status_code == 200
-    assert "Review what it reads" in detail.text
+    assert "Ready for a safe source test" in detail.text
     assert "Safe source test" in detail.text
 
 
@@ -787,7 +1381,7 @@ def test_source_test_run_view_and_api_save_readiness(monkeypatch: pytest.MonkeyP
                 ],
             )
 
-    monkeypatch.setattr("job_agent.web.routers.sources.SourceTestService", FakeSourceTestService)
+    monkeypatch.setattr("job_agent.web.source_workflow.SourceTestService", FakeSourceTestService)
 
     view = client.get("/sources/eursap-jobs/test-run")
     response = client.post("/sources/eursap-jobs/test-run")
@@ -795,6 +1389,12 @@ def test_source_test_run_view_and_api_save_readiness(monkeypatch: pytest.MonkeyP
 
     assert view.status_code == 200
     assert "Test Source Without Saving Jobs" in view.text
+    assert "<summary>Live run log</summary>" in view.text
+    assert "source-test-insight" in view.text
+    assert "work-status-card" in view.text
+    assert "source-test-results" in view.text
+    assert "?result=" in view.text
+    assert "shouldStartImmediately" in view.text
     assert "/sources/eursap-jobs/test-run/stream" in view.text
     assert response.status_code == 200
     payload = response.json()
@@ -810,13 +1410,17 @@ def test_source_test_run_view_and_api_save_readiness(monkeypatch: pytest.MonkeyP
     assert payload["seen_previously_seen_count"] == 2
     assert "already seen" in payload["count_explanations"][1]
     assert payload["readiness_status"] in {"ready", "blocked", "warning"}
+    assert payload["source_test_insight"]["title"] == "Source test passed"
     assert stream_response.status_code == 200
     assert '"type": "progress"' in stream_response.text
     assert '"type": "complete"' in stream_response.text
 
 
-def test_source_dry_run_route_renders_result(monkeypatch: pytest.MonkeyPatch, client: TestClient) -> None:
-    from job_agent.services.source_test_service import SourceTestJobPreview, SourceTestResult
+def test_source_test_insight_can_rebuild_reading_plan_with_clues(
+    monkeypatch: pytest.MonkeyPatch,
+    client: TestClient,
+) -> None:
+    from job_agent.services.source_test_service import SourceTestResult
 
     client.post("/sources/eursap-jobs/execution/create", follow_redirects=False)
 
@@ -824,38 +1428,191 @@ def test_source_dry_run_route_renders_result(monkeypatch: pytest.MonkeyPatch, cl
         def __init__(self, root):
             pass
 
-        def run_test(self, source_id, *, force_disabled=False):
-            assert source_id == "eursap-jobs"
-            assert force_disabled is True
+        def run_test(self, source_id, *, force_disabled=False, progress_callback=None):
             return SourceTestResult(
-                source_id="eursap-jobs",
+                source_id=source_id,
                 source_name="Eursap Jobs",
                 source_type="recipe_html",
                 source_enabled=False,
                 forced_disabled=True,
-                status="success",
-                job_count=1,
-                jobs=[
-                    SourceTestJobPreview(
-                        title="SAP Basis Consultant",
-                        url="https://eursap.eu/jobs/sap-basis",
-                        source="Eursap Jobs",
-                        source_id="eursap-jobs",
-                        location="Remote",
-                        extraction_notes=["Recipe-based extraction; verify details manually."],
-                    )
+                status="warning",
+                job_count=22,
+                warning_count=2,
+                warnings=["Page 2 returned only listings already seen."],
+                pagination_strategy="url",
+                pagination_fetch_count=2,
+                pagination_duplicate_ratio=1.0,
+                pagination_unique_jobs_from_fetched_pages=0,
+                visible_total_job_count=75,
+                capability_checks=[
+                    {
+                        "capability": "listing_total_access",
+                        "status": "fail",
+                        "expected": True,
+                        "observed": False,
+                        "detail": "The listing page appears to advertise 75 posting(s), but the verified extractor reached only 22.",
+                    },
+                    {
+                        "capability": "pagination_strategy",
+                        "status": "fail",
+                        "expected": True,
+                        "observed": True,
+                        "detail": "Recipe declares url pagination, but proof-fetched pages returned only duplicate listings.",
+                    },
                 ],
             )
 
-    monkeypatch.setattr("job_agent.web.routers.sources.SourceTestService", FakeSourceTestService)
+    monkeypatch.setattr("job_agent.web.source_workflow.SourceTestService", FakeSourceTestService)
 
-    response = client.get("/sources/eursap-jobs/dry-run?force_disabled=true")
+    payload = client.post("/sources/eursap-jobs/test-run").json()
 
-    assert response.status_code == 200
-    assert "Source Test Result" in response.text
-    assert "SAP Basis Consultant" in response.text
-    assert "Tested while the daily-run entry was disabled" in response.text
-    assert "No packages, seen state, materials, digests, or run records were written." in response.text
+    assert payload["source_test_insight"]["title"] == "Paginated page access failed"
+    assert payload["source_test_insight"]["action"]["action"] == "/sources/eursap-jobs/reading-plan/rebuild-from-test"
+    assert payload["source_test_insight"]["generation_clues"]["pagination_strategy_tested"] == "url"
+
+    captured: dict[str, object] = {}
+
+    class RunService:
+        def start_from_source_capture(self, source_id: str, **kwargs):
+            captured["source_id"] = source_id
+            captured.update(kwargs)
+            return {"run_id": "run-from-test"}
+
+    monkeypatch.setattr("job_agent.web.workflows.RecipeGenerationRunService", lambda root: RunService())
+
+    response = client.post("/sources/eursap-jobs/reading-plan/rebuild-from-test", follow_redirects=False)
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/sources/eursap-jobs/recipe-generation/run-from-test"
+    assert captured["source_test_insight"]["insight_title"] == "Paginated page access failed"
+    assert captured["source_test_insight"]["pagination_strategy_tested"] == "url"
+
+
+def test_source_test_insight_prioritizes_failed_source_access(
+    monkeypatch: pytest.MonkeyPatch,
+    client: TestClient,
+    project_root: Path,
+) -> None:
+    from job_agent.services.recipe_preview_service import RecipePreviewResult
+    from job_agent.services.source_health_service import SourceHealthService
+    from job_agent.services.source_test_service import SourceTestResult
+
+    client.post("/sources/eursap-jobs/execution/create", follow_redirects=False)
+    SourceHealthService(project_root).save_preview(
+        "eursap-jobs",
+        RecipePreviewResult(
+            recipe_source_name="Eursap Jobs",
+            recipe_path="sources/recipes/experimental/eursap-jobs.yaml",
+            recipe_status="experimental",
+            input_type="local artifact",
+            input_value="output/recipe-calibration/eursap/page.html",
+            base_url="https://eursap.eu/jobs",
+            mode_used="local_fixture_html",
+            extracted_job_count=22,
+            useful_titles=22,
+            generic_labels=0,
+            unique_urls=22,
+            average_description_length=120,
+            jobs=[],
+            warnings=[],
+        ),
+    )
+
+    class FakeSourceTestService:
+        def __init__(self, root):
+            pass
+
+        def run_test(self, source_id, *, force_disabled=False, progress_callback=None):
+            return SourceTestResult(
+                source_id=source_id,
+                source_name="Eursap Jobs",
+                source_type="recipe_html",
+                source_enabled=False,
+                forced_disabled=True,
+                status="warning",
+                job_count=22,
+                pagination_strategy="browser_click",
+                pagination_fetch_count=1,
+                pagination_duplicate_ratio=1.0,
+                source_access_requires_session=True,
+                source_access_session_status="connected",
+                source_access_session_label="Connected",
+                source_access_login_gate_detected=True,
+                capability_checks=[
+                    {
+                        "capability": "pagination_strategy",
+                        "status": "fail",
+                        "expected": True,
+                        "observed": True,
+                        "detail": "Browser-click pagination was blocked by a login modal.",
+                    },
+                    {
+                        "capability": "source_access",
+                        "status": "fail",
+                        "expected": True,
+                        "observed": False,
+                        "detail": "A connected source session was used, but the page still showed a sign-in or registration gate.",
+                    },
+                ],
+            )
+
+    monkeypatch.setattr("job_agent.web.source_workflow.SourceTestService", FakeSourceTestService)
+
+    payload = client.post("/sources/eursap-jobs/test-run").json()
+
+    assert payload["source_test_insight"]["title"] == "Source access needs attention"
+    assert payload["source_test_insight"]["action"]["href"] == "/sources/eursap-jobs/session"
+    assert payload["source_test_insight"]["generation_clues"]["source_access_login_gate_detected"] is True
+    assert payload["readiness_summary"].startswith("Blocked: Source access verification failed")
+    assert payload["readiness_blockers"][0].startswith("Source access verification failed")
+
+
+def test_rebuild_from_test_redirects_to_retest_when_plan_changed(
+    monkeypatch: pytest.MonkeyPatch,
+    client: TestClient,
+    project_root: Path,
+) -> None:
+    from job_agent.services.source_execution_readiness_service import SourceExecutionReadinessService
+    from job_agent.services.source_test_service import SourceTestResult
+
+    client.post("/sources/eursap-jobs/execution/create", follow_redirects=False)
+    SourceExecutionReadinessService(project_root).save_from_source_test(
+        SourceTestResult(
+            source_id="eursap-jobs",
+            source_name="Eursap Jobs",
+            source_type="recipe_html",
+            source_enabled=False,
+            forced_disabled=True,
+            status="warning",
+            job_count=22,
+            capability_checks=[
+                {
+                    "capability": "pagination_strategy",
+                    "status": "fail",
+                    "detail": "URL pagination returned only duplicate listings.",
+                }
+            ],
+        )
+    )
+    recipe_path = project_root / "sources" / "recipes" / "experimental" / "eursap-jobs.yaml"
+    recipe_path.parent.mkdir(parents=True, exist_ok=True)
+    recipe_path.write_text("source_name: Eursap Jobs\nlisting: {}\n", encoding="utf-8")
+    future_timestamp = datetime.now(UTC).timestamp() + 60
+    os.utime(recipe_path, (future_timestamp, future_timestamp))
+
+    class RunService:
+        def start_from_source_capture(self, source_id: str, **kwargs):
+            raise AssertionError("stale source-test insight should not trigger generation")
+
+    monkeypatch.setattr("job_agent.web.workflows.RecipeGenerationRunService", lambda root: RunService())
+
+    response = client.post("/sources/eursap-jobs/reading-plan/rebuild-from-test", follow_redirects=False)
+    detail = client.get("/sources/eursap-jobs")
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/sources/eursap-jobs/test-run?start=1"
+    assert "Previous source-test details are from an older reading plan." in detail.text
+    assert "Reading plan changed since the saved source test" in detail.text
 
 
 def test_source_detail_run_now_requires_enabled_source(client: TestClient) -> None:
@@ -870,8 +1627,8 @@ def test_source_detail_run_now_requires_enabled_source(client: TestClient) -> No
 def test_source_detail_run_now_redirects_to_run_detail(
     monkeypatch: pytest.MonkeyPatch, client: TestClient, project_root: Path
 ) -> None:
-    from job_agent.services.single_source_run_service import SingleSourceRunResult
     from job_agent.services.execution_source_service import ExecutionSourceService
+    from job_agent.services.single_source_run_service import SingleSourceRunResult
 
     client.post("/sources/eursap-jobs/execution/create", follow_redirects=False)
     ExecutionSourceService(project_root).enable("eursap-jobs")
@@ -891,12 +1648,113 @@ def test_source_detail_run_now_redirects_to_run_detail(
                 run_detail_url="/runs/run-1",
             )
 
-    monkeypatch.setattr("job_agent.web.routers.sources.SingleSourceRunService", FakeSingleSourceRunService)
+    monkeypatch.setattr("job_agent.web.source_workflow.SingleSourceRunService", FakeSingleSourceRunService)
 
     response = client.post("/sources/eursap-jobs/run-now", follow_redirects=False)
 
     assert response.status_code == 303
     assert response.headers["location"] == "/runs/run-1"
+
+
+def test_source_detail_index_and_investigate_actions_redirect(
+    monkeypatch: pytest.MonkeyPatch, client: TestClient, project_root: Path
+) -> None:
+    from job_agent.models import Job
+    from job_agent.services.source_listing_index_store import SourceListingIndexStore
+
+    class FakeRecord:
+        run_id = "run-1"
+
+    class FakeIndexTask:
+        source_name = "Eursap Jobs"
+
+    launched_index = {}
+    launched_detail = {}
+
+    def fake_index_launch(source_id, source_name=""):
+        launched_index.update({"source_id": source_id, "source_name": source_name})
+        return FakeIndexTask()
+
+    def fake_launch(source_id, *, include_disabled_source=False, append_to_today=True):
+        launched_detail.update(
+            {
+                "source_id": source_id,
+                "include_disabled_source": include_disabled_source,
+                "append_to_today": append_to_today,
+            }
+        )
+        return FakeRecord()
+
+    class ReadyReadiness:
+        readiness_status = "ready"
+        blockers = []
+
+    monkeypatch.setattr(
+        "job_agent.web.source_workflow.SourceExecutionReadinessService",
+        lambda root: type("Svc", (), {"evaluate": lambda self, source_id: ReadyReadiness()})(),
+    )
+    monkeypatch.setattr("job_agent.web.routers.sources.runtime.launch_source_listing_index", fake_index_launch)
+    monkeypatch.setattr("job_agent.web.routers.sources.runtime.launch_source_detail_run", fake_launch)
+
+    index_response = client.post("/sources/eursap-jobs/index-listings", follow_redirects=False)
+    SourceListingIndexStore(project_root).record_index(
+        source_id="eursap-jobs",
+        source_name="Eursap Jobs",
+        jobs=[
+            Job(
+                title="SAP Basis Consultant",
+                source="Eursap Jobs",
+                source_id="eursap-jobs",
+                url="https://eursap.eu/jobs/sap-basis",
+            )
+        ],
+    )
+    investigate_response = client.post("/sources/eursap-jobs/investigate-all", follow_redirects=False)
+
+    assert index_response.status_code == 303
+    assert "Indexing+started+for+Eursap+Jobs" in index_response.headers["location"]
+    assert launched_index == {"source_id": "eursap-jobs", "source_name": "Eursap Jobs"}
+    assert investigate_response.status_code == 303
+    assert investigate_response.headers["location"] == "/runs/run-1"
+    assert launched_detail == {
+        "source_id": "eursap-jobs",
+        "include_disabled_source": True,
+        "append_to_today": True,
+    }
+
+
+def test_source_detail_index_and_investigate_actions_require_ready_source(
+    monkeypatch: pytest.MonkeyPatch,
+    client: TestClient,
+) -> None:
+    launched = {"index": False, "detail": False}
+
+    class BlockedReadiness:
+        readiness_status = "blocked"
+        blockers = ["No saved source test readiness result."]
+
+    monkeypatch.setattr(
+        "job_agent.web.source_workflow.SourceExecutionReadinessService",
+        lambda root: type("Svc", (), {"evaluate": lambda self, source_id: BlockedReadiness()})(),
+    )
+    monkeypatch.setattr(
+        "job_agent.web.routers.sources.runtime.launch_source_listing_index",
+        lambda *args, **kwargs: launched.update(index=True),
+    )
+    monkeypatch.setattr(
+        "job_agent.web.routers.sources.runtime.launch_source_detail_run",
+        lambda *args, **kwargs: launched.update(detail=True),
+    )
+
+    index_response = client.post("/sources/eursap-jobs/index-listings", follow_redirects=False)
+    investigate_response = client.post("/sources/eursap-jobs/investigate-all", follow_redirects=False)
+
+    assert index_response.status_code == 303
+    assert "No+saved+source+test+readiness+result" in index_response.headers["location"]
+    assert investigate_response.status_code == 303
+    assert "No+saved+source+test+readiness+result" in investigate_response.headers["location"]
+    assert launched == {"index": False, "detail": False}
+
 
 def test_manual_source_cannot_create_recipe_execution_route(client: TestClient) -> None:
     response = client.post("/sources/manual-intake/execution/create", follow_redirects=False)

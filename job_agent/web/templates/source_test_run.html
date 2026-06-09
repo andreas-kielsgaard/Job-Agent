@@ -10,14 +10,18 @@
 </div>
 
 <div class="panel running-panel">
-  <h2 id="test-status-title">Starting source test</h2>
+  <h2 id="test-status-title">Source test</h2>
   <p class="muted">This runs the configured source the way the daily run would, but does not save job packages, mark jobs as seen, or include the source in the daily run.</p>
-  <p class="muted" id="source-test-running-note">Preparing the configured source and reading plan.</p>
+  <p class="muted" id="source-test-running-note">Start a fresh safe source test, or return to the most recent result from this browser session.</p>
   {% if not execution_entry %}
   <p><span class="badge low">No daily-run projection is prepared for this source yet.</span></p>
   {% elif force_disabled %}
   <p><span class="badge medium">Testing while the source is excluded from the daily run.</span></p>
   {% endif %}
+  <div class="action-row" id="source-test-start-actions">
+    <button type="button" class="button" id="source-test-start-button">Run source test</button>
+    <a class="button light" href="/sources/{{ source.id }}">Back to source</a>
+  </div>
   <ol class="progress-steps" id="source-test-steps">
     <li class="active">Resolve configured source and selected recipe</li>
     <li>Fetch the listing page</li>
@@ -25,8 +29,10 @@
     <li>Open configured job detail pages with recipe delay</li>
     <li>Build verification report and save readiness</li>
   </ol>
-  <h3>Live Run Log</h3>
-  <ol class="progress-steps" id="source-test-live-log"></ol>
+  <details class="diagnostic-panel compact-log-panel">
+    <summary>Live run log</summary>
+    <ol class="progress-steps" id="source-test-live-log"></ol>
+  </details>
 </div>
 
 <div class="panel" id="source-test-result" hidden>
@@ -45,6 +51,18 @@
   </div>
 </div>
 
+<div class="panel source-insight-panel" id="source-test-insight" hidden>
+  <div class="section-heading-row">
+    <div>
+      <p class="eyebrow">Source test insight</p>
+      <h2 id="source-test-insight-title"></h2>
+      <p class="muted" id="source-test-insight-summary"></p>
+    </div>
+    <div id="source-test-insight-action"></div>
+  </div>
+  <p id="source-test-insight-recommendation"></p>
+</div>
+
 <div class="panel" id="source-test-trace-panel" hidden>
   <h2>What The Reading Plan Did</h2>
   <p class="muted" id="source-test-recipe-summary"></p>
@@ -57,6 +75,7 @@
   </div>
   <h3>Step Execution</h3>
   <ol class="progress-steps" id="source-test-run-steps"></ol>
+  <div id="source-test-capability-checks"></div>
   <div id="source-test-pagination"></div>
   <div id="source-test-detail-attempts"></div>
   <div id="source-test-field-checks"></div>
@@ -81,6 +100,12 @@
   ];
 
   let runTimer = null;
+  const sourceTestTaskId = "source-test-{{ source.id }}";
+  const sourceTestHref = `/sources/{{ source.id }}/test-run?result=${encodeURIComponent(sourceTestTaskId)}`;
+  const sourceTestName = {{ source.name|tojson }};
+  const sourceTestResultKey = "job-agent:source-test-results";
+  const sourceTestPageParams = new URLSearchParams(window.location.search);
+  const shouldStartImmediately = sourceTestPageParams.get("start") === "1";
 
   function setStep(index, className) {
     const steps = [...document.querySelectorAll("#source-test-steps li")];
@@ -135,6 +160,10 @@
     return "";
   }
 
+  function sourceTestPassed(data) {
+    return text(data.readiness_status).toLowerCase() === "ready";
+  }
+
   function stepIndexForEvent(event) {
     const capability = text(event.capability).toLowerCase();
     const phase = text(event.phase).toLowerCase();
@@ -152,6 +181,28 @@
     item.innerHTML = `<strong>${escapeHtml(event.phase)}</strong><div>${escapeHtml(event.detail)}</div>`;
     list.appendChild(item);
     setStep(stepIndexForEvent(event), statusClass(event.status) === "failed" ? "failed" : "active");
+    updateSourceTestWorkStatus({
+      status: "running",
+      stage: event.phase || "Testing source",
+      message: event.detail || "",
+      progress_percent: Math.min(92, 12 + (stepIndexForEvent(event) * 18))
+    });
+  }
+
+  function resetSourceTestView() {
+    document.getElementById("source-test-start-actions").hidden = true;
+    document.getElementById("source-test-result").hidden = true;
+    document.getElementById("source-test-insight").hidden = true;
+    document.getElementById("source-test-trace-panel").hidden = true;
+    document.getElementById("source-test-jobs-panel").hidden = true;
+    document.getElementById("source-test-live-log").innerHTML = "";
+    document.getElementById("source-test-run-steps").innerHTML = "";
+    document.getElementById("source-test-capability-checks").innerHTML = "";
+    document.getElementById("source-test-pagination").innerHTML = "";
+    document.querySelectorAll(".source-test-listing-pages").forEach((element) => element.remove());
+    document.getElementById("source-test-detail-attempts").innerHTML = "";
+    document.getElementById("source-test-field-checks").innerHTML = "";
+    document.getElementById("source-test-job-rows").innerHTML = "";
   }
 
   function renderFindings(data) {
@@ -160,20 +211,51 @@
     document.getElementById("source-test-jobs").innerText = data.job_count || 0;
     document.getElementById("source-test-warnings").innerText = data.warning_count || 0;
     document.getElementById("source-test-readiness").innerText = data.readiness_status || "unknown";
-    document.getElementById("source-test-summary").innerText = data.readiness_summary || "";
+    const insight = data.source_test_insight || {};
+    document.getElementById("source-test-summary").innerText = primarySourceTestSummary(data, insight);
     const blockers = [...(data.readiness_blockers || []), ...(data.readiness_warnings || []), ...(data.warnings || [])];
     document.getElementById("source-test-blockers").innerHTML = blockers.length
       ? `<ul>${blockers.map(item => `<li>${escapeHtml(item)}</li>`).join("")}</ul>`
       : "";
+    renderInsight(insight);
     renderCountExplanation(data);
     renderTrace(data);
     renderJobs(data);
+  }
+
+  function primarySourceTestSummary(data, insight) {
+    if (insight && insight.title && !sourceTestPassed(data)) {
+      return [insight.title, insight.recommendation || insight.summary].filter(Boolean).join(": ");
+    }
+    return data.readiness_summary || "";
+  }
+
+  function renderInsight(insight) {
+    if (!insight || !insight.title) return;
+    document.getElementById("source-test-insight").hidden = false;
+    document.getElementById("source-test-insight-title").innerText = insight.title || "";
+    document.getElementById("source-test-insight-summary").innerText = insight.summary || "";
+    document.getElementById("source-test-insight-recommendation").innerText = insight.recommendation || "";
+    const action = insight.action || {};
+    const actionTarget = document.getElementById("source-test-insight-action");
+    if (action.type === "post") {
+      actionTarget.innerHTML = `
+        <form method="post" action="${escapeHtml(action.action || "")}" class="inline-form">
+          <button type="submit" class="button">${escapeHtml(action.label || "Continue")}</button>
+        </form>
+      `;
+    } else if (action.href) {
+      actionTarget.innerHTML = `<a class="button" href="${escapeHtml(action.href)}">${escapeHtml(action.label || "Continue")}</a>`;
+    } else {
+      actionTarget.innerHTML = "";
+    }
   }
 
   function renderCountExplanation(data) {
     const explanations = data.count_explanations || [];
     const counts = [
       `Listing cards observed: ${data.listing_observed_count || 0}`,
+      `Visible total: ${data.visible_total_job_count || 0}`,
       `Jobs retained: ${data.job_count || 0}`,
       `Missing job URL: ${data.listing_missing_url_count || 0}`,
       `Rejected by recipe: ${data.listing_rejected_count || 0}`,
@@ -203,7 +285,11 @@
     document.getElementById("source-test-detail-enriched").innerText = data.detail_enriched_count || 0;
     document.getElementById("source-test-recipe-summary").innerText = [
       data.recipe_path ? `Using ${data.recipe_path}.` : "",
-      data.pagination_configured ? `Pagination is configured up to ${data.pagination_max_pages || 1} page(s).` : "Pagination is not configured.",
+      data.pagination_configured ? `Pagination uses ${data.pagination_strategy || "url"} strategy up to ${data.pagination_max_pages || 1} page(s).` : "Pagination is not configured.",
+      data.interactive_pagination_control_count ? `${data.interactive_pagination_control_count} interactive pagination control(s) observed.` : "",
+      data.source_access_requires_session ? `A connected source session is required${data.source_access_session_scope ? ` for ${data.source_access_session_scope}` : ""}.` : "",
+      data.source_access_session_label ? `Session status: ${data.source_access_session_label}.` : "",
+      data.source_access_setup_hint || "",
       data.detail_follow_enabled ? `Detail pages are configured with ${data.detail_request_delay_seconds || 0}s delay.` : "Detail pages are not configured."
     ].filter(Boolean).join(" ");
 
@@ -214,6 +300,23 @@
       </li>
     `).join("");
 
+    const capabilityChecks = data.capability_checks || [];
+    document.getElementById("source-test-capability-checks").innerHTML = capabilityChecks.length
+      ? `<h3>Capability Verification</h3>
+        <table>
+          <thead><tr><th>Capability</th><th>Status</th><th>Expected</th><th>Observed</th><th>What happened</th></tr></thead>
+          <tbody>${capabilityChecks.map(check => `
+            <tr>
+              <td>${escapeHtml((check.capability || "").replaceAll("_", " "))}</td>
+              <td><span class="badge ${statusClass(check.status)}">${escapeHtml(check.status)}</span></td>
+              <td>${check.expected ? "Yes" : "No"}</td>
+              <td>${check.observed ? "Yes" : "No"}</td>
+              <td>${escapeHtml(check.detail || "")}</td>
+            </tr>
+          `).join("")}</tbody>
+        </table>`
+      : "";
+
     const paginationUrls = data.pagination_fetch_attempts || [];
     document.getElementById("source-test-pagination").innerHTML = paginationUrls.length
       ? `<h3>Pagination Pages Fetched</h3><ul>${paginationUrls.map(url => `<li><a href="${escapeHtml(url)}" target="_blank" rel="noreferrer">${escapeHtml(url)}</a></li>`).join("")}</ul>`
@@ -221,7 +324,7 @@
 
     const listingPages = data.listing_pages || [];
     const listingPageRows = listingPages.length
-      ? `<h3>Listing Pages Read</h3>
+      ? `<div class="source-test-listing-pages"><h3>Listing Pages Read</h3>
         <table>
           <thead><tr><th>Page</th><th>Cards observed</th><th>Jobs retained</th><th>Not retained</th></tr></thead>
           <tbody>${listingPages.map(page => `
@@ -237,7 +340,7 @@
               </td>
             </tr>
           `).join("")}</tbody>
-        </table>`
+        </table></div>`
       : "";
     document.getElementById("source-test-pagination").insertAdjacentHTML("afterend", listingPageRows);
 
@@ -309,16 +412,26 @@
   }
 
   async function runSourceTest() {
+    resetSourceTestView();
     const title = document.getElementById("test-status-title");
     try {
+      updateSourceTestWorkStatus({
+        status: "running",
+        stage: "Starting source test",
+        message: `Testing ${sourceTestName} without saving jobs.`,
+        progress_percent: 8
+      });
       setStep(0, "active");
       await new Promise(resolve => setTimeout(resolve, 200));
       startRunTimer();
       const data = await runStreamingSourceTest();
-      finishSteps(data.ok);
-      title.innerText = data.ok ? "Source test completed" : "Source test needs review";
-      stopRunTimer(data.ok ? "Run completed. The trace below shows the recipe steps, pagination fetches, and detail-page attempts." : "Run finished with issues. Review the trace and warnings below.");
+      const passed = sourceTestPassed(data);
+      finishSteps(passed);
+      title.innerText = passed ? "Source test completed" : "Source test needs review";
+      stopRunTimer(passed ? "Run completed. The trace below shows the recipe steps, pagination fetches, and detail-page attempts." : "Run finished with issues. Review the trace, insight, and warnings below.");
+      saveSourceTestResult(data);
       renderFindings(data);
+      clearSourceTestWorkStatus();
     } catch (error) {
       finishSteps(false);
       title.innerText = "Source test failed";
@@ -330,7 +443,70 @@
         readiness_blockers: [error.message || "Unknown error"],
         jobs: [],
       });
+      clearSourceTestWorkStatus();
     }
+  }
+
+  function updateSourceTestWorkStatus(updates) {
+    localWorkStatusItems = [
+      ...localWorkStatusItems.filter((item) => item.task_id !== sourceTestTaskId),
+      {
+        kind: "source_test",
+        task_id: sourceTestTaskId,
+        source_id: "{{ source.id }}",
+        source_name: sourceTestName,
+        title: `Testing ${sourceTestName}`,
+        href: sourceTestHref,
+        started_at_ms: Date.now(),
+        ...updates
+      }
+    ];
+    saveLocalWorkStatusItems();
+    renderExternalWorkStatus();
+  }
+
+  function clearSourceTestWorkStatus() {
+    localWorkStatusItems = localWorkStatusItems.filter((item) => item.task_id !== sourceTestTaskId);
+    saveLocalWorkStatusItems();
+    renderExternalWorkStatus();
+  }
+
+  function readSourceTestResults() {
+    try {
+      const parsed = JSON.parse(sessionStorage.getItem(sourceTestResultKey) || "{}");
+      return parsed && typeof parsed === "object" ? parsed : {};
+    } catch {
+      return {};
+    }
+  }
+
+  function saveSourceTestResult(data) {
+    const results = readSourceTestResults();
+    results["{{ source.id }}"] = {
+      task_id: sourceTestTaskId,
+      saved_at: Date.now(),
+      data
+    };
+    try {
+      sessionStorage.setItem(sourceTestResultKey, JSON.stringify(results));
+    } catch {
+      // The result view still works on the current page.
+    }
+  }
+
+  function loadSourceTestResult() {
+    const record = readSourceTestResults()["{{ source.id }}"];
+    if (!record || !record.data) return null;
+    if (Date.now() - Number(record.saved_at || 0) > 24 * 60 * 60 * 1000) return null;
+    return record.data;
+  }
+
+  function showReadyToRun() {
+    document.getElementById("test-status-title").innerText = "Ready to test source";
+    document.getElementById("source-test-running-note").innerText =
+      "Run the selected reading plan end to end without saving jobs. Previous source-test results are not rerun unless you start a new test.";
+    document.getElementById("source-test-start-actions").hidden = false;
+    setStep(0, "active");
   }
 
   async function runStreamingSourceTest() {
@@ -370,6 +546,23 @@
     return finalData;
   }
 
-  window.addEventListener("DOMContentLoaded", runSourceTest);
+  window.addEventListener("DOMContentLoaded", () => {
+    document.getElementById("source-test-start-button").addEventListener("click", runSourceTest);
+    const savedResult = loadSourceTestResult();
+    if (!shouldStartImmediately && savedResult) {
+      document.getElementById("test-status-title").innerText =
+        sourceTestPassed(savedResult) ? "Source test completed" : "Source test needs review";
+      stopRunTimer("Showing the latest completed source test from this browser session.");
+      finishSteps(sourceTestPassed(savedResult));
+      renderFindings(savedResult);
+      clearSourceTestWorkStatus();
+      return;
+    }
+    if (shouldStartImmediately) {
+      runSourceTest();
+      return;
+    }
+    showReadyToRun();
+  });
 </script>
 {% endblock %}

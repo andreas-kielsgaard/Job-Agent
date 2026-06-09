@@ -1,16 +1,16 @@
 source_name: FreelancerMap
 start_url: https://www.freelancermap.com/projects?created=30&excludeDachProjects=true&query=sap&sort=2&pagenr=1
-mode: static_html
+mode: rendered_html
 listing:
   card_selector: div.project-card
   title_selector: a.h3.no-underline[href*="/project/"]
   link_selector: a.h3.no-underline[href*="/project/"]
-  company_selector: div.project-info > div.mg-b-display-m:first-child
   location_selector: '[data-testid="city"]'
   remote_selector: '[data-testid="remoteInPercent"]'
   workload_selector: '[data-testid="type"]'
   posted_date_selector: '[data-testid="created"]'
   start_date_selector: '[data-testid="beginningText"]'
+  company_selector: div.project-info > div.mg-b-display-m:first-child
 accept:
   url_contains:
   - /project/
@@ -38,27 +38,33 @@ patterns:
   job_id_regex: (?:Job ID|Ref):\s*(?P<job_id>[A-Za-z0-9_/-]+)
   remote_regex: \b(?P<remote>Remote|Hybrid|Hybrid-remote|Office based|On-site|\d+%\s*remote)\b
   work_type_regex: \b(?P<work_type>Contract|Freelance|Permanent)\b
-  start_date_regex: '(?:Start(?: date)?\s*:?\s*)(?P<start_date>asap|\d{1,2}\s*/\s*\d{4}|\d{1,2}[./]\d{1,2}[./]\d{4}|[^*\n\r]+?)(?=\s+Duration\b|\s+\d+\s*%\s*workload\b|\s+End date:|$)'
+  start_date_regex: '(?:Start(?: date)?\s*:?\s*)(?P<start_date>asap|\d{1,2}\s*/\s*\d{4}|\d{1,2}[./]\d{1,2}[./]\d{4}|[^*\n\r]+?)(?=\s+Duration\b|\s+\d+\s*%\s*workload\b|\s+End
+    date:|$)'
   language_regex: (?:Languages?:\s*|Language skills:\s*|Fluent in\s+)(?P<language>[A-Z][A-Za-z]+(?:\s*\([^)]*\))?)
-pagination:
-  page_link_selector: a[href*="pagenr="]
-  next_selector: link[rel="next"]
-  max_pages: 4
-  request_delay_seconds: 1.0
 limits:
   max_cards: 25
   min_title_length: 8
   min_description_length: 0
+pagination:
+  strategy: url
+  page_link_selector: a[href*="pagenr="]
+  next_selector: link[rel="next"]
+  max_pages: 3
+  request_delay_seconds: 1.0
 detail:
   follow: true
   max_detail_pages: 5
   request_delay_seconds: 1.0
   title_selector:
   - .project-show-single-page h1
-  - .modal h1
   - main h1
   - h1
+  posted_date_selector: div.project-show-date-created-design-b > p.color-text-display-weak
   description_selector: .project-body
   location_selector: .badge-content-city
-  remote_selector: .project-header-info-list > span:nth-of-type(1)
-  workload_selector: .project-header-info-list > span:nth-of-type(2)
+  workload_selector: .project-header-info-list
+access:
+  requires_session: true
+  session_scope: www.freelancermap.com
+  setup_hint: Connect a source session before verifying pagination beyond the public
+    listing page.

@@ -32,9 +32,11 @@ def test_candidate_detail_shows_approval_form_for_pending_candidate(client: Test
 
     assert response.status_code == 200
     assert "Review Reading Plan" in response.text
-    assert "Use this reading plan" in response.text
+    assert "Use plan and run source test" in response.text
     assert 'value="sources/recipes/experimental/eursap-jobs.yaml"' in response.text
-    assert "not included in the daily run by itself" in response.text
+    assert "local extraction count is only a calibration sanity check" in response.text
+    assert 'name="next_action" value="test"' in response.text
+    assert 'name="overwrite" value="1"' in response.text
 
 
 def test_web_approval_writes_recipe_saves_health_updates_candidate_and_redirects(
@@ -68,6 +70,32 @@ def test_web_approval_writes_recipe_saves_health_updates_candidate_and_redirects
     assert not (project_root / "sources" / "recruiting-sites.yaml").exists()
 
 
+def test_web_approval_can_replace_current_recipe_and_redirect_to_source_test(
+    client: TestClient, project_root: Path
+) -> None:
+    candidate = _save_candidate(project_root)
+    recipe_path = project_root / "sources" / "recipes" / "experimental" / "eursap-jobs.yaml"
+    recipe_path.parent.mkdir(parents=True, exist_ok=True)
+    recipe_path.write_text("source_name: Old\nlisting: {}\n", encoding="utf-8")
+
+    response = client.post(
+        f"/recipe-candidates/{candidate.candidate_id}/approve",
+        data={
+            "source_id": "eursap-jobs",
+            "recipe_path": "sources/recipes/experimental/eursap-jobs.yaml",
+            "overwrite": "1",
+            "next_action": "test",
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/sources/eursap-jobs/test-run?start=1"
+    assert "article.job-card" in recipe_path.read_text(encoding="utf-8")
+    source = SourceRegistryService(project_root).get_source("eursap-jobs")
+    assert source.recipe_path == "sources/recipes/experimental/eursap-jobs.yaml"
+
+
 def test_rejected_candidate_does_not_show_active_approval_form(client: TestClient, project_root: Path) -> None:
     store = RecipeCandidateStore(project_root)
     candidate = _save_candidate(project_root)
@@ -77,7 +105,7 @@ def test_rejected_candidate_does_not_show_active_approval_form(client: TestClien
 
     assert response.status_code == 200
     assert "Reading plan discarded" in response.text
-    assert "Use this reading plan" not in response.text
+    assert "Use plan and run source test" not in response.text
 
 
 def test_approved_candidate_does_not_show_active_approval_form(client: TestClient, project_root: Path) -> None:
@@ -93,7 +121,7 @@ def test_approved_candidate_does_not_show_active_approval_form(client: TestClien
     assert response.status_code == 200
     assert "Reading plan saved" in response.text
     assert "Saved recipe path" in response.text
-    assert "Use this reading plan" not in response.text
+    assert "Use plan and run source test" not in response.text
 
 
 def _save_candidate(project_root: Path):

@@ -122,6 +122,9 @@ class SeenJobRecord:
     last_seen_date: str
     content_hash: str
     status: str = "new"
+    listing_key: str = ""
+    posting_status: str = "active"
+    posting_status_updated_at: str = ""
 
 
 @dataclass

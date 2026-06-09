@@ -11,6 +11,7 @@ from .config import ROOT
 from .io.atomic import atomic_write_text
 from .io.json_store import write_json
 from .models import GeneratedPackage, Job, MatchResult, SourceWarning
+from .store import JobStore
 
 
 def write_job_package(
@@ -25,6 +26,7 @@ def write_job_package(
     state: str = "",
     application_status: str = "unreviewed",
     ai_evaluation: dict | None = None,
+    review_list: bool = True,
 ) -> dict[str, str]:
     slug = slugify(job.title)
     base = root / "output" / str(run_date) / slug
@@ -53,7 +55,7 @@ def write_job_package(
     write_json(
         paths["index"],
         _package_index(
-            job, match, slug, paths, run_id, stable_id, fuzzy_key, state, application_status, True, ai_evaluation
+            job, match, slug, paths, run_id, stable_id, fuzzy_key, state, application_status, True, ai_evaluation, review_list
         ),
     )
 
@@ -71,6 +73,7 @@ def write_placeholder_job_package(
     state: str = "",
     application_status: str = "unreviewed",
     ai_evaluation: dict | None = None,
+    review_list: bool = True,
 ) -> dict[str, str]:
     slug = slugify(job.title)
     base = root / "output" / str(run_date) / slug
@@ -90,7 +93,7 @@ def write_placeholder_job_package(
     write_json(
         paths["index"],
         _package_index(
-            job, match, slug, paths, run_id, stable_id, fuzzy_key, state, application_status, False, ai_evaluation
+            job, match, slug, paths, run_id, stable_id, fuzzy_key, state, application_status, False, ai_evaluation, review_list
         ),
     )
     return {name: str(path) for name, path in paths.items()}
@@ -151,6 +154,7 @@ def _package_index(
     application_status: str,
     materials_generated: bool,
     ai_evaluation: dict | None = None,
+    review_list: bool = True,
 ) -> dict:
     item = {
         "package_id": stable_id or slug,
@@ -174,8 +178,11 @@ def _package_index(
         "concerns": match.concerns,
         "application_url": job.application_url,
         "source_url": job.url,
+        "listing_key": JobStore.listing_key(job),
         "state": state,
         "application_status": application_status,
+        "posting_status": "active",
+        "review_list": review_list,
         "materials_generated": materials_generated,
         "material_status": "generated" if materials_generated else "missing",
         "paths": {name: str(path) for name, path in paths.items() if name != "index"},

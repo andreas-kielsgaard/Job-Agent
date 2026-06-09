@@ -2,17 +2,21 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from inspect import Parameter, signature
 from pathlib import Path
+from typing import Any
 
 from job_agent.config import ROOT
 from job_agent.io.json_store import read_json
 from job_agent.models import Job, SeenJobRecord
-from job_agent.services.extraction_assessment import listing_count_explanations, seen_state_explanation
 from job_agent.services.execution_source_service import ExecutionSourceService
-from job_agent.sources import adapter_for_source
+from job_agent.services.extraction_assessment import listing_count_explanations, seen_state_explanation
+from job_agent.sources import SourceFetchOptions, adapter_for_source
 from job_agent.store import JobStore
 
 SourceTestProgressCallback = Callable[[dict], None]
+SOURCE_TEST_DETAIL_PAGE_LIMIT = 5
+SOURCE_TEST_DETAIL_LISTING_PAGE_SAMPLE_TARGET = 2
 
 
 @dataclass
@@ -51,16 +55,31 @@ class SourceTestResult:
     mode_used: str = ""
     run_steps: list[dict] = field(default_factory=list)
     pagination_configured: bool = False
+    pagination_strategy: str = ""
+    pagination_ajax_url_template_present: bool = False
+    pagination_click_selector_configured: bool = False
     pagination_link_count: int = 0
     pagination_max_pages: int = 1
     pagination_fetch_count: int = 0
     pagination_fetch_attempts: list[str] = field(default_factory=list)
+    pagination_duplicate_page_count: int = 0
+    pagination_duplicate_ratio: float = 0.0
+    pagination_unique_jobs_from_fetched_pages: int = 0
+    interactive_pagination_control_count: int = 0
+    source_access_requires_session: bool = False
+    source_access_session_used: bool = False
+    source_access_session_scope: str = ""
+    source_access_setup_hint: str = ""
+    source_access_session_status: str = ""
+    source_access_session_label: str = ""
+    source_access_login_gate_detected: bool = False
     listing_observed_count: int = 0
     listing_extracted_count: int = 0
     listing_missing_url_count: int = 0
     listing_rejected_count: int = 0
     listing_duplicate_count: int = 0
     listing_limit_skipped_count: int = 0
+    visible_total_job_count: int = 0
     listing_pages: list[dict] = field(default_factory=list)
     seen_new_count: int = 0
     seen_changed_count: int = 0
@@ -70,6 +89,8 @@ class SourceTestResult:
     detail_fetch_limit: int | None = None
     detail_fetch_count: int = 0
     detail_enriched_count: int = 0
+    detail_listing_page_sample_target: int = 0
+    detail_verified_listing_page_count: int = 0
     detail_request_delay_seconds: float = 0.0
     detail_attempts: list[dict] = field(default_factory=list)
     field_checks: list[dict] = field(default_factory=list)
@@ -114,7 +135,7 @@ class SourceTestService:
         try:
             adapter = adapter_for_source(source, self.root)
             _emit_progress(progress_callback, "Source adapter selected", "completed", adapter.__class__.__name__)
-            result = adapter.fetch(progress_callback=progress_callback) if progress_callback else adapter.fetch()
+            result = _fetch_source_test_adapter(adapter, progress_callback)
         except Exception as exc:
             return SourceTestResult(
                 source_id=source_id,
@@ -155,16 +176,31 @@ class SourceTestService:
             mode_used=str(metadata.get("mode_used") or ""),
             run_steps=list(metadata.get("run_steps") or []),
             pagination_configured=bool(metadata.get("pagination_configured", False)),
+            pagination_strategy=str(metadata.get("pagination_strategy") or ""),
+            pagination_ajax_url_template_present=bool(metadata.get("pagination_ajax_url_template_present", False)),
+            pagination_click_selector_configured=bool(metadata.get("pagination_click_selector_configured", False)),
             pagination_link_count=_int(metadata.get("pagination_link_count")),
             pagination_max_pages=_int(metadata.get("pagination_max_pages")) or 1,
             pagination_fetch_count=_int(metadata.get("pagination_fetch_count")),
             pagination_fetch_attempts=[str(item) for item in metadata.get("pagination_fetch_attempts") or []],
+            pagination_duplicate_page_count=_int(metadata.get("pagination_duplicate_page_count")),
+            pagination_duplicate_ratio=float(metadata.get("pagination_duplicate_ratio") or 0.0),
+            pagination_unique_jobs_from_fetched_pages=_int(metadata.get("pagination_unique_jobs_from_fetched_pages")),
+            interactive_pagination_control_count=_int(metadata.get("interactive_pagination_control_count")),
+            source_access_requires_session=bool(metadata.get("source_access_requires_session", False)),
+            source_access_session_used=bool(metadata.get("source_access_session_used", False)),
+            source_access_session_scope=str(metadata.get("source_access_session_scope") or ""),
+            source_access_setup_hint=str(metadata.get("source_access_setup_hint") or ""),
+            source_access_session_status=str(metadata.get("source_access_session_status") or ""),
+            source_access_session_label=str(metadata.get("source_access_session_label") or ""),
+            source_access_login_gate_detected=bool(metadata.get("source_access_login_gate_detected", False)),
             listing_observed_count=_int(metadata.get("listing_observed_count")),
             listing_extracted_count=_int(metadata.get("listing_extracted_count")),
             listing_missing_url_count=_int(metadata.get("listing_missing_url_count")),
             listing_rejected_count=_int(metadata.get("listing_rejected_count")),
             listing_duplicate_count=_int(metadata.get("listing_duplicate_count")),
             listing_limit_skipped_count=_int(metadata.get("listing_limit_skipped_count")),
+            visible_total_job_count=_int(metadata.get("visible_total_job_count")),
             listing_pages=list(metadata.get("listing_pages") or []),
             seen_new_count=seen_counts["new"],
             seen_changed_count=seen_counts["changed"],
@@ -174,6 +210,8 @@ class SourceTestService:
             detail_fetch_limit=_optional_int(metadata.get("detail_fetch_limit")),
             detail_fetch_count=_int(metadata.get("detail_fetch_count")),
             detail_enriched_count=_int(metadata.get("detail_enriched_count")),
+            detail_listing_page_sample_target=_int(metadata.get("detail_listing_page_sample_target")),
+            detail_verified_listing_page_count=_int(metadata.get("detail_verified_listing_page_count")),
             detail_request_delay_seconds=float(metadata.get("detail_request_delay_seconds") or 0.0),
             detail_attempts=list(metadata.get("detail_attempts") or []),
             field_checks=list(metadata.get("field_checks") or []),
@@ -290,6 +328,12 @@ def _count_explanations(job_count: int, metadata: dict, seen_counts: dict[str, i
         duplicates=_int(metadata.get("listing_duplicate_count")),
         limited=_int(metadata.get("listing_limit_skipped_count")),
     )
+    visible_total = _int(metadata.get("visible_total_job_count"))
+    if visible_total and visible_total > job_count:
+        explanations.append(
+            f"Visible total check: the source appears to advertise {visible_total} posting(s), "
+            f"while this test retained {job_count}."
+        )
     seen_note = seen_state_explanation(
         new=seen_counts.get("new", 0),
         changed=seen_counts.get("changed", 0),
@@ -310,3 +354,28 @@ def _emit_progress(
 ) -> None:
     if callback:
         callback({"phase": phase, "status": status, "detail": detail, "capability": capability})
+
+
+def _fetch_source_test_adapter(adapter, progress_callback: SourceTestProgressCallback | None):
+    options = SourceFetchOptions(
+        fetch_details=True,
+        use_source_job_limit=False,
+        use_recipe_card_limit=False,
+        detail_page_limit=SOURCE_TEST_DETAIL_PAGE_LIMIT,
+        detail_listing_page_sample_target=SOURCE_TEST_DETAIL_LISTING_PAGE_SAMPLE_TARGET,
+        pagination_page_limit=0,
+    )
+    kwargs: dict[str, Any] = {}
+    if _adapter_accepts_parameter(adapter, "progress_callback") and progress_callback:
+        kwargs["progress_callback"] = progress_callback
+    if _adapter_accepts_parameter(adapter, "options"):
+        kwargs["options"] = options
+    return adapter.fetch(**kwargs)
+
+
+def _adapter_accepts_parameter(adapter, name: str) -> bool:
+    try:
+        parameters = signature(adapter.fetch).parameters.values()
+    except (TypeError, ValueError):
+        return True
+    return any(parameter.kind == Parameter.VAR_KEYWORD or parameter.name == name for parameter in parameters)

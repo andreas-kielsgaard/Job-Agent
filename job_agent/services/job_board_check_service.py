@@ -238,7 +238,11 @@ def _recipe_findings(preview: Any) -> list[CompatibilityFinding]:
         for check in preview.capability_checks:
             if not (check.expected or check.observed):
                 continue
-            if check.capability == "pagination_navigation" and preview.input_type != "public URL" and check.status == "skipped":
+            if (
+                check.capability in {"pagination_navigation", "pagination_duplicate_pages"}
+                and preview.input_type != "public URL"
+                and check.status == "skipped"
+            ):
                 continue
             findings.append(CompatibilityFinding(check.label, _compatibility_status(check.status), check.detail))
     else:

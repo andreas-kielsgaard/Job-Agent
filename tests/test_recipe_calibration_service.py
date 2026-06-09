@@ -13,6 +13,7 @@ from job_agent.services.recipe_calibration_service import (
     audit_recipe_selectors,
     build_recipe_blueprint,
     capture_recipe_calibration,
+    discover_ajax_pagination_templates,
     discover_candidate_elements,
 )
 
@@ -195,6 +196,96 @@ def test_calibration_writes_expected_artifacts(tmp_path: Path, monkeypatch: pyte
         assert (result.artifact_dir / filename).exists()
 
 
+def test_calibration_auto_mode_keeps_static_when_listing_evidence_exists(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls = []
+
+    def fake_static(url: str, timeout_seconds: int):
+        calls.append("static")
+        return CALIBRATION_HTML, url, []
+
+    def fake_rendered(url: str, timeout_seconds: int):
+        calls.append("rendered")
+        raise AssertionError("Rendered capture should not run when static HTML has enough listing evidence.")
+
+    monkeypatch.setattr("job_agent.services.recipe_calibration_service._fetch_static_html", fake_static)
+    monkeypatch.setattr("job_agent.services.recipe_calibration_service._fetch_rendered_html", fake_rendered)
+
+    result = capture_recipe_calibration(
+        "https://example.com/jobs",
+        root=tmp_path,
+        rendered=None,
+        max_candidates=5,
+        capture_detail=False,
+    )
+
+    assert calls == ["static"]
+    assert result.capture_mode == "static_html"
+
+
+def test_calibration_auto_mode_falls_back_to_rendered_when_static_has_no_jobs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls = []
+    rendered_html = """
+    <main>
+      <article class="job-card">
+        <a href="/jobs/sap-abap">SAP ABAP Consultant</a>
+        <p>SAP contract role.</p>
+      </article>
+      <article class="job-card">
+        <a href="/jobs/sap-basis">SAP Basis Consultant</a>
+        <p>SAP contract role.</p>
+      </article>
+    </main>
+    """
+
+    def fake_static(url: str, timeout_seconds: int):
+        calls.append("static")
+        return "<html><body><div id='app'></div></body></html>", url, []
+
+    def fake_rendered(url: str, timeout_seconds: int):
+        calls.append("rendered")
+        return rendered_html, url, []
+
+    monkeypatch.setattr("job_agent.services.recipe_calibration_service._fetch_static_html", fake_static)
+    monkeypatch.setattr("job_agent.services.recipe_calibration_service._fetch_rendered_html", fake_rendered)
+
+    result = capture_recipe_calibration(
+        "https://example.com/jobs",
+        root=tmp_path,
+        rendered=None,
+        max_candidates=5,
+        capture_detail=False,
+    )
+
+    assert calls == ["static", "rendered"]
+    assert result.capture_mode == "rendered_html"
+    assert result.recipe_extracted_count == 0
+    assert "rendered_html" in (result.artifact_dir / "selector-report.json").read_text(encoding="utf-8")
+
+
+def test_calibration_writes_ajax_pagination_observations(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    html = """
+    <main>
+      <article class="job-card"><a href="/jobs/sap-1">SAP ABAP Consultant</a></article>
+      <button data-url="/api/jobs?query=sap&page=2">Load more</button>
+    </main>
+    """
+
+    def fake_static(url: str, timeout_seconds: int):
+        return html, url, []
+
+    monkeypatch.setattr("job_agent.services.recipe_calibration_service._fetch_static_html", fake_static)
+
+    result = capture_recipe_calibration("https://example.com/jobs", root=tmp_path, max_candidates=5)
+
+    report = (result.artifact_dir / "selector-report.json").read_text(encoding="utf-8")
+    assert "observed_ajax_pagination_templates" in report
+    assert "https://example.com/api/jobs?query=sap&page={page}" in report
+
+
 def test_blueprint_detects_whitehall_style_listing_pagination_and_detail() -> None:
     blueprint = build_recipe_blueprint(
         WHITEHALL_LIST_HTML,
@@ -207,6 +298,7 @@ def test_blueprint_detects_whitehall_style_listing_pagination_and_detail() -> No
 
     assert recipe["listing"]["card_selector"] == "div.job-item"
     assert recipe["listing"]["title_selector"] == "h3 a"
+    assert recipe["pagination"]["strategy"] == "url"
     assert recipe["pagination"]["page_link_selector"] == "a.page-numbers"
     assert recipe["pagination"]["next_selector"] == "a.next.page-numbers"
     assert recipe["pagination"]["max_pages"] == 4
@@ -244,6 +336,7 @@ def test_blueprint_detects_freelancermap_link_rel_and_embedded_pagination() -> N
       <script type="application/json">
       {"initialPagination":"<div class='paginator'><a href='/projects?query=sap&pagenr=2#list'>2</a><a href='/projects?query=sap&pagenr=3#list'>3</a><a href='/projects?query=sap&pagenr=4#list'>4</a></div>"}
       </script>
+      <div class="registration-modal">Sign up free to see more results</div>
     </body></html>
     """
 
@@ -256,9 +349,59 @@ def test_blueprint_detects_freelancermap_link_rel_and_embedded_pagination() -> N
     assert recipe["listing"]["remote_selector"] == '[data-testid="remoteInPercent"]'
     assert recipe["listing"]["posted_date_selector"] == '[data-testid="created"]'
     assert recipe["listing"]["start_date_selector"] == '[data-testid="beginningText"]'
+    assert recipe["pagination"]["strategy"] == "url"
     assert recipe["pagination"]["page_link_selector"] == 'a[href*="pagenr="]'
     assert recipe["pagination"]["next_selector"] == 'link[rel="next"]'
     assert recipe["pagination"]["max_pages"] == 4
+    assert recipe["access"]["requires_session"] is True
+    assert recipe["access"]["session_scope"] == "www.freelancermap.com"
+
+
+def test_blueprint_detects_click_only_pagination_strategy() -> None:
+    html = """
+    <!doctype html>
+    <html><body>
+      <main>
+        <article class="job-card">
+          <h2><a href="/jobs/sap-abap">SAP ABAP Consultant</a></h2>
+          <p>Contract role with RAP and OData.</p>
+        </article>
+        <button class="pagination-next" type="button" aria-label="Next page">Next</button>
+      </main>
+    </body></html>
+    """
+
+    blueprint = build_recipe_blueprint(html, "https://example.com/jobs")
+    recipe = blueprint["recipe"]
+
+    assert recipe["pagination"]["strategy"] == "browser_click"
+    assert recipe["pagination"]["click_selector"] == ".pagination-next"
+
+
+def test_blueprint_detects_ajax_pagination_template() -> None:
+    html = """
+    <!doctype html>
+    <html><body>
+      <main>
+        <article class="job-card">
+          <a class="job-link" href="/jobs/sap-1">SAP ABAP Consultant</a>
+          <p>SAP contract role.</p>
+        </article>
+        <article class="job-card">
+          <a class="job-link" href="/jobs/sap-2">SAP Basis Consultant</a>
+          <p>SAP contract role.</p>
+        </article>
+        <button class="load-more" data-url="/api/jobs?query=sap&page=2">Load more</button>
+      </main>
+    </body></html>
+    """
+
+    blueprint = build_recipe_blueprint(html, "https://example.com/jobs")
+    recipe = blueprint["recipe"]
+
+    assert recipe["pagination"]["strategy"] == "ajax"
+    assert recipe["pagination"]["ajax_url_template"] == "https://example.com/api/jobs?query=sap&page={page}"
+    assert discover_ajax_pagination_templates(html, "https://example.com/jobs")[0]["evidence"] == "button[data-url]"
 
 
 def test_blueprint_uses_table_headers_and_detail_labels_semantically() -> None:

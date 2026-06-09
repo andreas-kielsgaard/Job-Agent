@@ -52,12 +52,12 @@ class ExecutionSourceService:
             }
             projected_sources.append(projected)
             projected_ids.add(registry_source.id)
-        legacy_sources = [
+        config_only_sources = [
             source
             for source in config_sources
             if str(source.get("source_id") or "") not in projected_ids
         ]
-        return legacy_sources + projected_sources
+        return config_only_sources + projected_sources
 
     def find_by_source_id(self, source_id: str) -> dict[str, Any] | None:
         source_id = source_id.strip()

@@ -81,7 +81,7 @@ Set:
 
 ```text
 ANTHROPIC_API_KEY=your_private_key
-CLAUDE_MODEL=claude-sonnet-4-20250514
+CLAUDE_MODEL=claude-sonnet-4-6
 CLAUDE_USE_BY_DEFAULT=false
 ```
 
@@ -179,7 +179,7 @@ The setup page is designed for low-technical editing first:
 
 The uploaded reference CV is stored under ignored `profile/files/` and is linked from each posting detail page so it is easy to upload manually alongside the generated at-a-glance CV.
 
-The default Claude setting is the Sonnet 4 alias `claude-sonnet-4-0`, so it tracks the newest Sonnet 4 snapshot. Anthropic notes that aliases are convenient for development, while stable model IDs such as `claude-sonnet-4-20250514` are better when consistent output matters.
+The default Claude setting is the current Sonnet release, `claude-sonnet-4-6`. Anthropic model IDs are pinned snapshots: newer Claude releases ship under new model IDs rather than updating an existing ID in place. The app maps older saved values such as `claude-sonnet-4-0` to the current default before calling the API.
 
 ## Private Data
 

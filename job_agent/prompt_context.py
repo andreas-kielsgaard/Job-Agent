@@ -7,7 +7,6 @@ from typing import Any
 
 from .config import ROOT
 from .io.json_store import read_json, write_json
-from .services.llm_service import LlmService
 
 APP_CONTEXT = """This is a local-first SAP freelance job preparation application.
 It discovers SAP freelance/contract roles, scores them against a private profile,
@@ -17,9 +16,9 @@ Keep generated text accurate, practical, and suitable for manual review."""
 
 
 FIELD_CONTEXTS = {
-    "profile.skills": "We are editing the structured skills and caveats used for scoring and generated applications. Preserve YAML structure and honest caveats.",
+    "profile.skills": "We are editing the structured skill matrix and caveats used by generated materials and profile context. Preserve YAML structure and honest caveats.",
     "profile.experience": "We are editing structured work experience. Experience keywords are used to select the most relevant projects for tailored CVs.",
-    "profile.canonical_cv": "We are editing the canonical CV text, the source of truth for generation. Keep it factual and machine-readable.",
+    "profile.canonical_cv": "We are editing the CV narrative used as evidence for AI-assisted writing. Keep it factual and machine-readable; structured YAML remains the app behavior source of truth.",
     "profile.writing_style": "We are editing the general writing style used when generating application texts. Prefer clear rules over vague preference statements.",
     "sources": "We are editing job source configuration. Keep YAML valid and avoid enabling unreliable sources without noting limitations.",
     "template.cv": "We are editing a Jinja Markdown template for the at-a-glance CV. Preserve template variables and recruiter-facing tone.",
@@ -160,8 +159,3 @@ class EditContextPreferenceStore:
         data = read_json(self.path, {})
         data[preference.button_id] = asdict(preference)
         write_json(self.path, data)
-
-
-def run_ai_edit(prompt: str, root: Path = ROOT) -> tuple[str, str]:
-    completion = LlmService(root).complete(prompt, max_tokens=2200, purpose="ai_edit")
-    return completion.text, completion.model

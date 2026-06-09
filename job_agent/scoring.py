@@ -1,47 +1,105 @@
 from __future__ import annotations
 
 import re
+from copy import deepcopy
 from datetime import date, datetime
+from typing import Any
 
 from .models import Job, MatchResult
 
-TECH_TERMS = {
-    "abap": 14,
-    "abap oo": 8,
-    "rap": 12,
-    "cds": 10,
-    "cds views": 10,
-    "odata": 10,
-    "gateway": 10,
-    "sap gateway": 10,
-    "s/4hana": 8,
-    "s4hana": 8,
-    "ecc": 6,
-    "debugging": 6,
-    "aunit": 5,
-    "hana performance": 7,
-    "clean core": 6,
-    "bapi": 5,
-    "badi": 5,
-    "user exits": 5,
-}
-
-MODULE_TERMS = {"qm": 7, "wm": 7, "ewm": 7, "mm": 7, "sd": 5, "pp": 5, "cats": 5, "mdg": 5}
-CONTRACT_TERMS = {"contract": 8, "freelance": 8, "interim": 6, "temporary": 4}
 PROJECT_TERMS = ("project manager", "transition manager", "service delivery manager", "coordination", "technical lead")
 FRONTEND_PATTERNS = (r"\bpure\s+fiori\b", r"\bui5\s+frontend\b", r"\bfrontend\s+ui5\b")
 FUNCTIONAL_PATTERNS = (r"\bpure\s+functional\b", r"functional consultant")
 LANGUAGE_NAMES = ("dutch", "french", "portuguese", "german")
+REMOTE_TERMS = ("remote", "hybrid", "work from home", "wfh")
+PERMANENT_TERMS = ("permanent", "permanent employee", "full-time employee", "perm role")
+RULE_MODES = {"bonus", "required"}
+REMOTE_POLICIES = {"required", "strong_preference", "slight_preference", "neutral"}
+PERMANENT_POLICIES = {"exclude", "penalize", "ignore"}
+
+DEFAULT_MATCH_ENGINE_CONFIG: dict[str, Any] = {
+    "remote_policy": "slight_preference",
+    "permanent_policy": "penalize",
+    "permanent_penalty": -25,
+    "technical_cap": 55,
+    "module_cap": 25,
+    "technical_keyword_groups": [
+        {"label": "ABAP core", "terms": ["abap", "sap abap", "abap oo"], "score": 22, "mode": "bonus"},
+        {"label": "RAP", "terms": ["rap", "restful application programming"], "score": 12, "mode": "bonus"},
+        {"label": "CDS", "terms": ["cds", "cds views"], "score": 10, "mode": "bonus"},
+        {"label": "OData / Gateway", "terms": ["odata", "gateway", "sap gateway"], "score": 10, "mode": "bonus"},
+        {"label": "S/4HANA or ECC", "terms": ["s/4hana", "s4hana", "ecc"], "score": 8, "mode": "bonus"},
+        {
+            "label": "Debugging / quality",
+            "terms": ["debugging", "aunit", "hana performance", "clean core"],
+            "score": 8,
+            "mode": "bonus",
+        },
+        {
+            "label": "Classic ABAP APIs",
+            "terms": ["bapi", "badi", "user exits"],
+            "score": 6,
+            "mode": "bonus",
+        },
+    ],
+    "module_keyword_groups": [
+        {"label": "QM", "terms": ["qm", "quality management"], "score": 7, "mode": "bonus"},
+        {"label": "WM", "terms": ["wm", "warehouse management"], "score": 7, "mode": "bonus"},
+        {"label": "EWM", "terms": ["ewm", "extended warehouse management"], "score": 7, "mode": "bonus"},
+        {"label": "MM", "terms": ["mm", "materials management"], "score": 7, "mode": "bonus"},
+        {"label": "SD", "terms": ["sd", "sales and distribution"], "score": 5, "mode": "bonus"},
+        {"label": "PP", "terms": ["pp", "production planning"], "score": 5, "mode": "bonus"},
+        {"label": "CATS", "terms": ["cats"], "score": 5, "mode": "bonus"},
+        {"label": "MDG", "terms": ["mdg"], "score": 5, "mode": "bonus"},
+    ],
+    "contract_keyword_groups": [
+        {"label": "Contract / freelance", "terms": ["contract", "freelance"], "score": 8, "mode": "bonus"},
+        {"label": "Interim", "terms": ["interim"], "score": 6, "mode": "bonus"},
+        {"label": "Temporary", "terms": ["temporary"], "score": 4, "mode": "bonus"},
+    ],
+}
+
+
+def default_match_engine_config() -> dict[str, Any]:
+    return deepcopy(DEFAULT_MATCH_ENGINE_CONFIG)
+
+
+def normalize_match_engine_config(config: dict[str, Any] | None = None) -> dict[str, Any]:
+    config = config if isinstance(config, dict) else {}
+    settings = default_match_engine_config()
+    settings["remote_policy"] = _choice(config.get("remote_policy"), REMOTE_POLICIES, settings["remote_policy"])
+    settings["permanent_policy"] = _choice(
+        config.get("permanent_policy"), PERMANENT_POLICIES, settings["permanent_policy"]
+    )
+    settings["permanent_penalty"] = _int_value(config.get("permanent_penalty"), settings["permanent_penalty"])
+    settings["technical_cap"] = max(0, _int_value(config.get("technical_cap"), settings["technical_cap"]))
+    settings["module_cap"] = max(0, _int_value(config.get("module_cap"), settings["module_cap"]))
+    for key in ["technical_keyword_groups", "module_keyword_groups", "contract_keyword_groups"]:
+        if key in config:
+            settings[key] = _normalize_rules(config.get(key), [])
+    return settings
+
+
+def match_engine_config_from_profile(profile: dict[str, Any]) -> dict[str, Any]:
+    return normalize_match_engine_config(profile.get("match_engine", {}))
 
 
 def score_job(job: Job, profile: dict, today: date | None = None) -> MatchResult:
     today = today or date.today()
+    settings = match_engine_config_from_profile(profile)
     text = _job_text(job)
+    technical_match, technical_matches, missing_technical = _score_rule_groups(
+        text, settings["technical_keyword_groups"], settings["technical_cap"]
+    )
+    module_match, module_matches, missing_modules = _score_rule_groups(
+        text, settings["module_keyword_groups"], settings["module_cap"]
+    )
+    missing_required_rules = missing_technical + missing_modules
     components = {
-        "technical_match": _score_terms(text, TECH_TERMS),
-        "module_match": _score_terms(text, MODULE_TERMS),
-        "contract_fit": _contract_fit(text, job),
-        "location_fit": _location_fit(job, profile),
+        "technical_match": technical_match,
+        "module_match": module_match,
+        "contract_fit": _contract_fit(text, job, settings),
+        "location_fit": _location_fit(job, profile, settings),
         "seniority_fit": _seniority_fit(text),
         "leadership_project_management_interest": _project_interest(text),
         "language_risk": _language_risk(text, job),
@@ -49,16 +107,16 @@ def score_job(job: Job, profile: dict, today: date | None = None) -> MatchResult
         "freshness_risk": _freshness_risk(job, today),
         "rate_visibility_or_rate_fit": _rate_fit(job),
     }
-    matched_keywords = _matched_terms(text, {**TECH_TERMS, **MODULE_TERMS})
+    matched_keywords = _dedupe(technical_matches + module_matches)
     reasons: list[str] = []
     concerns: list[str] = []
     missing_information: list[str] = []
 
-    _add_positive_reasons(components, matched_keywords, reasons)
-    _add_concerns(job, components, text, profile, concerns)
+    _add_positive_reasons(components, technical_matches, module_matches, reasons)
+    _add_concerns(job, components, text, profile, concerns, missing_required_rules, settings)
     _add_missing(job, missing_information)
 
-    exclusion_reason = _exclusion_reason(job, today, text)
+    exclusion_reason = _exclusion_reason(job, today, text, settings, missing_required_rules)
     raw_score = sum(components.values())
     total_score = max(0, min(100, raw_score))
 
@@ -115,32 +173,50 @@ def _job_text(job: Job) -> str:
     ).lower()
 
 
-def _score_terms(text: str, terms: dict[str, int]) -> int:
+def _score_rule_groups(text: str, rules: list[dict[str, Any]], cap: int) -> tuple[int, list[str], list[str]]:
     score = 0
-    for term, points in terms.items():
-        if re.search(rf"\b{re.escape(term)}\b", text):
-            score += points
-    return min(score, 55 if terms is TECH_TERMS else 25)
+    matched: list[str] = []
+    missing_required: list[str] = []
+    for rule in rules:
+        label = str(rule.get("label", "")).strip()
+        terms = [str(term).strip().lower() for term in rule.get("terms", []) if str(term).strip()]
+        if not label or not terms:
+            continue
+        if any(_term_matches(text, term) for term in terms):
+            score += int(rule.get("score", 0))
+            matched.append(label)
+        elif rule.get("mode") == "required":
+            missing_required.append(label)
+    return min(score, cap), matched, missing_required
 
 
-def _contract_fit(text: str, job: Job) -> int:
-    score = _score_terms(text, CONTRACT_TERMS)
-    if job.contract_duration and job.contract_duration != "Not listed":
+def _contract_fit(text: str, job: Job, settings: dict[str, Any]) -> int:
+    if _is_permanent_role(text):
+        if settings["permanent_policy"] == "penalize":
+            return min(0, int(settings.get("permanent_penalty", -25)))
+        return 0
+    score, _matches, _missing = _score_rule_groups(text, settings["contract_keyword_groups"], 20)
+    if _has_listed_value(job.contract_duration):
         score += 5
-    if job.workload and job.workload != "Not listed":
+    if _has_listed_value(job.workload):
         score += 2
     return min(score, 20)
 
 
-def _matched_terms(text: str, terms: dict[str, int]) -> list[str]:
-    return [term.upper() for term in terms if re.search(rf"\b{re.escape(term)}\b", text)]
-
-
-def _location_fit(job: Job, profile: dict) -> int:
+def _location_fit(job: Job, profile: dict, settings: dict[str, Any]) -> int:
+    policy = settings["remote_policy"]
+    if policy == "neutral":
+        return 0
     text = f"{job.location} {job.remote}".lower()
-    if any(term in text for term in ["remote", "hybrid"]):
+    if _is_remote_or_hybrid(job):
+        if policy in {"required", "strong_preference"}:
+            return 12
         return 7
     preferred = profile.get("location_policy", {}).get("preferred_regions", [])
+    if policy == "strong_preference":
+        return -12
+    if policy == "required":
+        return 0
     if any(str(region).split()[0].lower() in text for region in preferred):
         return 6
     if job.location == "Not listed":
@@ -206,7 +282,13 @@ def _rate_fit(job: Job) -> int:
     return 5
 
 
-def _exclusion_reason(job: Job, today: date, text: str) -> str:
+def _exclusion_reason(
+    job: Job,
+    today: date,
+    text: str,
+    settings: dict[str, Any],
+    missing_required_rules: list[str],
+) -> str:
     posted = _parse_date(job.posted_date)
     deadline = _parse_date(job.deadline)
     if posted and (today - posted).days > 120:
@@ -215,16 +297,25 @@ def _exclusion_reason(job: Job, today: date, text: str) -> str:
         return f"Application deadline is more than 3 weeks overdue ({job.deadline})."
     if _language_risk(text, job) <= -25 and "english required" not in text:
         return "Mandatory language requirement appears incompatible."
+    if settings["remote_policy"] == "required" and not _is_remote_or_hybrid(job):
+        return "Remote or hybrid setup is required by match settings."
+    if settings["permanent_policy"] == "exclude" and _is_permanent_role(text):
+        return "Permanent employment is excluded by match settings."
+    if missing_required_rules:
+        return "Required match rule missing: " + ", ".join(missing_required_rules[:5]) + "."
     return ""
 
 
-def _add_positive_reasons(components: dict[str, int], matched_keywords: list[str], reasons: list[str]) -> None:
+def _add_positive_reasons(
+    components: dict[str, int],
+    technical_matches: list[str],
+    module_matches: list[str],
+    reasons: list[str],
+) -> None:
     if components["technical_match"] > 0:
-        reasons.append("Technical SAP overlap: " + ", ".join(matched_keywords[:8]) + ".")
+        reasons.append("Technical SAP overlap: " + ", ".join(technical_matches[:8]) + ".")
     if components["module_match"] > 0:
-        module_hits = [term for term in matched_keywords if term.lower() in MODULE_TERMS]
-        if module_hits:
-            reasons.append("Relevant module exposure: " + ", ".join(module_hits) + ".")
+        reasons.append("Relevant module exposure: " + ", ".join(module_matches[:8]) + ".")
     if components["contract_fit"] > 0:
         reasons.append("Contract/freelance format appears aligned with preferences.")
     if components["leadership_project_management_interest"] > 0:
@@ -233,7 +324,15 @@ def _add_positive_reasons(components: dict[str, int], matched_keywords: list[str
         reasons.append("Location or remote setup appears potentially workable.")
 
 
-def _add_concerns(job: Job, components: dict[str, int], text: str, profile: dict, concerns: list[str]) -> None:
+def _add_concerns(
+    job: Job,
+    components: dict[str, int],
+    text: str,
+    profile: dict,
+    concerns: list[str],
+    missing_required_rules: list[str],
+    settings: dict[str, Any],
+) -> None:
     if components["language_risk"] < 0:
         concerns.append("Language requirement may need manual confirmation.")
     if "fiori" in text or "ui5" in text:
@@ -248,6 +347,12 @@ def _add_concerns(job: Job, components: dict[str, int], text: str, profile: dict
         concerns.append("Freshness is uncertain because no reliable posting date or deadline was found.")
     if components["rate_visibility_or_rate_fit"] < 0:
         concerns.append("Rate or salary is not listed.")
+    if components["contract_fit"] < 0 and _is_permanent_role(text):
+        concerns.append("Permanent employment conflicts with the match settings.")
+    if settings["remote_policy"] in {"required", "strong_preference"} and not _is_remote_or_hybrid(job):
+        concerns.append("Remote or hybrid setup is not visible in the posting.")
+    if missing_required_rules:
+        concerns.append("Missing required match rule: " + ", ".join(missing_required_rules[:5]) + ".")
     if job.source_confidence in {"low", "unknown"}:
         concerns.append("Extraction confidence is low; verify source details manually.")
 
@@ -301,6 +406,56 @@ def _parse_date(value: object) -> date | None:
         except ValueError:
             continue
     return None
+
+
+def _normalize_rules(value: Any, fallback: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    source = value if isinstance(value, list) else fallback
+    rules: list[dict[str, Any]] = []
+    for item in source:
+        if not isinstance(item, dict):
+            continue
+        label = str(item.get("label", "")).strip()
+        terms = _terms_from_value(item.get("terms", []))
+        score = _int_value(item.get("score"), 0)
+        mode = _choice(item.get("mode"), RULE_MODES, "bonus")
+        if label and terms and score > 0:
+            rules.append({"label": label, "terms": terms, "score": score, "mode": mode})
+    return rules
+
+
+def _terms_from_value(value: Any) -> list[str]:
+    parts = value if isinstance(value, list) else re.split(r"[\n,]+", str(value or ""))
+    return _dedupe([str(part).strip().lower() for part in parts if str(part).strip()])
+
+
+def _choice(value: Any, allowed: set[str], default: str) -> str:
+    text = str(value or "").strip()
+    return text if text in allowed else default
+
+
+def _int_value(value: Any, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _term_matches(text: str, term: str) -> bool:
+    term = term.strip().lower()
+    return bool(term and re.search(rf"(?<![a-z0-9]){re.escape(term)}(?![a-z0-9])", text))
+
+
+def _is_remote_or_hybrid(job: Job) -> bool:
+    text = f"{job.location} {job.remote}".lower()
+    return any(term in text for term in REMOTE_TERMS)
+
+
+def _is_permanent_role(text: str) -> bool:
+    return any(_term_matches(text, term) for term in PERMANENT_TERMS)
+
+
+def _has_listed_value(value: str) -> bool:
+    return bool(value and value != "Not listed")
 
 
 def _dedupe(items: list[str]) -> list[str]:

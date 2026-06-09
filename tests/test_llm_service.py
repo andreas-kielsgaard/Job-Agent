@@ -8,11 +8,23 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
-from job_agent.services.llm_service import LlmService
+from job_agent.llm import DEFAULT_CLAUDE_MODEL, LlmService, model_options, normalize_model
 from job_agent.token_usage import TokenUsageStore
 
 
 class LlmServiceTests(unittest.TestCase):
+    def test_model_catalog_is_owned_by_llm_module(self) -> None:
+        options = model_options()
+
+        self.assertEqual(options[0]["value"], DEFAULT_CLAUDE_MODEL)
+        self.assertEqual(options[0]["provider"], "anthropic")
+
+    def test_legacy_model_values_normalize_without_being_new_options(self) -> None:
+        options = model_options()
+
+        self.assertNotIn("claude-sonnet-4-20250514", [option["value"] for option in options])
+        self.assertEqual(normalize_model("claude-sonnet-4-20250514"), DEFAULT_CLAUDE_MODEL)
+
     def test_config_reads_env_file_fresh_and_prefers_it_for_local_setup(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -90,7 +102,9 @@ class LlmServiceTests(unittest.TestCase):
             original = sys.modules.get("anthropic")
             sys.modules["anthropic"] = self._fake_anthropic_not_found_module()
             try:
-                with self.assertRaisesRegex(RuntimeError, "Tried `claude-3-5-haiku-20241022`, `claude-3-5-haiku-latest`"):
+                with self.assertRaisesRegex(
+                    RuntimeError, "Tried `claude-3-5-haiku-20241022`, `claude-haiku-4-5`, `claude-sonnet-4-6`"
+                ):
                     LlmService(root).complete("prompt", max_tokens=10, purpose="recipe_suggestion")
             finally:
                 if original is None:
@@ -116,9 +130,30 @@ class LlmServiceTests(unittest.TestCase):
                 else:
                     sys.modules["anthropic"] = original
 
-            self.assertEqual(calls, ["claude-3-5-haiku-20241022", "claude-3-5-haiku-latest"])
-            self.assertEqual(completion.model, "claude-3-5-haiku-latest")
+            self.assertEqual(calls, ["claude-3-5-haiku-20241022", "claude-haiku-4-5"])
+            self.assertEqual(completion.model, "claude-haiku-4-5")
             self.assertEqual(completion.text, "fallback response")
+
+    def test_legacy_sonnet_default_uses_current_model(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / ".env").write_text(
+                "ANTHROPIC_API_KEY=test-key\nCLAUDE_MODEL=claude-sonnet-4-0\n",
+                encoding="utf-8",
+            )
+            original = sys.modules.get("anthropic")
+            fake_module, calls = self._fake_anthropic_records_models_module()
+            sys.modules["anthropic"] = fake_module
+            try:
+                completion = LlmService(root).complete("prompt", max_tokens=10, purpose="profile_auto_configuration")
+            finally:
+                if original is None:
+                    sys.modules.pop("anthropic", None)
+                else:
+                    sys.modules["anthropic"] = original
+
+            self.assertEqual(calls, [DEFAULT_CLAUDE_MODEL])
+            self.assertEqual(completion.model, DEFAULT_CLAUDE_MODEL)
 
     @staticmethod
     def _fake_anthropic_module() -> types.ModuleType:
@@ -178,6 +213,28 @@ class LlmServiceTests(unittest.TestCase):
                 return SimpleNamespace(
                     usage=SimpleNamespace(input_tokens=2, output_tokens=1),
                     content=[SimpleNamespace(type="text", text="fallback response")],
+                )
+
+        class FakeAnthropic:
+            def __init__(self, api_key: str) -> None:
+                self.api_key = api_key
+                self.messages = FakeMessages()
+
+        module.Anthropic = FakeAnthropic
+        return module, calls
+
+    @staticmethod
+    def _fake_anthropic_records_models_module() -> tuple[types.ModuleType, list[str]]:
+        module = types.ModuleType("anthropic")
+        calls: list[str] = []
+
+        class FakeMessages:
+            @staticmethod
+            def create(**kwargs):
+                calls.append(kwargs["model"])
+                return SimpleNamespace(
+                    usage=SimpleNamespace(input_tokens=2, output_tokens=1),
+                    content=[SimpleNamespace(type="text", text="current response")],
                 )
 
         class FakeAnthropic:

@@ -79,6 +79,7 @@ class SourceStats:
     strong_matches: int = 0
     exploratory_matches: int = 0
     weak_or_excluded_matches: int = 0
+    interesting_count: int = 0
     applied_count: int = 0
     not_interesting_count: int = 0
     unreviewed_count: int = 0
@@ -604,6 +605,7 @@ def _stats_from_packages(packages: list[dict[str, Any]]) -> SourceStats:
         1 for package in packages if package.get("match_category") in {"weak", "excluded"}
     )
     applied_count = sum(1 for package in packages if package.get("application_status") == "applied")
+    interesting_count = sum(1 for package in packages if package.get("application_status") == "interesting")
     not_interesting_count = sum(1 for package in packages if package.get("application_status") == "not_interesting")
     unreviewed_count = sum(1 for package in packages if package.get("application_status", "unreviewed") == "unreviewed")
     average_score = round(mean(scores)) if scores else 0
@@ -621,6 +623,7 @@ def _stats_from_packages(packages: list[dict[str, Any]]) -> SourceStats:
         strong_matches=strong_matches,
         exploratory_matches=exploratory_matches,
         weak_or_excluded_matches=weak_or_excluded_matches,
+        interesting_count=interesting_count,
         applied_count=applied_count,
         not_interesting_count=not_interesting_count,
         unreviewed_count=unreviewed_count,

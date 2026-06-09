@@ -13,7 +13,7 @@
   <div class="row">
     <div style="margin-right:auto;">
       <h2 id="generation-title">Preparing generator</h2>
-      <p class="muted" id="generation-note">The generator is reading the saved sample and building a reading plan for review.</p>
+      <p class="muted" id="generation-note">The generator is reading local evidence and building a replacement reading plan for the next safe source test.</p>
     </div>
     <span class="badge" id="generation-status">{{ run.status }}</span>
   </div>
@@ -44,11 +44,12 @@
     <div class="stat"><span>Strategy</span><strong id="result-strategy">n/a</strong></div>
     <div class="stat"><span>Confidence</span><strong id="result-confidence">n/a</strong></div>
     <div class="stat"><span>Quality</span><strong id="result-quality">n/a</strong></div>
-    <div class="stat"><span>Jobs in local check</span><strong id="result-jobs">0</strong></div>
+    <div class="stat"><span>Jobs in local capture</span><strong id="result-jobs">0</strong></div>
     <div class="stat"><span>Useful titles</span><strong id="result-useful">0</strong></div>
     <div class="stat"><span>Unique URLs</span><strong id="result-urls">0</strong></div>
   </div>
   <div id="result-observations"></div>
+  <div id="source-test-clues"></div>
   <div id="result-notes"></div>
   <div class="action-row" id="result-actions"></div>
 </div>
@@ -143,9 +144,32 @@
       `Recipe blueprint: ${observations.blueprint_present ? "available" : "not available"}`
     ];
     document.getElementById("result-observations").innerHTML = `
-      <h3>Evidence Used</h3>
+      <h3>Calibration Evidence Used</h3>
       <div class="badge-row">${parts.map(item => `<span class="badge">${escapeHtml(item)}</span>`).join("")}</div>
       ${run.evidence_summary ? `<p class="muted">${escapeHtml(run.evidence_summary)}</p>` : ""}
+      <p class="muted">This local capture is a sanity check for selectors. It does not prove full pagination or source access; the safe source test is the next verification step.</p>
+    `;
+  }
+
+  function renderSourceTestClues(run) {
+    const insight = run.source_test_insight || {};
+    const title = insight.insight_title || insight.title || "";
+    if (!title) {
+      document.getElementById("source-test-clues").innerHTML = "";
+      return;
+    }
+    const failed = insight.failed_capabilities || [];
+    const badges = [
+      insight.pagination_strategy_tested ? `Tested pagination: ${insight.pagination_strategy_tested}` : "",
+      insight.visible_total_job_count ? `Advertised total: ${insight.visible_total_job_count}` : "",
+      insight.jobs_reached ? `Jobs reached: ${insight.jobs_reached}` : "",
+      insight.pagination_duplicate_ratio !== undefined ? `Duplicate page ratio: ${insight.pagination_duplicate_ratio}` : ""
+    ].filter(Boolean);
+    document.getElementById("source-test-clues").innerHTML = `
+      <h3>Source Test Failure This Plan Responds To</h3>
+      <p class="muted"><strong>${escapeHtml(title)}</strong>${insight.summary ? ` ${escapeHtml(insight.summary)}` : ""}</p>
+      ${badges.length ? `<div class="badge-row">${badges.map(item => `<span class="badge">${escapeHtml(item)}</span>`).join("")}</div>` : ""}
+      ${failed.length ? `<ul>${failed.map(item => `<li>${escapeHtml(item.capability || "capability")}: ${escapeHtml(item.detail || "")}</li>`).join("")}</ul>` : ""}
     `;
   }
 
@@ -163,11 +187,19 @@
 
   function renderActions(run) {
     const actions = [];
-    if (run.candidate_url) {
-      const candidateLabel = run.generated_recipe_path && run.schema_valid ? "Review reading plan" : "Review generation attempt";
-      actions.push(`<a class="button" href="${escapeHtml(run.candidate_url)}">${candidateLabel}</a>`);
+    if (run.candidate_approval_url && run.generated_recipe_path && run.schema_valid && run.approval_recipe_path) {
+      actions.push(`
+        <form method="post" action="${escapeHtml(run.candidate_approval_url)}" class="inline-form">
+          <input type="hidden" name="source_id" value="{{ source.id }}">
+          <input type="hidden" name="recipe_path" value="${escapeHtml(run.approval_recipe_path)}">
+          <input type="hidden" name="overwrite" value="1">
+          <input type="hidden" name="next_action" value="test">
+          <button type="submit" class="button">Use plan and run source test</button>
+        </form>
+      `);
     }
-    if (run.recipe_review_url) actions.push(`<a class="button light" href="${escapeHtml(run.recipe_review_url)}">Review what it reads</a>`);
+    if (run.candidate_url) actions.push(`<a class="button light" href="${escapeHtml(run.candidate_url)}">Inspect generated plan</a>`);
+    if (run.recipe_review_url) actions.push(`<a class="button light" href="${escapeHtml(run.recipe_review_url)}">Open local calibration preview</a>`);
     if (run.compatibility_url) actions.push(`<a class="button light" href="${escapeHtml(run.compatibility_url)}">Compatibility evidence</a>`);
     if (run.recipe_rules_url) actions.push(`<a class="button light" href="${escapeHtml(run.recipe_rules_url)}">Plan explanation</a>`);
     actions.push(`<a class="button light" href="/sources/{{ source.id }}">Back to source</a>`);
@@ -185,6 +217,7 @@
     document.getElementById("result-useful").innerText = run.useful_titles || 0;
     document.getElementById("result-urls").innerText = run.unique_urls || 0;
     renderObservations(run);
+    renderSourceTestClues(run);
     renderNotes(run);
     renderActions(run);
     if (run.suggested_recipe_yaml) {
@@ -204,7 +237,7 @@
     renderSteps(run);
     if (run.status === "completed") {
       document.getElementById("generation-title").innerText = "Reading plan generated";
-      document.getElementById("generation-note").innerText = "Review the plan and what it found before using it for this source.";
+      document.getElementById("generation-note").innerText = "Use the generated plan, then let the safe source test verify pagination, access, and details against the live source.";
       finishPhases(true);
       renderResult(run);
     } else if (run.status === "failed") {

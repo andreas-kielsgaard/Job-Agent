@@ -1,14 +1,11 @@
 from __future__ import annotations
 
-from pathlib import Path
-
 from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
 
 from job_agent.run_store import RunOptions
-from job_agent.web.dependencies import current_root, run_store, templates
+from job_agent.web.dependencies import templates, workflow_handler
 from job_agent.web.runtime import runtime
-from job_agent.web.view_models.runs import build_run_detail_view, build_run_list_view
 
 router = APIRouter()
 
@@ -32,25 +29,23 @@ def launch_run(
         generate_materials=generate_materials_option,
         is_test=is_test,
     )
-    record = runtime.launch_daily_run(options)
+    record = workflow_handler().executor.launch_daily_run(runtime, options)
     return RedirectResponse(url=f"/runs/{record.run_id}", status_code=303)
 
 
 @router.get("/api/runs/{run_id}/status")
 def run_status(run_id: str) -> JSONResponse:
-    store = run_store()
-    record = store.get(run_id)
-    if not record:
-        raise HTTPException(status_code=404, detail="Run not found")
-    events = store.read_events(run_id, limit=20)
-    latest = events[-1] if events else {}
-    return JSONResponse({"run": record.__dict__, "latest_event": latest, "recent_events": events})
+    try:
+        payload = workflow_handler().executor.run_status_payload(run_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Run not found") from None
+    return JSONResponse(payload)
 
 
 @router.get("/runs", response_class=HTMLResponse)
 def run_list(request: Request, view: str = "active") -> HTMLResponse:
     return templates.TemplateResponse(
-        request, "runs.html", {"request": request, **build_run_list_view(view, current_root())}
+        request, "runs.html", {"request": request, **workflow_handler().executor.run_list_view(view)}
     )
 
 
@@ -60,35 +55,25 @@ def bulk_runs(
 ) -> RedirectResponse:
     if action not in {"archive", "delete", "restore"}:
         raise HTTPException(status_code=400, detail="Unsupported bulk run action")
-    store = run_store()
-    for run_id in run_ids:
-        try:
-            if action == "archive":
-                store.archive(run_id)
-            elif action == "delete":
-                store.soft_delete(run_id)
-            elif action == "restore":
-                store.restore(run_id)
-        except KeyError:
-            continue
+    workflow_handler().executor.apply_bulk_run_action(run_ids, action)
     return RedirectResponse(url=return_to, status_code=303)
 
 
 @router.post("/api/runs/{run_id}/archive")
 def archive_run(run_id: str, return_to: str = Form("/runs")) -> RedirectResponse:
-    run_store().archive(run_id)
+    workflow_handler().executor.apply_run_action(run_id, "archive")
     return RedirectResponse(url=return_to, status_code=303)
 
 
 @router.post("/api/runs/{run_id}/delete")
 def delete_run(run_id: str, return_to: str = Form("/runs")) -> RedirectResponse:
-    run_store().soft_delete(run_id)
+    workflow_handler().executor.apply_run_action(run_id, "delete")
     return RedirectResponse(url=return_to, status_code=303)
 
 
 @router.post("/api/runs/{run_id}/restore")
 def restore_run(run_id: str, return_to: str = Form("/runs")) -> RedirectResponse:
-    run_store().restore(run_id)
+    workflow_handler().executor.apply_run_action(run_id, "restore")
     return RedirectResponse(url=return_to, status_code=303)
 
 
@@ -107,12 +92,11 @@ def run_detail(
     failed: int = 0,
 ) -> HTMLResponse:
     try:
-        view = build_run_detail_view(
+        view = workflow_handler().executor.run_detail_view(
             run_id,
             category,
             app_status,
             source,
-            current_root(),
             only_unreviewed=only_unreviewed,
             ai_prioritized=ai_prioritized,
             materials_missing=materials_missing,
@@ -129,21 +113,17 @@ def run_detail(
 
 @router.get("/runs/{run_id}/log", response_class=HTMLResponse)
 def run_log(request: Request, run_id: str) -> HTMLResponse:
-    record = run_store().get(run_id)
-    if not record:
-        raise HTTPException(status_code=404, detail="Run not found")
-    log_text = (
-        Path(record.run_log_path).read_text(encoding="utf-8")
-        if record.run_log_path and Path(record.run_log_path).exists()
-        else ""
-    )
-    return templates.TemplateResponse(request, "log.html", {"request": request, "run": record, "log_text": log_text})
+    try:
+        context = workflow_handler().executor.run_log_context(run_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Run not found") from None
+    return templates.TemplateResponse(request, "log.html", {"request": request, **context})
 
 
 @router.get("/api/runs/{run_id}/log")
 def run_log_text(run_id: str) -> PlainTextResponse:
-    record = run_store().get(run_id)
-    if not record:
-        raise HTTPException(status_code=404, detail="Run not found")
-    path = Path(record.run_log_path)
-    return PlainTextResponse(path.read_text(encoding="utf-8") if path.exists() else "")
+    try:
+        log_text = workflow_handler().executor.run_log_text(run_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Run not found") from None
+    return PlainTextResponse(log_text)

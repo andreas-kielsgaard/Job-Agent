@@ -21,13 +21,47 @@ router = APIRouter()
 
 @router.get("/jobs", response_class=HTMLResponse)
 def jobs_page(request: Request) -> HTMLResponse:
-    app_statuses = request.query_params.getlist("app_status")
-    categories = request.query_params.getlist("category")
+    filters = {
+        "app_status_includes": _filter_values(request, "app_status_include", legacy="app_status"),
+        "app_status_excludes": _filter_values(request, "app_status_exclude"),
+        "category_includes": _filter_values(request, "category_include", legacy="category"),
+        "category_excludes": _filter_values(request, "category_exclude"),
+        "source_id_includes": _filter_values(request, "source_id_include", legacy="source_id"),
+        "source_id_excludes": _filter_values(request, "source_id_exclude"),
+        "run_id_includes": _filter_values(request, "run_id_include", legacy="run_id"),
+        "run_id_excludes": _filter_values(request, "run_id_exclude"),
+        "date_from": request.query_params.get("date_from", ""),
+        "date_to": request.query_params.get("date_to", ""),
+        "source": request.query_params.get("source", ""),
+        "material_status_includes": _filter_values(request, "material_status_include", legacy="material_status"),
+        "material_status_excludes": _filter_values(request, "material_status_exclude"),
+        "posting_status_includes": _filter_values(request, "posting_status_include"),
+        "posting_status_excludes": _filter_values(request, "posting_status_exclude"),
+        "ai_prioritized": bool(request.query_params.get("ai_prioritized")),
+        "dedupe": request.query_params.get("dedupe", "1") != "0",
+    }
+    return_to = str(request.url.path)
+    if request.url.query:
+        return_to = f"{return_to}?{request.url.query}"
     return templates.TemplateResponse(
         request,
         "jobs.html",
-        {"request": request, **build_jobs_view(app_statuses, categories, current_root())},
+        {"request": request, **build_jobs_view(filters, current_root()), "return_to": return_to},
     )
+
+
+def _filter_values(request: Request, name: str, *, legacy: str = "") -> list[str]:
+    values = [value for value in request.query_params.getlist(name) if value]
+    if legacy:
+        values.extend(value for value in request.query_params.getlist(legacy) if value)
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        if value in seen:
+            continue
+        deduped.append(value)
+        seen.add(value)
+    return deduped
 
 
 @router.post("/api/jobs/bulk-status")

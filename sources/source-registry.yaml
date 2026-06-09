@@ -63,7 +63,7 @@ sources:
   url: https://www.whitehallresources.com/sap-jobs/
   recipe_path: sources/recipes/experimental/whitehall-sap-contract.yaml
   added_at: '2026-05-09'
-  enabled: false
+  enabled: true
   notes: Recipe-backed source using saved Whitehall SAP job-item listing blocks. Not
     connected to daily runs.
   tags:
@@ -73,13 +73,18 @@ sources:
 - id: freelancermap
   name: FreelancerMap
   kind: recipe
-  status: needs_review
+  status: testing
   url: https://www.freelancermap.com/projects?created=30&excludeDachProjects=true&query=sap&sort=2&pagenr=1
   recipe_path: sources/recipes/experimental/freelancermap.yaml
   added_at: '2026-05-22T22:48:43+00:00'
   enabled: false
-  notes: ''
-  tags: []
+  notes: Adopted recipe from candidate 20260605-114505-160663-freelancermap. Adopted
+    recipe from candidate 20260605-141919-448533-freelancermap. Adopted recipe from
+    candidate 20260605-142411-580057-freelancermap. Adopted recipe from candidate
+    20260605-143343-749780-freelancermap. Adopted recipe from candidate 20260605-144303-617645-freelancermap.
+  tags:
+  - recipe
+  - adopted
 - id: accuro
   name: Accuro
   kind: recipe

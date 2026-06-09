@@ -9,6 +9,7 @@ from job_agent.io.json_store import read_json
 from job_agent.run_service import run_daily_agent
 from job_agent.run_store import RunOptions, RunStore
 from job_agent.services.ai_search_service import AiSearchEvaluation
+from job_agent.services.source_session_service import SourceSessionService
 
 
 def test_run_daily_agent_completes_and_writes_outputs(local_yaml_source_project: Path) -> None:
@@ -251,6 +252,115 @@ def test_run_daily_agent_explains_previously_seen_skips(local_yaml_source_projec
     assert "already seen skipped" in source_processed["message"]
 
 
+def test_daily_run_reviews_only_unseen_details_and_leaves_over_limit_jobs_unseen(
+    monkeypatch: pytest.MonkeyPatch, template_project: Path
+) -> None:
+    _write_recipe_source_project(template_project, job_count=3)
+    detail_calls = []
+
+    def fake_fetch_static(url: str, timeout_seconds: int):
+        return _listing_html(3), url, []
+
+    def fake_detail_get(url: str, *args, **kwargs):
+        detail_calls.append(url)
+        return _FakeResponse(
+            f"<main><div class='detail'>Strong ABAP RAP CDS OData Gateway S/4HANA contract role from {url}.</div></main>",
+            url=url,
+        )
+
+    monkeypatch.setattr("job_agent.services.job_board_recipe_service._fetch_static_html", fake_fetch_static)
+    monkeypatch.setattr("requests.get", fake_detail_get)
+
+    first = run_daily_agent(
+        RunOptions(mark_seen=True, generate_materials=False, detail_extraction_limit=2),
+        root=template_project,
+    )
+
+    assert [url.rsplit("/", 1)[-1] for url in detail_calls] == ["job-1", "job-2"]
+    assert len(read_json(template_project / "jobs" / "seen_jobs.json", [])) == 2
+    first_events = RunStore(template_project).read_events(first.record.run_id)
+    first_source = next(event for event in first_events if event["event_type"] == "source_processed")
+    assert first_source["counts"]["jobs_found"] == 3
+    assert first_source["counts"]["reviewed_in_detail_count"] == 2
+    assert first_source["counts"]["detail_limit_skipped_count"] == 1
+
+    detail_calls.clear()
+    second = run_daily_agent(
+        RunOptions(mark_seen=True, generate_materials=False, detail_extraction_limit=2),
+        root=template_project,
+    )
+
+    assert [url.rsplit("/", 1)[-1] for url in detail_calls] == ["job-3"]
+    assert len(read_json(template_project / "jobs" / "seen_jobs.json", [])) == 3
+    second_events = RunStore(template_project).read_events(second.record.run_id)
+    second_source = next(event for event in second_events if event["event_type"] == "source_processed")
+    assert second_source["counts"]["previously_seen_skipped"] == 2
+    assert second_source["counts"]["reviewed_in_detail_count"] == 1
+    assert second_source["counts"]["detail_limit_skipped_count"] == 0
+
+
+def test_daily_run_reuses_connected_session_for_authenticated_detail_review(
+    monkeypatch: pytest.MonkeyPatch, template_project: Path
+) -> None:
+    _write_recipe_source_project(template_project, job_count=1, requires_session=True)
+    state_path = template_project / "sources" / "sessions" / "detail-source.storage-state.json"
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state_path.write_text(
+        '{"cookies": [{"name": "sid", "value": "abc", "domain": "example.com", "path": "/"}], "origins": []}',
+        encoding="utf-8",
+    )
+    SourceSessionService(template_project).record_storage_state(
+        "detail-source",
+        session_scope="example.com",
+        storage_state_path=state_path.relative_to(template_project).as_posix(),
+    )
+    listing_session_paths = []
+    detail_cookie_names = []
+
+    def fake_fetch_static(url: str, timeout_seconds: int, **kwargs):
+        listing_session_paths.append(str(kwargs.get("session_state_path") or ""))
+        return _listing_html(1), url, []
+
+    def fake_detail_get(url: str, *args, **kwargs):
+        detail_cookie_names.extend(cookie.name for cookie in kwargs.get("cookies", []))
+        return _FakeResponse(
+            f"<main><div class='detail'>Strong ABAP RAP CDS OData Gateway S/4HANA contract role from {url}.</div></main>",
+            url=url,
+        )
+
+    monkeypatch.setattr("job_agent.services.job_board_recipe_service._fetch_static_html", fake_fetch_static)
+    monkeypatch.setattr("requests.get", fake_detail_get)
+
+    run_daily_agent(RunOptions(mark_seen=True, generate_materials=False), root=template_project)
+
+    assert any("detail-source.storage-state.json" in path for path in listing_session_paths)
+    assert "sid" in detail_cookie_names
+    assert len(read_json(template_project / "jobs" / "seen_jobs.json", [])) == 1
+
+
+def test_daily_run_skips_source_when_saved_readiness_is_blocked(
+    monkeypatch: pytest.MonkeyPatch, template_project: Path
+) -> None:
+    _write_recipe_source_project(template_project, job_count=1)
+    _write_blocked_source_readiness(template_project)
+    fetch_calls = []
+
+    def fake_fetch_static(url: str, timeout_seconds: int, **kwargs):
+        fetch_calls.append(url)
+        return _listing_html(1), url, []
+
+    monkeypatch.setattr("job_agent.services.job_board_recipe_service._fetch_static_html", fake_fetch_static)
+
+    result = run_daily_agent(RunOptions(mark_seen=True, generate_materials=False), root=template_project)
+
+    events = RunStore(template_project).read_events(result.record.run_id)
+    warnings = [event for event in events if event["event_type"] == "source_warning"]
+    assert fetch_calls == []
+    assert result.record.source_warnings == 1
+    assert read_json(template_project / "jobs" / "seen_jobs.json", []) == []
+    assert any("Saved source readiness is blocked" in event["message"] for event in warnings)
+
+
 def test_generate_materials_false_writes_placeholder_and_skips_generator(
     monkeypatch: pytest.MonkeyPatch, local_yaml_source_project: Path
 ) -> None:
@@ -336,3 +446,113 @@ def _write_two_source_project(root: Path, duplicate: bool = False) -> None:
         "    description: Strong ABAP RAP CDS OData Gateway S/4HANA contract role.\n",
         encoding="utf-8",
     )
+
+
+def _write_recipe_source_project(root: Path, *, job_count: int, requires_session: bool = False) -> None:
+    recipe_path = root / "sources" / "recipes" / "detail-source.yaml"
+    recipe_path.parent.mkdir(parents=True, exist_ok=True)
+    access_yaml = (
+        "access:\n"
+        "  requires_session: true\n"
+        "  session_scope: example.com\n"
+        "  setup_hint: Connect a source session before reading details.\n"
+        if requires_session
+        else ""
+    )
+    recipe_path.write_text(
+        "source_name: Detail Source\n"
+        "mode: static_html\n"
+        f"{access_yaml}"
+        "listing:\n"
+        "  card_selector: article.job-card\n"
+        "  title_selector: a.job-link\n"
+        "  link_selector: a.job-link\n"
+        "  description_selector: .summary\n"
+        "detail:\n"
+        "  follow: true\n"
+        "  description_selector: .detail\n"
+        "  request_delay_seconds: 0\n"
+        "accept:\n"
+        "  url_contains:\n"
+        "    - /jobs/\n",
+        encoding="utf-8",
+    )
+    (root / "sources" / "recruiting-sites.yaml").write_text(
+        "sources:\n"
+        "  - name: Detail Source\n"
+        "    source_id: detail-source\n"
+        "    type: recipe_html\n"
+        "    url: https://example.com/jobs\n"
+        f"    recipe_path: {recipe_path.relative_to(root).as_posix()}\n"
+        "    enabled: true\n",
+        encoding="utf-8",
+    )
+
+
+def _write_blocked_source_readiness(root: Path) -> None:
+    recipe_path = "sources/recipes/detail-source.yaml"
+    (root / "sources" / "source-registry.yaml").write_text(
+        "sources:\n"
+        "  - id: detail-source\n"
+        "    name: Detail Source\n"
+        "    kind: recipe\n"
+        "    status: testing\n"
+        "    url: https://example.com/jobs\n"
+        f"    recipe_path: {recipe_path}\n"
+        "    enabled: true\n",
+        encoding="utf-8",
+    )
+    (root / "sources" / "source-health.yaml").write_text(
+        "sources:\n"
+        "  detail-source:\n"
+        "    last_preview_at: '2026-06-04T00:00:00+00:00'\n"
+        "    extracted_job_count: 1\n"
+        "    useful_titles: 1\n"
+        "    unique_urls: 1\n"
+        "    health_status: good\n"
+        "    health_summary: 1 job extracted, 1 useful title, no generic labels.\n",
+        encoding="utf-8",
+    )
+    (root / "sources" / "source-execution-readiness.yaml").write_text(
+        "sources:\n"
+        "  detail-source:\n"
+        "    last_checked_at: '2999-01-01T00:00:00+00:00'\n"
+        "    dry_run_status: warning\n"
+        "    dry_run_job_count: 1\n"
+        "    dry_run_warning_count: 1\n"
+        "    dry_run_warnings: []\n"
+        "    dry_run_capability_checks:\n"
+        "      - capability: pagination_navigation\n"
+        "        status: fail\n"
+        "        detail: Later listing pages require a verified source session.\n"
+        "    dry_run_pagination_duplicate_page_count: 1\n"
+        "    dry_run_pagination_duplicate_ratio: 1.0\n"
+        "    readiness_status: blocked\n"
+        "    readiness_summary: Blocked.\n"
+        "    checks: {}\n"
+        "    blockers:\n"
+        "      - Pagination verification failed: Later listing pages require a verified source session.\n"
+        "    warnings: []\n",
+        encoding="utf-8",
+    )
+
+
+def _listing_html(job_count: int) -> str:
+    return "\n".join(
+        (
+            "<article class='job-card'>"
+            f"<a class='job-link' href='/jobs/job-{index}'>SAP ABAP Consultant {index}</a>"
+            "<p class='summary'>SAP contract role.</p>"
+            "</article>"
+        )
+        for index in range(1, job_count + 1)
+    )
+
+
+class _FakeResponse:
+    def __init__(self, text: str, url: str = "https://example.com/jobs") -> None:
+        self.text = text
+        self.url = url
+
+    def raise_for_status(self) -> None:
+        return None

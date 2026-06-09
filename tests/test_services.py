@@ -10,6 +10,7 @@ from job_agent.digest import write_job_package
 from job_agent.models import GeneratedPackage, Job, MatchResult
 from job_agent.services.material_service import MaterialService, MaterialUpdate
 from job_agent.services.package_index_service import PackageIndexService
+from job_agent.llm import DEFAULT_CLAUDE_MODEL
 from job_agent.services.setup_service import SetupService
 
 
@@ -61,7 +62,7 @@ class ServiceBoundaryTests(unittest.TestCase):
             root = Path(directory)
             (root / ".env").write_text("ANTHROPIC_API_KEY=secret\nOLD_VALUE=keep\n", encoding="utf-8")
 
-            SetupService(root).save_env_settings("", "claude-sonnet-4-0", True)
+            SetupService(root).save_env_settings("", DEFAULT_CLAUDE_MODEL, True)
 
             env = (root / ".env").read_text(encoding="utf-8")
             self.assertIn("ANTHROPIC_API_KEY=secret", env)

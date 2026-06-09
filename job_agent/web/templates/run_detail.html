@@ -26,8 +26,13 @@
   {% if run_overview.limit_hit_sources %}
   <p><span class="badge warning">Limit reached</span> {{ run_overview.limit_hit_sources|join(", ") }} stopped at a configured extraction limit. Use a source backfill/extended source run before relying on this as a full historical import.</p>
   {% endif %}
+  {% if run_overview.detail_limit_hit_sources %}
+  <p><span class="badge warning">Detail limit reached</span> {{ run_overview.detail_limit_hit_sources|join(", ") }} left new listing jobs waiting for the next run.</p>
+  {% endif %}
   <div class="action-row run-actions">
     <a class="button" href="#proposed-jobs">Review proposed jobs</a>
+    <a class="button light" href="/jobs?run_id={{ run.run_id }}&dedupe=0">View all jobs from this run</a>
+    <a class="button light" href="/jobs?date_from={{ run.started_at[:10] }}&date_to={{ run.started_at[:10] }}">View jobs from this day</a>
     {% if run.digest_path %}<a class="button light" href="/runs/{{ run.run_id }}/log">Open log</a>{% endif %}
     {% if run_overview.materials_missing %}<a class="button light" href="#proposed-jobs">Review missing materials</a>{% endif %}
     <a class="button light" href="#activity-log" onclick="document.getElementById('activity-log').open = true">Show activity log</a>
@@ -68,7 +73,9 @@
         <div><span>Proposed</span><strong>{{ source.included_roles }}</strong></div>
         <div><span>Seen skipped</span><strong>{{ source.previously_seen_skipped }}</strong></div>
         <div><span>Pagination</span><strong>{{ source.pagination_fetch_count }}</strong></div>
+        <div><span>Reviewed in detail</span><strong>{{ source.reviewed_in_detail_count }}</strong></div>
         <div><span>Detail pages</span><strong>{{ source.detail_fetch_count }}</strong></div>
+        <div><span>Waiting detail</span><strong>{{ source.detail_limit_skipped_count }}</strong></div>
         <div><span>Time</span><strong>{% if source.elapsed_time_seconds is not none %}{{ source.elapsed_time_seconds }}s{% else %}running{% endif %}</strong></div>
       </div>
       <p class="muted">{{ source.latest_message or "Waiting to start." }}</p>

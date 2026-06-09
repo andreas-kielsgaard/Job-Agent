@@ -14,4 +14,5 @@ def profile_file(filename: str) -> FileResponse:
         path = cv_reference_service().resolve_profile_file(filename)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Profile file not found") from None
-    return FileResponse(path, filename=path.name)
+    media_type = "application/pdf" if path.suffix.lower() == ".pdf" else None
+    return FileResponse(path, filename=path.name, media_type=media_type, content_disposition_type="inline")

@@ -42,7 +42,7 @@ def build_run_detail_view(
     record = store.get(run_id)
     if not record:
         raise KeyError(run_id)
-    all_packages = PackageIndexService(root).list_packages(run_id)
+    all_packages = [package for package in PackageIndexService(root).list_packages(run_id) if package.get("review_list", True)]
     packages = list(all_packages)
     if category:
         packages = [pkg for pkg in packages if pkg.get("match_category") == category]
@@ -115,6 +115,11 @@ def build_run_overview(
         for event in source_processed
         if int((event.get("counts") or {}).get("listing_limit_skipped_count") or 0) > 0
     ]
+    detail_limit_hit_sources = [
+        event.get("current_source") or "Unknown source"
+        for event in source_processed
+        if int((event.get("counts") or {}).get("detail_limit_skipped_count") or 0) > 0
+    ]
     return {
         "proposed_jobs": len(packages),
         "materials_generated": material_generated,
@@ -123,6 +128,7 @@ def build_run_overview(
         "new_changed": new_changed or record.new_roles + record.changed_roles,
         "previously_seen_skipped": previously_seen_skipped,
         "limit_hit_sources": limit_hit_sources,
+        "detail_limit_hit_sources": detail_limit_hit_sources,
         "is_running": record.status in {"pending", "running"},
         "option_summary": build_option_summary(record.options),
     }
@@ -149,7 +155,14 @@ def build_option_summary(options: dict[str, Any]) -> list[str]:
     if options.get("ai_enhanced_search"):
         labels.append("AI-assisted scoring enabled")
     if options.get("mark_seen"):
-        labels.append("Marks scanned jobs as seen")
+        labels.append("Marks reviewed jobs as seen")
+    detail_limit = options.get("detail_extraction_limit", 25)
+    if detail_limit is None:
+        labels.append("Reviews all new jobs in detail")
+    else:
+        labels.append(f"Reviews up to {detail_limit} new jobs in detail")
+    if options.get("append_to_daily_run"):
+        labels.append("Adds source results to today's daily run")
     return labels
 
 
@@ -376,6 +389,20 @@ def build_source_progress(events: list[dict[str, Any]]) -> dict[str, Any]:
             item["status"] = "running"
             item["activity_count"] += 1
             item["stage"] = _source_stage(event.get("message", ""))
+            if int(counts.get("jobs_found") or 0):
+                item["jobs_found"] = int(counts.get("jobs_found") or 0)
+            if int(counts.get("page_explored_count") or 0):
+                item["page_explored_count"] = int(counts.get("page_explored_count") or 0)
+            if int(counts.get("page_total") or 0):
+                item["page_total"] = int(counts.get("page_total") or 0)
+            if int(counts.get("detail_read_count") or 0):
+                item["detail_read_count"] = int(counts.get("detail_read_count") or 0)
+            if int(counts.get("detail_total") or 0):
+                item["detail_total"] = int(counts.get("detail_total") or 0)
+            if int(counts.get("detail_fetch_count") or 0):
+                item["detail_fetch_count"] = int(counts.get("detail_fetch_count") or 0)
+            if int(counts.get("reviewed_in_detail_count") or 0):
+                item["reviewed_in_detail_count"] = int(counts.get("reviewed_in_detail_count") or 0)
             item["recent_activity"].append(
                 {
                     "timestamp": event.get("timestamp", ""),
@@ -396,6 +423,9 @@ def build_source_progress(events: list[dict[str, Any]]) -> dict[str, Any]:
             item["finished_at"] = event.get("timestamp", "")
             item["stage"] = "Failed"
         elif event_type == "source_processed":
+            item["status"] = "warning" if item["warnings_count"] > 0 else "completed"
+            item["finished_at"] = event.get("timestamp", item.get("finished_at", ""))
+            item["stage"] = "Processed"
             item["new_changed"] = int(counts.get("new_roles") or 0) + int(counts.get("changed_roles") or 0)
             item["previously_seen_skipped"] = int(counts.get("previously_seen_skipped") or 0)
             item["strong_matches"] = int(counts.get("strong_matches") or 0)
@@ -404,8 +434,26 @@ def build_source_progress(events: list[dict[str, Any]]) -> dict[str, Any]:
             item["listing_observed_count"] = int(counts.get("listing_observed_count") or 0)
             item["listing_limit_skipped_count"] = int(counts.get("listing_limit_skipped_count") or 0)
             item["pagination_fetch_count"] = int(counts.get("pagination_fetch_count") or 0)
+            item["page_explored_count"] = max(
+                int(item.get("page_explored_count") or 0),
+                1 + int(counts.get("pagination_fetch_count") or 0),
+            )
+            item["page_total"] = max(
+                int(item.get("page_total") or 0),
+                int(item.get("page_explored_count") or 0),
+            )
             item["detail_fetch_count"] = int(counts.get("detail_fetch_count") or 0)
             item["detail_enriched_count"] = int(counts.get("detail_enriched_count") or 0)
+            item["reviewed_in_detail_count"] = int(counts.get("reviewed_in_detail_count") or 0)
+            item["detail_read_count"] = max(
+                int(item.get("detail_read_count") or 0),
+                int(counts.get("detail_fetch_count") or 0),
+            )
+            item["detail_total"] = max(
+                int(item.get("detail_total") or 0),
+                int(counts.get("reviewed_in_detail_count") or 0),
+            )
+            item["detail_limit_skipped_count"] = int(counts.get("detail_limit_skipped_count") or 0)
 
     for source_index in range(1, source_count + 1):
         items_by_index.setdefault(source_index, _waiting_source_item(source_index, source_count))
@@ -449,8 +497,14 @@ def _waiting_source_item(source_index: int, source_count: int) -> dict[str, Any]
         "listing_observed_count": 0,
         "listing_limit_skipped_count": 0,
         "pagination_fetch_count": 0,
+        "page_explored_count": 0,
+        "page_total": 0,
         "detail_fetch_count": 0,
         "detail_enriched_count": 0,
+        "detail_read_count": 0,
+        "detail_total": 0,
+        "reviewed_in_detail_count": 0,
+        "detail_limit_skipped_count": 0,
     }
 
 

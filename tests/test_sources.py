@@ -16,7 +16,6 @@ from job_agent.sources import (
     SourceAdapter,
     UnsupportedSourceAdapter,
     iter_source_results,
-    load_jobs_from_sources,
 )
 
 
@@ -227,10 +226,9 @@ def test_disabled_recipe_html_source_is_not_loaded(project_root: Path) -> None:
         encoding="utf-8",
     )
 
-    result = load_jobs_from_sources(project_root)
+    results = list(iter_source_results(project_root))
 
-    assert not result.jobs
-    assert not result.warnings
+    assert results == []
 
 
 def test_recipe_html_package_index_includes_source_id(project_root: Path) -> None:
@@ -270,7 +268,7 @@ def test_unsupported_source_adapter_returns_warning(project_root: Path) -> None:
     assert "Unsupported source type" in result.warnings[0].message
 
 
-def test_load_jobs_from_sources_emits_started_and_completed_events(project_root: Path) -> None:
+def test_iter_source_results_emits_started_and_completed_events(project_root: Path) -> None:
     (project_root / "sources" / "recruiting-sites.yaml").write_text(
         "sources:\n  - name: Local Sample\n    type: local_yaml\n    path: jobs/raw/sample_jobs.yaml\n",
         encoding="utf-8",
@@ -281,7 +279,8 @@ def test_load_jobs_from_sources_emits_started_and_completed_events(project_root:
     )
     events = []
 
-    result = load_jobs_from_sources(project_root, progress_callback=events.append)
+    results = list(iter_source_results(project_root, progress_callback=events.append))
+    result = results[0].result
 
     assert len(result.jobs) == 1
     assert events[0].event_type == "source_started"
@@ -325,14 +324,15 @@ def test_iter_source_results_yields_one_result_per_enabled_source_in_order(proje
     assert [len(result.result.jobs) for result in results] == [1, 1]
 
 
-def test_load_jobs_from_sources_emits_warning_without_crashing(project_root: Path) -> None:
+def test_iter_source_results_emits_warning_without_crashing(project_root: Path) -> None:
     (project_root / "sources" / "recruiting-sites.yaml").write_text(
         "sources:\n  - name: Mystery\n    type: unsupported\n",
         encoding="utf-8",
     )
     events = []
 
-    result = load_jobs_from_sources(project_root, progress_callback=events.append)
+    results = list(iter_source_results(project_root, progress_callback=events.append))
+    result = results[0].result
 
     assert not result.jobs
     assert len(result.warnings) == 1
@@ -341,7 +341,7 @@ def test_load_jobs_from_sources_emits_warning_without_crashing(project_root: Pat
     assert "Unsupported source type" in events[1].message
 
 
-def test_load_jobs_from_sources_converts_unexpected_adapter_exception_to_failure(
+def test_iter_source_results_converts_unexpected_adapter_exception_to_failure(
     monkeypatch: pytest.MonkeyPatch, project_root: Path
 ) -> None:
     class BrokenAdapter(SourceAdapter):
@@ -355,7 +355,8 @@ def test_load_jobs_from_sources_converts_unexpected_adapter_exception_to_failure
     monkeypatch.setattr("job_agent.sources.adapter_for_source", lambda source, root: BrokenAdapter(source, root))
     events = []
 
-    result = load_jobs_from_sources(project_root, progress_callback=events.append)
+    results = list(iter_source_results(project_root, progress_callback=events.append))
+    result = results[0].result
 
     assert not result.jobs
     assert len(result.warnings) == 1

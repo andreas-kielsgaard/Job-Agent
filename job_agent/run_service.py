@@ -10,10 +10,14 @@ from .config import ROOT, load_profile
 from .digest import write_daily_digest, write_excluded_summary, write_job_package, write_placeholder_job_package
 from .generator import generate_materials
 from .highlights import build_match_highlights
+from .models import JobState, SourceWarning
 from .run_store import RunEvent, RunOptions, RunRecord, RunStore, utc_now
 from .scoring import score_job
 from .services.ai_search_service import AiSearchEvaluation, AiSearchService, should_ai_evaluate_job
-from .sources import SourceFetchResult, SourceProgressEvent, iter_source_results
+from .services.job_board_recipe_service import enrich_jobs_with_detail_pages_with_trace
+from .services.recipes.mapping import load_job_board_recipe
+from .services.source_session_service import SourceSessionService
+from .sources import SourceFetchOptions, SourceFetchResult, SourceProgressEvent, iter_source_results
 from .store import JobStore
 from .token_usage import TokenUsageStore
 
@@ -28,18 +32,30 @@ class RunResult:
     source_warnings: list = field(default_factory=list)
 
 
+@dataclass
+class DetailReviewResult:
+    states: list[JobState]
+    warnings: list[SourceWarning] = field(default_factory=list)
+    attempts: int = 0
+    enriched: int = 0
+    skipped_for_limit: int = 0
+
+
 def run_daily_agent(
     options: RunOptions,
     progress_callback: ProgressCallback | None = None,
     root: Path = ROOT,
     run_id: str | None = None,
     source_id: str = "",
+    include_disabled_source: bool = False,
+    append_to_existing: bool = False,
 ) -> RunResult:
     run_store = RunStore(root)
     record = run_store.get(run_id) if run_id else None
     if record is None:
         record = run_store.create_run(options)
     run_id = record.run_id
+    existing_totals = _record_totals(record) if append_to_existing else {}
 
     def emit(
         event_type: str,
@@ -84,6 +100,10 @@ def run_daily_agent(
             }
             if event.elapsed_time_seconds is not None:
                 counts["elapsed_time_seconds"] = event.elapsed_time_seconds
+            if event.page_explored_count:
+                counts["page_explored_count"] = event.page_explored_count
+            if event.page_total:
+                counts["page_total"] = event.page_total
             if event.event_type == "source_activity":
                 counts["activity"] = 1
             emit(
@@ -106,12 +126,26 @@ def run_daily_agent(
         excluded_items: list[dict] = []
         processed_states = []
         processed_keys: set[str] = set()
+        remaining_detail_budget = options.detail_extraction_limit
+        fetch_options = SourceFetchOptions(
+            fetch_details=False,
+            use_source_job_limit=False,
+            use_recipe_card_limit=False,
+            pagination_page_limit=0,
+            enforce_saved_readiness=True,
+        )
 
-        for source_fetch in iter_source_results(root, progress_callback=emit_source_progress, source_id=source_id):
+        for source_fetch in iter_source_results(
+            root,
+            progress_callback=emit_source_progress,
+            source_id=source_id,
+            include_disabled=include_disabled_source,
+            fetch_options=fetch_options,
+        ):
             total_loaded += len(source_fetch.result.jobs)
             all_warnings.extend(source_fetch.result.warnings)
-            source_states = store.classify(source_fetch.result.jobs)
-            candidate_states = (
+            source_states = store.classify(source_fetch.result.jobs, identity_only=True)
+            candidate_listing_states = (
                 source_states
                 if options.include_seen
                 else [state for state in source_states if state.status in {"new", "changed"}]
@@ -122,6 +156,39 @@ def run_daily_agent(
             source_counts["changed_candidates"] = status_counts["changed"]
             source_counts["previously_seen"] = status_counts["previously_seen"]
             source_counts["previously_seen_skipped"] = 0 if options.include_seen else status_counts["previously_seen"]
+            detail_review = _prepare_detail_review(
+                source_fetch,
+                candidate_listing_states,
+                store,
+                root,
+                remaining_detail_budget,
+                emit,
+            )
+            candidate_states = detail_review.states
+            all_warnings.extend(detail_review.warnings)
+            source_counts["warnings_count"] += len(detail_review.warnings)
+            source_counts["detail_fetch_count"] = detail_review.attempts
+            source_counts["detail_enriched_count"] = detail_review.enriched
+            source_counts["detail_limit_skipped_count"] = detail_review.skipped_for_limit
+            source_counts["reviewed_in_detail_count"] = len(candidate_states)
+            if remaining_detail_budget is not None and _source_follows_detail_pages(source_fetch):
+                remaining_detail_budget = max(0, remaining_detail_budget - len(candidate_states))
+            if detail_review.skipped_for_limit:
+                emit(
+                    "detail_limit_reached",
+                    (
+                        f"Detail review limit reached for {source_fetch.source_name}: "
+                        f"{detail_review.skipped_for_limit} new job(s) left for the next run."
+                    ),
+                    "source_processing",
+                    current_source=source_fetch.source_name,
+                    counts={
+                        "source_index": source_fetch.source_index,
+                        "source_count": source_fetch.source_count,
+                        "detail_limit_skipped_count": detail_review.skipped_for_limit,
+                        "remaining_detail_budget": remaining_detail_budget or 0,
+                    },
+                )
 
             for index, state in enumerate(candidate_states, start=1):
                 duplicate_key = state.stable_id
@@ -349,6 +416,22 @@ def run_daily_agent(
                     digest_items.append(item)
                     source_counts["included_roles"] += 1
                 else:
+                    paths = write_placeholder_job_package(
+                        job,
+                        match,
+                        run_date,
+                        root=root,
+                        run_id=run_id,
+                        stable_id=state.stable_id,
+                        fuzzy_key=state.fuzzy_key,
+                        state=state.status,
+                        application_status=app_status.status,
+                        ai_evaluation=ai_evaluation.to_index_fields()
+                        if ai_evaluation.status != "missing"
+                        else None,
+                        review_list=False,
+                    )
+                    item["paths"] = paths
                     excluded_items.append(item)
                 processed_states.append(state)
 
@@ -359,6 +442,8 @@ def run_daily_agent(
                 current_source=source_fetch.source_name,
                 counts=source_counts,
             )
+            if detail_review.skipped_for_limit and remaining_detail_budget == 0:
+                break
 
         emit(
             "jobs_loaded",
@@ -378,8 +463,16 @@ def run_daily_agent(
             "source_warnings": len(all_warnings),
         }
 
-        digest_path = write_daily_digest(summary, digest_items, all_warnings, run_date, root=root)
-        excluded_path = write_excluded_summary(excluded_items, all_warnings, run_date, root=root)
+        if append_to_existing and record.digest_path:
+            digest_path = Path(record.digest_path)
+            excluded_path = (
+                Path(record.excluded_path)
+                if record.excluded_path
+                else write_excluded_summary(excluded_items, all_warnings, run_date, root=root)
+            )
+        else:
+            digest_path = write_daily_digest(summary, digest_items, all_warnings, run_date, root=root)
+            excluded_path = write_excluded_summary(excluded_items, all_warnings, run_date, root=root)
         if options.mark_seen and not options.is_test:
             store.mark_seen(processed_states)
             emit("seen_marked", "Processed jobs marked as seen.", "finalize")
@@ -387,19 +480,20 @@ def run_daily_agent(
             emit("seen_mark_skipped", "Test run: processed jobs were not marked as seen.", "finalize")
 
         token_summary = TokenUsageStore(root).summarize(run_id)
+        summary_for_record = _summary_for_record(summary, existing_totals, len(digest_items))
         record = run_store.update(
             run_id,
             status="completed",
             finished_at=utc_now(),
-            total_loaded=summary["total_loaded"],
-            new_roles=summary["new_roles"],
-            changed_roles=summary["changed_roles"],
-            strong_matches=summary["strong_matches"],
-            exploratory_matches=summary["exploratory_matches"],
-            weak_matches=summary["weak_matches"],
-            excluded_roles=summary["excluded_roles"],
-            source_warnings=summary["source_warnings"],
-            generated_job_count=len(digest_items),
+            total_loaded=summary_for_record["total_loaded"],
+            new_roles=summary_for_record["new_roles"],
+            changed_roles=summary_for_record["changed_roles"],
+            strong_matches=summary_for_record["strong_matches"],
+            exploratory_matches=summary_for_record["exploratory_matches"],
+            weak_matches=summary_for_record["weak_matches"],
+            excluded_roles=summary_for_record["excluded_roles"],
+            source_warnings=summary_for_record["source_warnings"],
+            generated_job_count=summary_for_record["generated_job_count"],
             digest_path=str(digest_path),
             excluded_path=str(excluded_path),
             token_usage=token_summary,
@@ -425,6 +519,178 @@ def _store_nested_event(run_store: RunStore, event: RunEvent, progress_callback:
         progress_callback(event)
 
 
+def _prepare_detail_review(
+    source_fetch: SourceFetchResult,
+    listing_states: list[JobState],
+    store: JobStore,
+    root: Path,
+    remaining_detail_budget: int | None,
+    emit: Callable[..., None],
+) -> DetailReviewResult:
+    if not listing_states:
+        return DetailReviewResult(states=[])
+
+    if not _source_follows_detail_pages(source_fetch):
+        jobs = [state.job for state in listing_states]
+        return DetailReviewResult(states=store.classify(jobs))
+
+    if remaining_detail_budget is not None and remaining_detail_budget <= 0:
+        return DetailReviewResult(states=[], skipped_for_limit=len(listing_states))
+
+    selected_states = listing_states if remaining_detail_budget is None else listing_states[:remaining_detail_budget]
+    skipped_for_limit = max(0, len(listing_states) - len(selected_states))
+    jobs = [state.job for state in selected_states]
+    if not jobs:
+        return DetailReviewResult(states=[], skipped_for_limit=skipped_for_limit)
+
+    recipe_path = str(source_fetch.source.get("recipe_path") or "").strip()
+    if not recipe_path:
+        warning = SourceWarning(source_fetch.source_name, "Recipe source has no recipe_path for detail review.")
+        return DetailReviewResult(states=[], warnings=[warning], skipped_for_limit=len(listing_states))
+
+    try:
+        recipe = load_job_board_recipe(root / recipe_path)
+    except (OSError, ValueError) as exc:
+        warning = SourceWarning(source_fetch.source_name, f"Detail review could not load recipe: {exc}")
+        return DetailReviewResult(states=[], warnings=[warning], skipped_for_limit=len(listing_states))
+
+    session_state_path = None
+    if recipe.access.requires_session:
+        session_status = SourceSessionService(root).status_for_source(
+            str(source_fetch.source.get("source_id") or ""),
+            session_scope=recipe.access.session_scope,
+        )
+        if not session_status.usable:
+            warning = SourceWarning(
+                source_fetch.source_name,
+                (
+                    "Detail review needs a connected source session; "
+                    f"current session status is {session_status.label}."
+                ),
+                str(source_fetch.source.get("url") or ""),
+            )
+            return DetailReviewResult(states=[], warnings=[warning], skipped_for_limit=len(listing_states))
+        session_state_path = root / session_status.storage_state_path
+
+    emit(
+        "detail_review_started",
+        f"Reviewing {len(jobs)} new job(s) in detail for {source_fetch.source_name}.",
+        "source_processing",
+        current_source=source_fetch.source_name,
+        counts={
+            "source_index": source_fetch.source_index,
+            "source_count": source_fetch.source_count,
+            "reviewed_in_detail_count": len(jobs),
+            "detail_limit_skipped_count": skipped_for_limit,
+        },
+    )
+
+    detail_progress = {"requested": 0, "read": 0}
+
+    def emit_detail_step(step) -> None:
+        phase = str(getattr(step, "phase", "") or "")
+        if phase == "Detail page request":
+            detail_progress["requested"] = min(len(jobs), detail_progress["requested"] + 1)
+        elif phase in {"Detail page read", "Detail page failed"}:
+            detail_progress["read"] = min(len(jobs), detail_progress["read"] + 1)
+        emit(
+            "source_activity",
+            f"{step.phase}: {step.detail}",
+            "source_ingestion",
+            current_source=source_fetch.source_name,
+            counts={
+                "source_index": source_fetch.source_index,
+                "source_count": source_fetch.source_count,
+                "activity": 1,
+                "detail_read_count": detail_progress["read"],
+                "detail_total": len(jobs),
+                "detail_fetch_count": detail_progress["requested"],
+                "reviewed_in_detail_count": len(jobs),
+            },
+        )
+
+    warnings, attempts = enrich_jobs_with_detail_pages_with_trace(
+        jobs,
+        recipe,
+        detail_page_limit=None,
+        session_state_path=session_state_path,
+        progress_callback=emit_detail_step,
+    )
+    enriched = sum(1 for attempt in attempts if attempt.found_fields)
+    emit(
+        "detail_review_completed",
+        (
+            f"Reviewed {len(jobs)} job(s) in detail for {source_fetch.source_name}: "
+            f"{len(attempts)} detail page(s) opened, {enriched} enriched."
+        ),
+        "source_processing",
+        current_source=source_fetch.source_name,
+        counts={
+            "source_index": source_fetch.source_index,
+            "source_count": source_fetch.source_count,
+            "reviewed_in_detail_count": len(jobs),
+            "detail_fetch_count": len(attempts),
+            "detail_enriched_count": enriched,
+            "detail_limit_skipped_count": skipped_for_limit,
+        },
+    )
+    source_warnings = [SourceWarning(source_fetch.source_name, warning, source_fetch.source.get("url", "")) for warning in warnings]
+    for warning in source_warnings:
+        emit(
+            "source_warning",
+            f"Source warning from {warning.source}: {warning.message}",
+            "source_ingestion",
+            current_source=source_fetch.source_name,
+            counts={
+                "source_index": source_fetch.source_index,
+                "source_count": source_fetch.source_count,
+                "warnings_count": 1,
+            },
+        )
+    return DetailReviewResult(
+        states=store.classify(jobs),
+        warnings=source_warnings,
+        attempts=len(attempts),
+        enriched=enriched,
+        skipped_for_limit=skipped_for_limit,
+    )
+
+
+def _source_follows_detail_pages(source_fetch: SourceFetchResult) -> bool:
+    return bool(source_fetch.result.metadata.get("detail_follow_enabled"))
+
+
+def _record_totals(record: RunRecord) -> dict[str, int]:
+    return {
+        "total_loaded": record.total_loaded,
+        "new_roles": record.new_roles,
+        "changed_roles": record.changed_roles,
+        "strong_matches": record.strong_matches,
+        "exploratory_matches": record.exploratory_matches,
+        "weak_matches": record.weak_matches,
+        "excluded_roles": record.excluded_roles,
+        "source_warnings": record.source_warnings,
+        "generated_job_count": record.generated_job_count,
+    }
+
+
+def _summary_for_record(summary: dict, existing_totals: dict[str, int], generated_job_count: int) -> dict[str, int]:
+    values = {
+        "total_loaded": summary["total_loaded"],
+        "new_roles": summary["new_roles"],
+        "changed_roles": summary["changed_roles"],
+        "strong_matches": summary["strong_matches"],
+        "exploratory_matches": summary["exploratory_matches"],
+        "weak_matches": summary["weak_matches"],
+        "excluded_roles": summary["excluded_roles"],
+        "source_warnings": summary["source_warnings"],
+        "generated_job_count": generated_job_count,
+    }
+    if not existing_totals:
+        return values
+    return {key: existing_totals.get(key, 0) + value for key, value in values.items()}
+
+
 def _new_source_counts(source_fetch: SourceFetchResult) -> dict:
     return {
         "source_index": source_fetch.source_index,
@@ -437,6 +703,8 @@ def _new_source_counts(source_fetch: SourceFetchResult) -> dict:
         "pagination_fetch_count": int(source_fetch.result.metadata.get("pagination_fetch_count") or 0),
         "detail_fetch_count": int(source_fetch.result.metadata.get("detail_fetch_count") or 0),
         "detail_enriched_count": int(source_fetch.result.metadata.get("detail_enriched_count") or 0),
+        "detail_limit_skipped_count": 0,
+        "reviewed_in_detail_count": 0,
         "new_roles": 0,
         "changed_roles": 0,
         "candidates_processed": 0,
@@ -464,9 +732,19 @@ def _source_processed_message(source_fetch: SourceFetchResult, counts: dict) -> 
         if counts.get("previously_seen_skipped")
         else ""
     )
+    detail_text = (
+        f", {counts['reviewed_in_detail_count']} reviewed in detail"
+        if counts.get("reviewed_in_detail_count")
+        else ""
+    )
+    limit_text = (
+        f", {counts['detail_limit_skipped_count']} waiting for next run"
+        if counts.get("detail_limit_skipped_count")
+        else ""
+    )
     return (
         f"Processed source {source_fetch.source_index}/{source_fetch.source_count}: {source_fetch.source_name} - "
-        f"{counts['jobs_found']} jobs, {changed_text} new/changed{seen_text}, "
+        f"{counts['jobs_found']} jobs, {changed_text} new/changed{seen_text}{detail_text}{limit_text}, "
         f"{counts['strong_matches']} strong, {counts['exploratory_matches']} exploratory, "
         f"{counts['highlighted_matches']} highlights, {counts['ai_evaluations_completed']} AI summaries"
     )

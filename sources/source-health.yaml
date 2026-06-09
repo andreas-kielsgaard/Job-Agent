@@ -13,18 +13,21 @@ sources:
     health_status: good
     health_summary: 30 jobs extracted, 30 useful titles, no generic labels.
   freelancermap:
-    last_preview_at: '2026-05-22T22:51:40+00:00'
+    last_preview_at: '2026-06-05T14:55:42+00:00'
     last_input_type: public URL
     last_input_value: https://www.freelancermap.com/projects?created=30&excludeDachProjects=true&query=sap&sort=2&pagenr=1
-    mode_used: static_html
+    mode_used: rendered_html
     extracted_job_count: 22
     useful_titles: 22
     generic_labels: 0
     unique_urls: 22
-    average_description_length: 167
-    warnings: []
-    health_status: good
-    health_summary: 22 jobs extracted, 22 useful titles, no generic labels.
+    average_description_length: 164
+    warnings:
+    - Pagination page https://www.freelancermap.com/projects?categories=&contractTypes=&endcustomer=0&created=30&excludeDachProjects=1&partner=&poster=&posterName=&lastRun=&projectContractTypes=&remoteInPercent=&hideAppliedProjects=&showHiddenProjects=&industry=&excludedCompanies=&matchingSkills=&user=&currentPlatform=5&locale=en&query=sap&queryParts%5B0%5D=sap&continents=&countries=&states=&location=&radius=&city=&subCategories=&keywords=&sort=2&pagenr=2#list
+      returned only listings already seen on earlier pages. The source may require
+      a logged-in session or client-side pagination for later result pages.
+    health_status: warning
+    health_summary: 22 jobs extracted, 1 warnings.
   accuro:
     last_preview_at: '2026-05-22T23:44:14+00:00'
     last_input_type: local artifact

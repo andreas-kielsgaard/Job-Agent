@@ -26,6 +26,8 @@ class RunOptions:
     mark_seen: bool = False
     generate_materials: bool = False
     is_test: bool = False
+    detail_extraction_limit: int | None = 25
+    append_to_daily_run: bool = False
 
 
 @dataclass

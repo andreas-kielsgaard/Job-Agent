@@ -6,12 +6,14 @@ import pytest
 from fastapi.testclient import TestClient
 
 from job_agent.io.yaml_store import read_yaml
+from job_agent.models import Job
 from job_agent.services.execution_source_service import ExecutionSourceService
 from job_agent.services.recipe_preview_service import RecipePreviewResult
-from job_agent.services.source_test_service import SourceTestJobPreview, SourceTestResult
 from job_agent.services.source_execution_readiness_service import SourceExecutionReadinessService
 from job_agent.services.source_health_service import SourceHealthService
+from job_agent.services.source_listing_index_store import SourceListingIndexStore
 from job_agent.services.source_registry_service import SourceRegistryService
+from job_agent.services.source_test_service import SourceTestJobPreview, SourceTestResult
 
 
 def test_source_detail_shows_go_live_readiness_panel(client: TestClient) -> None:
@@ -22,7 +24,7 @@ def test_source_detail_shows_go_live_readiness_panel(client: TestClient) -> None
     assert "This verifies the full source flow without saving jobs" in response.text
 
 
-def test_web_dry_run_readiness_route_saves_readiness(
+def test_web_source_test_route_saves_readiness(
     monkeypatch: pytest.MonkeyPatch,
     client: TestClient,
     project_root: Path,
@@ -33,18 +35,18 @@ def test_web_dry_run_readiness_route_saves_readiness(
         def __init__(self, root):
             pass
 
-        def run_test(self, source_id, *, force_disabled=False):
+        def run_test(self, source_id, *, force_disabled=False, progress_callback=None):
             assert source_id == "eursap-jobs"
             assert force_disabled is True
             return _dry_run_result()
 
-    monkeypatch.setattr("job_agent.web.routers.sources.SourceTestService", FakeSourceTestService)
+    monkeypatch.setattr("job_agent.web.source_workflow.SourceTestService", FakeSourceTestService)
 
-    response = client.post("/sources/eursap-jobs/dry-run-readiness", follow_redirects=False)
+    response = client.post("/sources/eursap-jobs/test-run")
 
     readiness = SourceExecutionReadinessService(project_root).load("eursap-jobs")
-    assert response.status_code == 303
-    assert "message=" in response.headers["location"]
+    assert response.status_code == 200
+    assert response.json()["readiness_status"] == "ready"
     assert readiness.readiness_status == "ready"
     assert readiness.dry_run_job_count == 1
 
@@ -63,6 +65,23 @@ def test_web_enable_when_ready_refuses_blocked_then_enables_ready_source(
     assert config["sources"][0]["enabled"] is False
 
     SourceExecutionReadinessService(project_root).save_from_source_test(_dry_run_result())
+    not_indexed = client.post("/sources/eursap-jobs/enable-when-ready", follow_redirects=False)
+
+    assert not_indexed.status_code == 303
+    assert "Index+job+listings" in not_indexed.headers["location"]
+
+    SourceListingIndexStore(project_root).record_index(
+        source_id="eursap-jobs",
+        source_name="Eursap Jobs",
+        jobs=[
+            Job(
+                title="SAP Basis Consultant",
+                source="Eursap Jobs",
+                source_id="eursap-jobs",
+                url="https://eursap.eu/jobs/sap-basis",
+            )
+        ],
+    )
     enabled = client.post("/sources/eursap-jobs/enable-when-ready", follow_redirects=False)
 
     assert enabled.status_code == 303

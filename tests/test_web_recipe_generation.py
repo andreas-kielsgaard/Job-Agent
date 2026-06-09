@@ -3,11 +3,13 @@ from __future__ import annotations
 import json
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
 
 from job_agent.services.recipe_candidate_service import RecipeCandidateStore
+from job_agent.services.recipe_generation_run_service import RecipeGenerationRunService
 from job_agent.services.recipe_suggestion_service import (
     RecipeRefinementAttempt,
     RecipeRefinementResult,
@@ -27,7 +29,9 @@ limits:
 """
 
 
-def test_source_detail_displays_recipe_generation_controls_and_artifacts(client: TestClient, project_root: Path) -> None:
+def test_source_detail_displays_recipe_generation_controls_and_artifacts(
+    client: TestClient, project_root: Path
+) -> None:
     _write_artifact(project_root)
 
     response = client.get("/sources/eursap-jobs")
@@ -60,6 +64,8 @@ def test_generate_candidate_plain_suggestion_saves_pending_candidate(
     run = _wait_for_generation_run(client, response.headers["location"])
     assert run["status"] == "completed"
     assert run["candidate_id"]
+    assert run["candidate_approval_url"].endswith("/approve")
+    assert run["approval_recipe_path"] == "sources/recipes/experimental/eursap-jobs.yaml"
     assert run["compatibility_url"]
     assert run["recipe_review_url"]
     assert (project_root / run["generated_recipe_path"]).exists()
@@ -68,6 +74,10 @@ def test_generate_candidate_plain_suggestion_saves_pending_candidate(
     candidate = RecipeCandidateStore(project_root).load_candidate(candidates[0].candidate_id)
     assert candidate.status == "pending"
     assert candidate.refinement_used is False
+    page = client.get(response.headers["location"])
+    assert "Use plan and run source test" in page.text
+    assert "Open local calibration preview" in page.text
+    assert "safe source test is the next verification step" in page.text
 
 
 def test_generate_candidate_with_refinement_saves_attempt_history(
@@ -134,7 +144,7 @@ def test_generate_candidate_handles_llm_unavailable_as_redirect_warning(
     assert not RecipeCandidateStore(project_root).list_candidates()
 
 
-def test_learn_source_uses_rendered_capture_by_default(
+def test_learn_source_uses_auto_capture_by_default(
     monkeypatch: pytest.MonkeyPatch, client: TestClient, project_root: Path
 ) -> None:
     source = SourceRegistryService(project_root).add_source(
@@ -148,14 +158,90 @@ def test_learn_source_uses_rendered_capture_by_default(
             captured.update(kwargs)
             return {"run_id": "run-1"}
 
-    monkeypatch.setattr("job_agent.web.routers.sources.recipe_generation_run_service", lambda: RunService())
+    monkeypatch.setattr("job_agent.web.workflows.RecipeGenerationRunService", lambda root: RunService())
 
     response = client.post(f"/sources/{source.id}/reading-plan/learn", follow_redirects=False)
 
     assert response.status_code == 303
     assert response.headers["location"] == f"/sources/{source.id}/recipe-generation/run-1"
-    assert captured["rendered"] is True
+    assert captured["rendered"] is None
     assert captured["capture_detail"] is True
+
+
+def test_generation_service_passes_auto_rendered_mode_to_calibration(
+    monkeypatch: pytest.MonkeyPatch, project_root: Path
+) -> None:
+    source = SourceRegistryService(project_root).add_source(name="Example Jobs", url="https://example.com/jobs")
+    artifact = _write_artifact(project_root)
+    captured: dict[str, object] = {}
+
+    def fake_capture(url, recipe_path, rendered, root, max_candidates, capture_detail):
+        captured.update({"url": url, "recipe_path": recipe_path, "rendered": rendered})
+        return SimpleNamespace(
+            artifact_dir=artifact,
+            warnings=[],
+            candidate_count=1,
+            recipe_extracted_count=0,
+            detail_sample_url="",
+        )
+
+    monkeypatch.setattr("job_agent.services.recipe_generation_run_service.capture_recipe_calibration", fake_capture)
+    monkeypatch.setattr(
+        "job_agent.services.recipe_generation_run_service.suggest_recipe_with_refinement",
+        lambda artifact_path, **kwargs: _refinement(artifact_path),
+    )
+
+    run = RecipeGenerationRunService(project_root).start_from_source_capture(
+        source.id,
+        rendered=None,
+        run_async=False,
+    )
+
+    assert run["status"] == "completed"
+    assert captured["url"] == "https://example.com/jobs"
+    assert captured["rendered"] is None
+
+
+def test_generation_service_uses_rendered_capture_for_client_side_pagination_insight(
+    monkeypatch: pytest.MonkeyPatch, project_root: Path
+) -> None:
+    source = SourceRegistryService(project_root).add_source(name="Example Jobs", url="https://example.com/jobs")
+    artifact = _write_artifact(project_root)
+    captured: dict[str, object] = {}
+
+    def fake_capture(url, recipe_path, rendered, root, max_candidates, capture_detail):
+        captured.update({"url": url, "recipe_path": recipe_path, "rendered": rendered})
+        return SimpleNamespace(
+            artifact_dir=artifact,
+            warnings=[],
+            candidate_count=1,
+            recipe_extracted_count=0,
+            detail_sample_url="",
+        )
+
+    monkeypatch.setattr("job_agent.services.recipe_generation_run_service.capture_recipe_calibration", fake_capture)
+    monkeypatch.setattr(
+        "job_agent.services.recipe_generation_run_service.suggest_recipe_with_refinement",
+        lambda artifact_path, **kwargs: _refinement(artifact_path),
+    )
+
+    run = RecipeGenerationRunService(project_root).start_from_source_capture(
+        source.id,
+        rendered=None,
+        source_test_insight={
+            "insight_title": "Paginated page access failed",
+            "pagination_strategy_tested": "url",
+            "pagination_duplicate_ratio": 1.0,
+            "failed_capabilities": [
+                {"detail": "Later pages may require a logged-in session or client-side pagination."}
+            ],
+        },
+        run_async=False,
+    )
+
+    assert run["status"] == "completed"
+    assert captured["url"] == "https://example.com/jobs"
+    assert captured["rendered"] is True
 
 
 def test_generated_draft_recipe_is_available_in_follow_up_dropdowns(client: TestClient, project_root: Path) -> None:
@@ -261,7 +347,9 @@ def _write_artifact(project_root: Path) -> Path:
     artifact = project_root / "output" / "recipe-calibration" / "eursap-artifact"
     artifact.mkdir(parents=True, exist_ok=True)
     (artifact / "summary.md").write_text("# Eursap\n", encoding="utf-8")
-    (artifact / "page.html").write_text('<a class="looking__card" href="/jobs/sap">SAP Basis Consultant</a>', encoding="utf-8")
+    (artifact / "page.html").write_text(
+        '<a class="looking__card" href="/jobs/sap">SAP Basis Consultant</a>', encoding="utf-8"
+    )
     (artifact / "selector-report.json").write_text(
         json.dumps(
             {

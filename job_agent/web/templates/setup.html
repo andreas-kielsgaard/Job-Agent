@@ -6,40 +6,405 @@
     <h1>Worker Profile</h1>
     <p class="muted">Configure the personal profile, CV reference, preferences, and writing settings the app uses when scoring jobs and preparing application material.</p>
   </div>
-  <div class="source-header-actions">
-    <a class="button light" href="/sources">Manage sources</a>
-    <a class="button light" href="/sources/new">Add source</a>
-  </div>
 </div>
 
-<div class="panel">
-  <h2>Profile Checklist</h2>
-  <div class="source-proof-grid">
-    <div>
-      <span>Personal details</span>
-      <strong>{{ "Ready" if profile.contact.get('name') and profile.contact.get('email') else "Needs details" }}</strong>
-      <p>Name, contact information, title, and location for CVs and form answers.</p>
-    </div>
-    <div>
-      <span>Preferences</span>
-      <strong>{{ "Configured" if profile.preferences.get('thresholds', {}).get('minimum_digest_score') else "Needs review" }}</strong>
-      <p>Availability, location policy, role interests, and digest threshold.</p>
-    </div>
-    <div>
-      <span>Reference CV</span>
-      <strong>{{ "Uploaded" if cv_reference else "Optional" }}</strong>
-      <p>Stored locally and linked from job pages when you apply manually.</p>
-    </div>
-    <div>
-      <span>AI writing</span>
-      <strong>{{ "Configured" if env.get('ANTHROPIC_API_KEY') else "Optional" }}</strong>
-      <p>Used when you choose AI-assisted material generation.</p>
+{% if request.query_params.get("message") %}
+<div class="panel hero-status today"><strong>{{ request.query_params.get("message") }}</strong></div>
+{% endif %}
+{% if request.query_params.get("warning") %}
+<div class="panel"><span class="badge low">{{ request.query_params.get("warning") }}</span></div>
+{% endif %}
+
+{% set contact = profile.contact %}
+{% set prefs = profile.preferences %}
+{% set skills_yaml = profile.get('skills_yaml', {}) %}
+{% set skills = profile.get('skills', {}) %}
+{% set modules = skills.get('modules', {}) %}
+{% set target_roles = skills_yaml.get('target_roles', {}) %}
+{% set experience_entries = profile.get('experience', []) %}
+{% set canonical_cv = profile.get('canonical_cv', '') %}
+{% set writing_style = profile.get('writing_style', '') %}
+{% set availability = prefs.get('availability', {}) %}
+{% set location_policy = prefs.get('location_policy', {}) %}
+{% set basics_ready = contact.get('name') and contact.get('email') %}
+{% set preferences_ready = availability.get('available_from') or location_policy.get('current_base') or location_policy.get('preferred_regions') or prefs.get('thresholds', {}).get('minimum_digest_score') %}
+{% set profile_signals_present = skills.get('strongest') or experience_entries or canonical_cv | trim or writing_style | trim %}
+{% set basics_state = 'available' if basics_ready else 'attention' %}
+{% set preferences_state = 'available' if preferences_ready else 'optional' %}
+{% set profile_signals_state = 'available' if profile_signals_present else 'optional' %}
+{% set skill_matrix_state = 'available' if skills.get('strongest') else 'optional' %}
+{% set case_studies_state = 'available' if experience_entries else 'optional' %}
+{% set writing_reference_state = 'available' if canonical_cv | trim or writing_style | trim else 'optional' %}
+{% set core_present_count = (1 if basics_ready else 0) + (1 if preferences_ready else 0) + (1 if profile_signals_present else 0) %}
+{% set core_total = 3 %}
+{% set draft_ready = cv_profile_draft and cv_profile_draft.get('id') %}
+{% set checklist_state = 'attention' if not basics_ready or draft_ready else 'available' %}
+{% set match_engine_state = 'available' if prefs.get('match_engine') else 'default' %}
+{% set contract_state = profile_contract.status %}
+
+{% macro outline_item(section_id, label, state) -%}
+<a class="setup-outline-item {{ state }}" href="#{{ section_id }}" title="{{ label }}" aria-label="{{ label }} {{ state }}" data-setup-outline-link>
+  <span class="setup-outline-dot"></span>
+  <span class="setup-outline-label">{{ label }}</span>
+</a>
+{%- endmacro %}
+
+{% macro advanced_file_editor(key, item) -%}
+<details class="advanced-file-editor">
+  <summary>
+    <span>{{ item.label }}</span>
+    <span class="muted">{{ item.path }}</span>
+  </summary>
+  <form method="post" action="/setup/file">
+    <p>{{ item.help }}</p>
+    <input type="hidden" name="file_key" value="{{ key }}">
+    <button class="light" type="button" onclick="openAiEdit(this)" data-target="setup-{{ key }}" data-field-id="{{ item.field_id }}" data-button-id="setup.{{ key }}">Edit with AI</button>
+    <textarea id="setup-{{ key }}" name="content">{{ item.content }}</textarea>
+    <button type="submit">Save {{ item.label }}</button>
+  </form>
+</details>
+{%- endmacro %}
+
+<div class="setup-layout">
+  <aside class="setup-sidebar" aria-label="Profile page outline">
+    <nav class="setup-outline">
+      {{ outline_item("profile-checklist", "Checklist", checklist_state) }}
+      {{ outline_item("cv-reference", "CV Reference", "attention" if draft_ready else ("available" if cv_reference else "optional")) }}
+      {% if draft_ready %}{{ outline_item("cv-profile-draft", "CV Draft", "attention") }}{% endif %}
+      {{ outline_item("profile-contract", "Profile Map", contract_state) }}
+      {{ outline_item("profile", "Basics", basics_state) }}
+      {{ outline_item("preferences", "Preferences", preferences_state) }}
+      {{ outline_item("skill-matrix", "Skills", skill_matrix_state) }}
+      {{ outline_item("case-studies", "Cases", case_studies_state) }}
+      {{ outline_item("writing-reference", "Writing", writing_reference_state) }}
+      {{ outline_item("match-engine", "Matchmaking", match_engine_state) }}
+      {{ outline_item("ai-writing", "AI Writing", "available" if env.get('ANTHROPIC_API_KEY') else "optional") }}
+      {{ outline_item("advanced-profile-config", "Advanced", "optional") }}
+    </nav>
+  </aside>
+
+  <main class="setup-main">
+<details class="panel diagnostic-panel profile-detail-section profile-checklist-panel {{ checklist_state }}" id="profile-checklist">
+  <summary>
+    <span>Profile Checklist</span>
+    <span class="profile-summary-meta">
+      <span class="badge {{ 'generated' if core_present_count == core_total else 'waiting' }}">Core: {{ core_present_count }}/{{ core_total }} present</span>
+      <span class="core-key">Basics / Preferences / Profile signals</span>
+      {% if cv_reference %}<span class="badge generated">CV uploaded</span>{% endif %}
+      {% if draft_ready %}<span class="badge draft">Draft ready</span>{% endif %}
+      {% if env.get('ANTHROPIC_API_KEY') %}<span class="badge generated">AI configured</span>{% endif %}
+    </span>
+  </summary>
+  <div class="profile-checklist-body">
+    <div class="profile-checklist-board">
+      <a class="profile-section-card checklist-card {{ basics_state }}" href="#profile">
+        <div class="checklist-card-head">
+          <span class="checklist-visual {{ basics_state }}"><span></span><span></span><span></span></span>
+          <h3>Basics</h3>
+          <span class="badge {{ 'generated' if basics_ready else 'missing' }}">{{ "Has essentials" if basics_ready else "Needs basics" }}</span>
+        </div>
+        <div class="checklist-chip-row">
+          <span>CV header</span>
+          <span>Form answers</span>
+          {% if not contact.get('name') %}<span class="missing">Name</span>{% endif %}
+          {% if not contact.get('email') %}<span class="missing">Email</span>{% endif %}
+        </div>
+      </a>
+      <a class="profile-section-card checklist-card {{ preferences_state }}" href="#preferences">
+        <div class="checklist-card-head">
+          <span class="checklist-visual {{ preferences_state }}"><span></span><span></span><span></span></span>
+          <h3>Preferences</h3>
+          <span class="badge {{ 'generated' if preferences_ready else 'waiting' }}">{{ "Has signals" if preferences_ready else "Not set" }}</span>
+        </div>
+        <div class="checklist-chip-row">
+          <span>Filtering</span>
+          <span>Availability wording</span>
+          {% if availability.get('available_from') %}<span class="present">Availability</span>{% endif %}
+          {% if location_policy.get('preferred_regions') %}<span class="present">Regions</span>{% endif %}
+        </div>
+      </a>
+      <a class="profile-section-card checklist-card {{ profile_signals_state }}" href="#profile-contract">
+        <div class="checklist-card-head">
+          <span class="checklist-visual {{ profile_signals_state }}"><span></span><span></span><span></span></span>
+          <h3>Profile Signals</h3>
+          <span class="badge {{ 'generated' if profile_signals_present else 'waiting' }}">{{ "Has evidence" if profile_signals_present else "Sparse" }}</span>
+        </div>
+        <div class="checklist-chip-row">
+          <span>Match context</span>
+          <span>AI evidence</span>
+          {% if skills.get('strongest') %}<span class="present">Skills</span>{% endif %}
+          {% if experience_entries %}<span class="present">Cases</span>{% endif %}
+          {% if canonical_cv | trim %}<span class="present">CV text</span>{% endif %}
+        </div>
+      </a>
+      <a class="profile-section-card checklist-card {{ 'attention' if draft_ready else ('available' if cv_reference else 'optional') }}" href="{{ '#cv-profile-draft' if draft_ready else '#cv-reference' }}">
+        <div class="checklist-card-head">
+          <span class="checklist-visual {{ 'attention' if draft_ready else ('available' if cv_reference else 'optional') }}"><span></span><span></span><span></span></span>
+          <h3>Reference CV</h3>
+          <span class="badge {{ 'draft' if draft_ready else ('generated' if cv_reference else 'waiting') }}">{% if draft_ready %}Review draft{% elif cv_reference %}Uploaded{% else %}Optional{% endif %}</span>
+        </div>
+        <div class="checklist-chip-row">
+          <span>Import source</span>
+          <span>Review evidence</span>
+          {% if cv_reference and cv_reference.extracted_text %}<span class="present">Text extracted</span>{% endif %}
+        </div>
+      </a>
+      <a class="profile-section-card checklist-card {{ 'available' if env.get('ANTHROPIC_API_KEY') else 'optional' }}" href="#ai-writing">
+        <div class="checklist-card-head">
+          <span class="checklist-visual {{ 'available' if env.get('ANTHROPIC_API_KEY') else 'optional' }}"><span></span><span></span><span></span></span>
+          <h3>AI Writing</h3>
+          <span class="badge {{ 'generated' if env.get('ANTHROPIC_API_KEY') else 'waiting' }}">{{ "Configured" if env.get('ANTHROPIC_API_KEY') else "Optional" }}</span>
+        </div>
+        <div class="checklist-chip-row">
+          <span>CV drafting</span>
+          <span>AI edits</span>
+          {% if configured_claude_model %}<span class="present">Model selected</span>{% endif %}
+        </div>
+      </a>
     </div>
   </div>
-</div>
+</details>
 
-<div class="panel" id="profile">
-  <h2>Profile Basics</h2>
+<details class="panel diagnostic-panel profile-detail-section cv-reference-panel {{ 'has-draft' if draft_ready else '' }}" id="cv-reference">
+  <summary>
+    <span>CV Reference</span>
+    <span class="profile-summary-meta">
+      <span class="badge {{ 'generated' if cv_reference else 'missing' }}">{{ "CV uploaded" if cv_reference else "No CV uploaded" }}</span>
+      {% if draft_ready %}
+      <span class="badge draft">Draft ready</span>
+      <a class="summary-action-link" href="#cv-profile-draft" onclick="event.stopPropagation()">Review draft</a>
+      {% endif %}
+      {% if cv_reference %}<span class="muted">{{ cv_reference.filename }}</span>{% endif %}
+    </span>
+  </summary>
+  <div class="profile-detail-body">
+  <div class="cv-reference-dashboard">
+    <section class="cv-reference-card {{ 'available' if cv_reference else 'optional' }}">
+      <span class="setup-outline-dot"></span>
+      <div>
+        <h3>Reference File</h3>
+        <p>{% if cv_reference %}{{ cv_reference.filename }}{% else %}No CV file uploaded yet.{% endif %}</p>
+      </div>
+    </section>
+    <section class="cv-reference-card {{ 'available' if cv_reference and cv_reference.extracted_text else ('attention' if cv_reference and cv_reference.extraction_error else 'optional') }}">
+      <span class="setup-outline-dot"></span>
+      <div>
+        <h3>Extracted Text</h3>
+        <p>{% if cv_reference and cv_reference.extracted_text %}Available for AI drafting.{% elif cv_reference and cv_reference.extraction_error %}Extraction failed.{% else %}Upload a CV to extract text.{% endif %}</p>
+      </div>
+    </section>
+    <a class="cv-reference-card {{ 'attention' if draft_ready else 'optional' }}" href="{{ '#cv-profile-draft' if draft_ready else '#cv-reference' }}">
+      <span class="setup-outline-dot"></span>
+      <div>
+        <h3>Draft Review</h3>
+        <p>{% if draft_ready %}A generated draft is waiting.{% else %}No unreviewed draft.{% endif %}</p>
+      </div>
+    </a>
+  </div>
+  <div class="cv-reference-workspace">
+    <section class="cv-document-panel">
+      <div class="source-title-row">
+        <h3>Reference Document</h3>
+        {% if cv_reference %}<a class="button light" href="{{ cv_reference.url }}" target="_blank" rel="noreferrer">Open file</a>{% endif %}
+      </div>
+      {% if cv_reference and cv_reference.is_pdf %}
+      <iframe class="cv-pdf-preview" src="{{ cv_reference.url }}#view=FitH" title="Uploaded CV PDF preview"></iframe>
+      {% elif cv_reference %}
+      <div class="empty-state cv-file-state">
+        <h3>{{ cv_reference.filename }}</h3>
+        <p class="muted">Inline preview is currently available for PDF files. This file is still available for extraction and profile drafting.</p>
+      </div>
+      {% else %}
+      <div class="empty-state cv-file-state">
+        <h3>No reference CV uploaded</h3>
+        <p class="muted">Upload a PDF, DOCX, TXT, or Markdown CV to use it as profile evidence.</p>
+      </div>
+      {% endif %}
+    </section>
+
+    <section class="cv-action-panel">
+      {% if draft_ready %}
+      <a class="pending-draft-card" href="#cv-profile-draft">
+        <span>
+          <strong>CV profile draft ready for review</strong>
+          <em>{{ cv_profile_draft.sections | length }} section{{ "" if (cv_profile_draft.sections | length) == 1 else "s" }} drafted from {{ cv_profile_draft.source_label or "CV" }}.</em>
+        </span>
+        <span class="badge draft">Review</span>
+      </a>
+      {% endif %}
+
+      <div class="cv-action-card">
+        <div class="source-title-row">
+          <h3>Stored Evidence</h3>
+          <span class="badge {{ 'generated' if cv_reference else 'waiting' }}">{{ "Available" if cv_reference else "Empty" }}</span>
+        </div>
+        {% if cv_reference %}
+        <div class="profile-signal-list">
+          <span><strong>File</strong><a href="{{ cv_reference.url }}">{{ cv_reference.filename }}</a></span>
+          <span><strong>Extracted text</strong>{{ "Available" if cv_reference.extracted_text else "Missing" }}</span>
+        </div>
+        {% if cv_reference.extraction_error %}
+        <p><span class="badge low">Extraction error</span> {{ cv_reference.extraction_error }}</p>
+        {% endif %}
+        {% else %}
+        <p class="muted">The uploaded CV is evidence for review and import; the structured profile sections below remain the app's source of truth.</p>
+        {% endif %}
+      </div>
+
+      {% if cv_reference %}
+      <form method="post" action="/setup/cv-reference/configure" class="profile-configure-form cv-action-card" data-work-status-form data-work-title="Drafting profile from CV">
+        <h3>Draft Settings From Stored CV</h3>
+        <div class="grid">
+          <label class="check"><input type="checkbox" name="preview_profile_configuration" checked> Preview before applying</label>
+          <label class="check"><input type="checkbox" name="configure_canonical_cv" checked> CV narrative</label>
+          <label class="check"><input type="checkbox" name="configure_skills" checked> Skill matrix and caveats</label>
+          <label class="check"><input type="checkbox" name="configure_experience" checked> Case studies</label>
+          <label class="check"><input type="checkbox" name="configure_preferences"> Availability and constraints</label>
+          <label class="check"><input type="checkbox" name="configure_match_engine"> Matchmaking settings</label>
+        </div>
+        <button type="submit">Draft profile settings from CV</button>
+      </form>
+      {% endif %}
+
+      <form method="post" action="/setup/cv-reference" enctype="multipart/form-data" class="profile-configure-form cv-action-card" data-work-status-form data-work-requires="auto_configure_profile" data-work-title="Drafting profile from uploaded CV">
+        <h3>Upload or Replace CV</h3>
+        <div class="grid">
+          <div><label>CV file</label><input type="file" name="cv_file" accept=".pdf,.docx,.txt,.md"></div>
+          <label class="check"><input type="checkbox" name="extract_to_canonical"> Replace CV narrative without AI</label>
+          <label class="check"><input type="checkbox" name="auto_configure_profile"> Draft selected sections with Claude</label>
+          <label class="check"><input type="checkbox" name="preview_profile_configuration" checked> Preview before applying</label>
+        </div>
+        <div class="grid">
+          <label class="check"><input type="checkbox" name="configure_canonical_cv" checked> CV narrative</label>
+          <label class="check"><input type="checkbox" name="configure_skills" checked> Skill matrix and caveats</label>
+          <label class="check"><input type="checkbox" name="configure_experience" checked> Case studies</label>
+          <label class="check"><input type="checkbox" name="configure_preferences"> Availability and constraints</label>
+          <label class="check"><input type="checkbox" name="configure_match_engine"> Matchmaking settings</label>
+        </div>
+        <button type="submit">Upload CV reference</button>
+      </form>
+    </section>
+  </div>
+
+  {% if cv_reference.extracted_text %}
+  <details class="diagnostic-panel cv-extracted-preview">
+    <summary>Extracted CV text preview</summary>
+    <pre class="copy-source">{{ cv_reference.extracted_text[:3000] }}</pre>
+  </details>
+  {% endif %}
+  </div>
+</details>
+
+{% if cv_profile_draft %}
+<div class="panel hero-status cv-profile-draft-panel" id="cv-profile-draft">
+  <div class="source-title-row">
+    <div>
+      <h2>Review CV Profile Draft</h2>
+      <p class="muted">This draft has not been written yet. Apply only the sections you want to update, or discard it.</p>
+    </div>
+    <span class="badge draft">Unreviewed</span>
+  </div>
+  <div class="profile-map-grid">
+    {% for section in cv_profile_draft.sections %}
+    <div class="profile-section-card {{ 'available' if section.status == 'Ready' else 'attention' }}">
+      <div class="source-title-row">
+        <h3>{{ section.label }}</h3>
+        <span class="badge {{ 'generated' if section.status == 'Ready' else 'missing' }}">{{ section.status }}</span>
+      </div>
+      <p>{{ section.summary }}</p>
+    </div>
+    {% endfor %}
+  </div>
+  <form method="post" action="/setup/cv-reference/apply-draft" class="profile-configure-form">
+    <input type="hidden" name="draft_id" value="{{ cv_profile_draft.id }}">
+    <textarea class="hidden" name="draft_json">{{ cv_profile_draft.json | e }}</textarea>
+    <div class="grid">
+      {% if "canonical_cv" in cv_profile_draft.targets %}<label class="check"><input type="checkbox" name="configure_canonical_cv" checked> Apply CV narrative</label>{% endif %}
+      {% if "skills" in cv_profile_draft.targets %}<label class="check"><input type="checkbox" name="configure_skills" checked> Apply skill matrix and caveats</label>{% endif %}
+      {% if "experience" in cv_profile_draft.targets %}<label class="check"><input type="checkbox" name="configure_experience" checked> Apply case studies</label>{% endif %}
+      {% if "preferences" in cv_profile_draft.targets %}<label class="check"><input type="checkbox" name="configure_preferences" checked> Apply availability and constraints</label>{% endif %}
+      {% if "match_engine" in cv_profile_draft.targets %}<label class="check"><input type="checkbox" name="configure_match_engine" checked> Apply matchmaking settings</label>{% endif %}
+    </div>
+    <div class="action-row">
+      <button type="submit">Apply selected draft sections</button>
+      <button class="danger" type="submit" formaction="/setup/cv-reference/discard-draft" formmethod="post">Discard draft</button>
+    </div>
+  </form>
+</div>
+{% endif %}
+
+<details class="panel diagnostic-panel profile-detail-section profile-map-panel {{ contract_state }}" id="profile-contract">
+  <summary>
+    <span>Profile Map</span>
+    <span class="profile-summary-meta">
+      <span class="badge generated">{{ profile_contract.section_data_count }}/{{ profile_contract.section_count }} sections with data</span>
+      {% if profile_contract.section_empty_count %}<span class="badge waiting">{{ profile_contract.section_empty_count }} empty optional</span>{% endif %}
+      {% if profile_contract.issue_count %}<span class="badge missing">{{ profile_contract.issue_count }} attention item{{ "" if profile_contract.issue_count == 1 else "s" }}</span>{% endif %}
+    </span>
+  </summary>
+  <div class="profile-map-body">
+    <p class="muted">Use this map to see where profile information lives. Empty sections are allowed; attention only means something is broken or needed for generated contact details.</p>
+    <div class="profile-map-grid compact">
+      {% for section in profile_contract.sections %}
+      <a class="profile-section-card {{ section.state }}" href="#{{ section.target_id }}">
+        <div class="source-title-row">
+          <h3>{{ section.label }}</h3>
+          <span class="badge {{ 'generated' if section.state == 'available' else ('missing' if section.state == 'attention' else 'waiting') }}">{{ section.badge }}</span>
+        </div>
+        <p>{{ section.summary }}</p>
+        {% if section.state == "attention" %}
+        <div class="profile-signal-list">
+          {% for signal in section.signals %}
+          <span><strong>{{ signal.label }}</strong>{{ signal.value }}</span>
+          {% endfor %}
+        </div>
+        {% endif %}
+      </a>
+      {% endfor %}
+    </div>
+
+    {% if profile_contract.issue_count %}
+    <details class="diagnostic-panel profile-diagnostics" open>
+      <summary>Needs attention</summary>
+      {% for diagnostic in profile_contract.diagnostics %}
+      {% if diagnostic.severity in ["warning", "error"] %}
+      <div class="profile-diagnostic {{ diagnostic.severity }}">
+        <span class="badge {{ 'low' if diagnostic.severity == 'error' else 'missing' }}">{{ diagnostic.severity }}</span>
+        <div>
+          <strong>{{ diagnostic.title }}</strong>
+          <p>{{ diagnostic.detail }}</p>
+        </div>
+      </div>
+      {% endif %}
+      {% endfor %}
+    </details>
+    {% endif %}
+
+    {% if profile_contract.info_count %}
+    <details class="diagnostic-panel profile-diagnostics technical-notes">
+      <summary>Technical notes</summary>
+      {% for diagnostic in profile_contract.diagnostics %}
+      {% if diagnostic.severity == "info" %}
+      <div class="profile-diagnostic {{ diagnostic.severity }}">
+        <span class="badge waiting">{{ diagnostic.severity }}</span>
+        <div>
+          <strong>{{ diagnostic.title }}</strong>
+          <p>{{ diagnostic.detail }}</p>
+        </div>
+      </div>
+      {% endif %}
+      {% endfor %}
+    </details>
+    {% endif %}
+  </div>
+</details>
+
+<details class="panel diagnostic-panel profile-detail-section {{ basics_state }}" id="profile">
+  <summary>
+    <span>Profile Basics</span>
+    <span class="badge {{ 'generated' if basics_ready else 'missing' }}">{{ "Has essentials" if basics_ready else "Needs basics" }}</span>
+  </summary>
+  <div class="profile-detail-body">
   <p class="muted">These fields are referenced directly in generated CVs, applications, and form-answer packages.</p>
   <details class="diagnostic-panel">
     <summary>How these values are used</summary>
@@ -59,10 +424,15 @@
     <div><label>Kommune</label><input name="kommune" value="{{ profile.contact.get('kommune', '') }}"></div>
     <div><button type="submit">Save profile basics</button></div>
   </form>
-</div>
+  </div>
+</details>
 
-<div class="panel">
-  <h2>Availability and Preferences</h2>
+<details class="panel diagnostic-panel profile-detail-section {{ preferences_state }}" id="preferences">
+  <summary>
+    <span>Availability and Preferences</span>
+    <span class="badge {{ 'generated' if preferences_ready else 'waiting' }}">{{ "Has signals" if preferences_ready else "Not set" }}</span>
+  </summary>
+  <div class="profile-detail-body">
   <p class="muted">These fields influence recruiter-facing wording, location fit, and digest filtering.</p>
   <details class="diagnostic-panel">
     <summary>What can be included here</summary>
@@ -82,33 +452,193 @@
     </div>
     <div><button type="submit">Save preferences</button></div>
   </form>
-</div>
+  </div>
+</details>
 
-<div class="panel" id="cv-reference">
-  <h2>CV Reference Upload</h2>
-  <p class="muted">Upload your full CV as PDF, DOCX, TXT, or Markdown. The file is stored under ignored <code>profile/files/</code> and shown on each job page for easy access when applying manually.</p>
-  {% if cv_reference %}
-  <p><strong>Current reference CV:</strong> <a href="{{ cv_reference.url }}">{{ cv_reference.filename }}</a></p>
-  <p class="muted">{{ cv_reference.path }}</p>
-  {% if cv_reference.extracted_text %}
-  <details class="diagnostic-panel">
-    <summary>Extracted CV text preview</summary>
-    <pre class="copy-source">{{ cv_reference.extracted_text[:3000] }}</pre>
-  </details>
-  {% endif %}
-  {% else %}
-  <p>No reference CV uploaded yet.</p>
-  {% endif %}
-  <form method="post" action="/setup/cv-reference" enctype="multipart/form-data" class="grid">
-    <div><label>CV file</label><input type="file" name="cv_file" accept=".pdf,.docx,.txt,.md"></div>
-    <label class="check"><input type="checkbox" name="extract_to_canonical"> Replace canonical CV text with extracted text</label>
-    <div><button type="submit">Upload CV reference</button></div>
+<details class="panel diagnostic-panel profile-detail-section {{ skill_matrix_state }}" id="skill-matrix">
+  <summary>
+    <span>Skill Matrix</span>
+    <span class="badge {{ 'generated' if skill_matrix_state == 'available' else 'waiting' }}">{{ "Has data" if skill_matrix_state == "available" else "Not set" }}</span>
+  </summary>
+  <div class="profile-detail-body">
+    <p class="muted">Readable view of <code>profile/skills.yaml</code>. The advanced editor below remains available for direct YAML edits.</p>
+    {% if skills.get('strongest') %}
+    <div class="profile-summary-grid">
+      <section>
+        <h3>Strongest Skills</h3>
+        <div class="tag-cloud">
+          {% for item in skills.get('strongest', []) %}
+          <span>{{ item }}</span>
+          {% endfor %}
+        </div>
+      </section>
+      <section>
+        <h3>Modules</h3>
+        <div class="profile-lane-grid">
+          <div>
+            <strong>Strong</strong>
+            <div class="tag-cloud compact">
+              {% for item in modules.get('strong', []) %}<span>{{ item }}</span>{% else %}<span class="empty-chip">None set</span>{% endfor %}
+            </div>
+          </div>
+          <div>
+            <strong>Experienced</strong>
+            <div class="tag-cloud compact">
+              {% for item in modules.get('experienced', []) %}<span>{{ item }}</span>{% else %}<span class="empty-chip">None set</span>{% endfor %}
+            </div>
+          </div>
+          <div>
+            <strong>Adjacent</strong>
+            <div class="tag-cloud compact">
+              {% for item in modules.get('adjacent', []) %}<span>{{ item }}</span>{% else %}<span class="empty-chip">None set</span>{% endfor %}
+            </div>
+          </div>
+        </div>
+      </section>
+      <section>
+        <h3>Target Roles</h3>
+        <div class="profile-lane-grid">
+          <div>
+            <strong>High match</strong>
+            <div class="tag-cloud compact">
+              {% for item in target_roles.get('high_match', []) %}<span>{{ item }}</span>{% else %}<span class="empty-chip">None set</span>{% endfor %}
+            </div>
+          </div>
+          <div>
+            <strong>Exploratory</strong>
+            <div class="tag-cloud compact">
+              {% for item in target_roles.get('exploratory_match', []) %}<span>{{ item }}</span>{% else %}<span class="empty-chip">None set</span>{% endfor %}
+            </div>
+          </div>
+          <div>
+            <strong>Lower match</strong>
+            <div class="tag-cloud compact muted-chip-list">
+              {% for item in target_roles.get('lower_match', []) %}<span>{{ item }}</span>{% else %}<span class="empty-chip">None set</span>{% endfor %}
+            </div>
+          </div>
+        </div>
+      </section>
+      {% if skills.get('caveats') %}
+      <section>
+        <h3>Caveats</h3>
+        <dl class="profile-definition-list">
+          {% for key, value in skills.get('caveats', {}).items() %}
+          <div>
+            <dt>{{ key | replace("_", " ") | title }}</dt>
+            <dd>{{ value }}</dd>
+          </div>
+          {% endfor %}
+        </dl>
+      </section>
+      {% endif %}
+    </div>
+    {% else %}
+    <div class="empty-state">
+      <h3>No structured skills yet</h3>
+      <p class="muted">Upload a CV and draft the skill matrix, or edit the raw skill file in Advanced.</p>
+    </div>
+    {% endif %}
+  </div>
+</details>
+
+<details class="panel diagnostic-panel profile-detail-section {{ case_studies_state }}" id="case-studies">
+  <summary>
+    <span>Case Studies</span>
+    <span class="badge {{ 'generated' if case_studies_state == 'available' else 'waiting' }}">{{ "Has data" if case_studies_state == "available" else "Not set" }}</span>
+  </summary>
+  <div class="profile-detail-body">
+    <p class="muted">Readable view of <code>profile/experience.yaml</code>. These examples are used when application material needs project evidence.</p>
+    {% if experience_entries %}
+    <div class="case-study-list">
+      {% for item in experience_entries %}
+      <article class="case-study-item">
+        <div class="case-study-heading">
+          <h3>{{ item.get('company', 'Experience entry') }}</h3>
+          <span>{{ item.get('role', '') }}</span>
+        </div>
+        {% if item.get('highlights') %}
+        <ul class="compact-list">
+          {% for highlight in item.get('highlights', []) %}
+          <li>{{ highlight }}</li>
+          {% endfor %}
+        </ul>
+        {% endif %}
+        {% if item.get('keywords') %}
+        <div class="tag-cloud compact">
+          {% for keyword in item.get('keywords', []) %}
+          <span>{{ keyword }}</span>
+          {% endfor %}
+        </div>
+        {% endif %}
+      </article>
+      {% endfor %}
+    </div>
+    {% else %}
+    <div class="empty-state">
+      <h3>No case studies yet</h3>
+      <p class="muted">Upload a CV and draft case studies, or edit the raw experience file in Advanced.</p>
+    </div>
+    {% endif %}
+  </div>
+</details>
+
+<details class="panel diagnostic-panel profile-detail-section {{ writing_reference_state }}" id="writing-reference">
+  <summary>
+    <span>Writing Reference</span>
+    <span class="badge {{ 'generated' if writing_reference_state == 'available' else 'waiting' }}">{{ "Has data" if writing_reference_state == "available" else "Not set" }}</span>
+  </summary>
+  <div class="profile-detail-body">
+    <p class="muted">Narrative CV evidence and writing style guidance used by AI-assisted application material.</p>
+    <div class="profile-writing-grid">
+      <section>
+        <h3>CV Narrative</h3>
+        {% if canonical_cv | trim %}
+        <div class="writing-preview">{{ canonical_cv[:1200] }}{% if canonical_cv | length > 1200 %}
+...{% endif %}</div>
+        {% else %}
+        <div class="empty-state"><p class="muted">No CV narrative has been configured.</p></div>
+        {% endif %}
+      </section>
+      <section>
+        <h3>Writing Style</h3>
+        {% if writing_style | trim %}
+        <div class="writing-preview">{{ writing_style[:1200] }}{% if writing_style | length > 1200 %}
+...{% endif %}</div>
+        {% else %}
+        <div class="empty-state"><p class="muted">No writing style guidance has been configured.</p></div>
+        {% endif %}
+      </section>
+    </div>
+  </div>
+</details>
+
+<details class="panel diagnostic-panel profile-detail-section {{ match_engine_state }}" id="match-engine">
+  <summary>
+    <span>Matchmaking Setup</span>
+    <span class="badge {{ 'generated' if match_engine_state == 'available' else 'waiting' }}">{{ "Configured" if match_engine_state == "available" else "Using defaults" }}</span>
+  </summary>
+  <div class="profile-detail-body">
+  <div class="section-heading-row">
+    <p class="muted">Tune how job postings are scored before they reach the digest and job list.</p>
+    <div class="source-header-actions">
+      <a class="button light" href="/match-sandbox">Open scoring sandbox</a>
+    </div>
+  </div>
+  <form method="post" action="/setup/match-engine">
+    {% include "match_engine_controls.html" %}
+    <div class="form-actions">
+      <button type="submit">Save match settings</button>
+    </div>
   </form>
-  <p class="muted">Replacing canonical CV text is immediate. Use it only when you trust the extracted text; otherwise upload the file as a reference and review the canonical CV in advanced settings.</p>
-</div>
+  </div>
+</details>
 
-<div class="panel">
-  <h2>AI Writing</h2>
+<details class="panel diagnostic-panel profile-detail-section {{ 'available' if env.get('ANTHROPIC_API_KEY') else 'optional' }}" id="ai-writing">
+  <summary>
+    <span>AI Writing</span>
+    <span class="badge {{ 'generated' if env.get('ANTHROPIC_API_KEY') else 'waiting' }}">{{ "Configured" if env.get('ANTHROPIC_API_KEY') else "Optional" }}</span>
+  </summary>
+  <div class="profile-detail-body">
   <p class="muted">AI writing is optional. The app can still use deterministic templates when Claude is disabled.</p>
   <form method="post" action="/setup/env" class="grid">
     <div>
@@ -119,7 +649,7 @@
       <label>Claude model</label>
       <select name="claude_model">
         {% for model in model_options %}
-        <option value="{{ model.value }}" {% if env.get('CLAUDE_MODEL', 'claude-sonnet-4-0') == model.value %}selected{% endif %}>{{ model.label }} - {{ model.quality }} / Cost {{ model.price }} / Speed {{ model.speed }}</option>
+        <option value="{{ model.value }}" {% if configured_claude_model == model.value %}selected{% endif %}>{{ model.label }} - {{ model.quality }} / Cost {{ model.price }} / Speed {{ model.speed }}</option>
         {% endfor %}
       </select>
       <details class="diagnostic-panel">
@@ -132,20 +662,16 @@
     <label class="check"><input type="checkbox" name="claude_use_by_default" {% if env.get("CLAUDE_USE_BY_DEFAULT") == "true" %}checked{% endif %}> Use Claude by default in dashboard</label>
     <div><button type="submit">Save AI writing settings</button></div>
   </form>
-</div>
-
-<div class="panel">
-  <h2>Job Sources</h2>
-  <p class="muted">Job boards and recruiter pages now live in the Sources workflow, where they can be reviewed, assigned recipes, compatibility-checked, and tested before daily-run use.</p>
-  <div class="action-row">
-    <a class="button" href="/sources">Manage sources</a>
-    <a class="button light" href="/sources/new">Add source</a>
   </div>
-</div>
+</details>
 
-<details class="panel diagnostic-panel" id="advanced-profile-config">
-  <summary>Advanced profile files and writing templates</summary>
-  <p class="muted">Edit these only when you want direct control over the profile YAML, templates, or prompts. These are not needed for normal source setup.</p>
+<details class="panel diagnostic-panel profile-detail-section optional" id="advanced-profile-config">
+  <summary>
+    <span>Advanced profile files and writing templates</span>
+    <span class="badge waiting">Optional</span>
+  </summary>
+  <div class="profile-detail-body">
+  <p class="muted">Direct file editing for troubleshooting, exact YAML control, and template changes. The readable profile sections above are the normal profile surface.</p>
 
   <details class="diagnostic-panel">
     <summary>Template variable reference</summary>
@@ -160,18 +686,67 @@
     </table>
   </details>
 
-  {% for key, item in files.items() %}
-  <div class="quality-block">
-    <h3>{{ item.label }}</h3>
-    <p class="muted">{{ item.path }}</p>
-    <p>{{ item.help }}</p>
-    <form method="post" action="/setup/file">
-      <input type="hidden" name="file_key" value="{{ key }}">
-      <button class="light" type="button" onclick="openAiEdit(this)" data-target="setup-{{ key }}" data-field-id="{{ item.field_id }}" data-button-id="setup.{{ key }}">Edit with AI</button>
-      <textarea id="setup-{{ key }}" name="content">{{ item.content }}</textarea>
-      <button type="submit">Save {{ item.label }}</button>
-    </form>
+  <details class="diagnostic-panel advanced-file-group">
+    <summary>Raw profile source files</summary>
+    {% for key, item in files.items() if key in ["skills", "experience", "canonical_cv", "writing_style"] %}
+    {{ advanced_file_editor(key, item) }}
+    {% endfor %}
+  </details>
+
+  <details class="diagnostic-panel advanced-file-group">
+    <summary>Writing templates and prompts</summary>
+    {% for key, item in files.items() if key not in ["skills", "experience", "canonical_cv", "writing_style"] %}
+    {{ advanced_file_editor(key, item) }}
+    {% endfor %}
+  </details>
   </div>
-  {% endfor %}
 </details>
+  </main>
+</div>
+
+<script>
+  (() => {
+    const links = Array.from(document.querySelectorAll("[data-setup-outline-link]"));
+    const sections = links
+      .map((link) => document.querySelector(link.getAttribute("href")))
+      .filter(Boolean);
+    if (!links.length || !sections.length) return;
+
+    const linkById = new Map(links.map((link) => [link.getAttribute("href").slice(1), link]));
+    const setActive = (id) => {
+      links.forEach((link) => link.classList.toggle("current", link === linkById.get(id)));
+    };
+
+    document.querySelectorAll('a[href^="#"]').forEach((anchor) => {
+      anchor.addEventListener("click", () => {
+        const href = anchor.getAttribute("href");
+        if (!href || href.length < 2) return;
+        const target = document.querySelector(href);
+        if (target && target.tagName === "DETAILS") target.open = true;
+      });
+    });
+
+    let ticking = false;
+    const updateActiveSection = () => {
+      const activationTop = 130;
+      let current = sections[0];
+      sections.forEach((section) => {
+        if (section.getBoundingClientRect().top <= activationTop) current = section;
+      });
+      setActive(current.id);
+      ticking = false;
+    };
+    const scheduleUpdate = () => {
+      if (!ticking) {
+        window.requestAnimationFrame(updateActiveSection);
+        ticking = true;
+      }
+    };
+
+    window.addEventListener("scroll", scheduleUpdate, { passive: true });
+    window.addEventListener("resize", scheduleUpdate);
+    window.addEventListener("hashchange", scheduleUpdate);
+    updateActiveSection();
+  })();
+</script>
 {% endblock %}

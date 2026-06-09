@@ -2,9 +2,9 @@
 {% block content %}
 <div class="source-detail-header">
   <div>
-    <p class="eyebrow">Recipe review</p>
-    <h1>Review Extraction</h1>
-    <p class="muted">Test whether a recipe can read a source page, follow the navigation it promises, and produce job-report fields.</p>
+    <p class="eyebrow">Source review</p>
+    <h1>Review Found Contents</h1>
+    <p class="muted">For configured sources, this uses safe source-test evidence. For pasted URLs, it runs a bounded recipe preview.</p>
   </div>
   {% if selected_source_id %}
   <a class="button light" href="/sources/{{ selected_source_id }}">Back to source</a>
@@ -13,7 +13,7 @@
 
 <div class="panel">
   <div class="row">
-    <p class="muted" style="margin-right:auto;">A review is a bounded proof run. It samples detail-page and pagination behavior instead of scraping every posting.</p>
+    <p class="muted" style="margin-right:auto;">Configured source reviews show the same capability proof used for setup and daily-run readiness.</p>
     <a class="button light" href="/api/debug/frontend-state" target="_blank" rel="noreferrer">Debug state</a>
   </div>
   <form method="post" action="/recipe-preview" class="source-form" id="recipe-review-form">
@@ -49,19 +49,19 @@
         </select>
       </div>
     </div>
-    <div class="form-actions"><button type="submit">Run review</button></div>
+    <div class="form-actions"><button type="submit">Run source test review</button></div>
   </form>
 </div>
 
-{% if auto_run and not preview %}
+{% if auto_run and not preview and not source_review %}
 <div class="panel running-panel" id="recipe-review-running">
-  <h2>Running review</h2>
-  <p class="muted">Fetching the source page, applying the recipe, checking one detail page, and proving pagination where configured. This may take a moment.</p>
+  <h2>Running source test review</h2>
+  <p class="muted">Running the safe source test, checking detail-page access, and proving pagination where configured. This may take a moment.</p>
   <ol class="progress-steps">
     <li class="active">Resolve source and recipe</li>
     <li>Fetch listing page</li>
     <li>Check detail page and pagination proof</li>
-    <li>Save review result for the source</li>
+    <li>Save source-test evidence for the source</li>
   </ol>
 </div>
 <script>
@@ -76,10 +76,10 @@
 </script>
 {% endif %}
 
-{% if saved_health and saved_health.health_status != "untested" %}
+{% if saved_health and saved_health.health_status != "untested" and source_mode == "custom" %}
 <div class="panel">
-  <h2>Last Saved Review</h2>
-  <p class="muted">This is the latest review saved for the configured source. Running a new review refreshes it.</p>
+  <h2>Last Saved Recipe Preview</h2>
+  <p class="muted">This is the latest saved recipe preview for the configured source.</p>
   <div class="grid">
     <div class="stat"><span>Status</span><strong>{{ saved_health.health_status }}</strong></div>
     <div class="stat"><span>Last preview</span><strong>{{ saved_health.last_preview_at or "Never" }}</strong></div>
@@ -142,6 +142,143 @@
   {% endif %}
 </div>
 {% else %}
+{% if source_review %}
+<div class="panel">
+  <div class="row">
+    <h2 style="margin-right:auto;">Source Test Review</h2>
+    <span class="badge {{ 'high' if source_review.worked else 'medium' if source_review.status not in ['failing', 'not_found'] else 'low' }}">
+      {% if source_review.review_source == "latest_source_test" %}Latest source test{% else %}Fresh source test{% endif %}
+    </span>
+  </div>
+  <p class="muted">{{ source_review.source_name }}{% if source_review.last_checked_at %} tested {{ source_review.last_checked_at }}{% endif %}.</p>
+  <div class="grid">
+    <div class="stat"><span>Readiness</span><strong>{{ source_review.readiness_status|replace("_", " ")|title }}</strong></div>
+    <div class="stat"><span>Source test</span><strong>{{ source_review.status|replace("_", " ")|title }}</strong></div>
+    <div class="stat"><span>Jobs found</span><strong>{{ source_review.job_count }}</strong></div>
+    <div class="stat"><span>Warnings</span><strong>{{ source_review.warning_count }}</strong></div>
+    <div class="stat"><span>Pagination pages fetched</span><strong>{{ source_review.pagination_fetch_count }}</strong></div>
+    <div class="stat"><span>Unique jobs from pagination</span><strong>{{ source_review.pagination_unique_jobs_from_fetched_pages }}</strong></div>
+    <div class="stat"><span>Detail pages read</span><strong>{{ source_review.detail_fetch_count }}</strong></div>
+    <div class="stat"><span>Detail pages proved</span><strong>{{ source_review.detail_verified_listing_page_count }}</strong></div>
+  </div>
+  {% if source_review.stale %}
+  <p><span class="badge medium">Previous source-test details are from an older reading plan.</span></p>
+  {% endif %}
+  <p><strong>Summary:</strong> {{ source_review.summary }}</p>
+  {% if source_review.source_test_insight %}
+  <div class="source-blockers">
+    <strong>{{ source_review.source_test_insight.title }}</strong>
+    <p>{{ source_review.source_test_insight.summary }}</p>
+    <p class="muted">{{ source_review.source_test_insight.recommendation }}</p>
+    {% if source_review.source_test_insight.action %}
+      {% if source_review.source_test_insight.action.type == "post" %}
+      <form method="post" action="{{ source_review.source_test_insight.action.action }}" class="inline-form">
+        <button type="submit" class="button">{{ source_review.source_test_insight.action.label }}</button>
+      </form>
+      {% elif source_review.source_test_insight.action.href %}
+      <a class="button" href="{{ source_review.source_test_insight.action.href }}">{{ source_review.source_test_insight.action.label }}</a>
+      {% endif %}
+    {% endif %}
+  </div>
+  {% endif %}
+  <div class="action-row">
+    <a class="button light" href="{{ source_review.source_test_url }}">Open source-test page</a>
+    <a class="button light" href="{{ source_review.run_source_test_url }}">Run source test again</a>
+  </div>
+</div>
+
+{% if source_review.capability_checks %}
+<div class="panel">
+  <h2>Capability Proof</h2>
+  <table>
+    <thead><tr><th>Capability</th><th>Status</th><th>Expected</th><th>Observed</th><th>Evidence</th></tr></thead>
+    <tbody>
+      {% for check in source_review.capability_checks %}
+      <tr>
+        <td>{{ (check.capability or "")|replace("_", " ")|title }}</td>
+        <td><span class="badge {{ 'high' if check.status == 'pass' else 'low' if check.status == 'fail' else 'medium' }}">{{ check.status|replace("_", " ")|title }}</span></td>
+        <td>{{ "yes" if check.expected else "no" }}</td>
+        <td>{{ "yes" if check.observed else "no" }}</td>
+        <td>{{ check.detail }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+{% if source_review.blockers or source_review.warnings %}
+<div class="panel">
+  <h2>Needs Attention</h2>
+  {% if source_review.blockers %}
+  <ul>
+    {% for blocker in source_review.blockers %}
+    <li>{{ blocker }}</li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+  {% if source_review.warnings %}
+  <ul>
+    {% for warning in source_review.warnings %}
+    <li>{{ warning }}</li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+</div>
+{% endif %}
+
+{% if source_review.run_steps %}
+<div class="panel">
+  <h2>Run Trace</h2>
+  <table>
+    <thead><tr><th>Step</th><th>Status</th><th>What happened</th></tr></thead>
+    <tbody>
+      {% for step in source_review.run_steps %}
+      <tr>
+        <td>{{ step.phase }}</td>
+        <td><span class="badge {{ 'completed' if step.status == 'completed' else 'warning' if step.status == 'warning' else '' }}">{{ step.status }}</span></td>
+        <td>{{ step.detail }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+<div class="panel">
+  <h2>Found Jobs</h2>
+  {% if source_review.jobs %}
+  <table>
+    <thead><tr><th>Title</th><th>Location</th><th>Description</th><th>Notes</th></tr></thead>
+    <tbody>
+      {% for job in source_review.jobs %}
+      <tr>
+        <td><strong>{{ job.title }}</strong><br>{% if job.url %}<a href="{{ job.url }}" target="_blank" rel="noreferrer">{{ job.url }}</a>{% endif %}</td>
+        <td>{{ job.location }}</td>
+        <td>{{ job.description_preview or job.description }}</td>
+        <td>{{ job.extraction_notes|join("; ") if job.extraction_notes else "" }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% elif source_review.sample_titles %}
+  <ul>
+    {% for title in source_review.sample_titles %}
+    <li>{{ title }}</li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="muted">No sampled jobs are saved for this source-test review yet.</p>
+  {% endif %}
+</div>
+{% elif source_mode != "custom" and selected_source_id %}
+<div class="panel">
+  <h2>No Source-Test Review Yet</h2>
+  <p class="muted">Run the safe source test first. The review page will then show the capability proof and sampled jobs from that test.</p>
+  <a class="button" href="/sources/{{ selected_source_id }}/test-run?start=1">Run source test</a>
+</div>
+{% endif %}
+
 {% if preview %}
 <div class="panel">
   <div class="row">

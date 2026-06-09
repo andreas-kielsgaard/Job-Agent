@@ -1,0 +1,181 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="source-detail-header">
+  <div>
+    <p class="eyebrow">Matchmaking</p>
+    <h1>Scoring Sandbox</h1>
+    <p class="muted">Adjust scoring settings and test a posting against the current match engine.</p>
+  </div>
+  <div class="source-header-actions">
+    <a class="button light" href="/setup#match-engine">Matchmaking setup</a>
+    <a class="button light" href="/jobs">Jobs</a>
+  </div>
+</div>
+
+{% if settings_saved %}
+<div class="panel hero-status today">
+  <strong>Match settings saved.</strong>
+</div>
+{% endif %}
+
+<form id="match-sandbox-form" method="post" action="/match-sandbox">
+  <div class="panel" id="match-engine">
+    <div class="section-heading-row">
+      <div>
+        <h2>Scoring Controls</h2>
+        <p class="muted">Changes here affect the sandbox immediately. Save them when they should become the default.</p>
+      </div>
+      <div class="source-header-actions">
+        <button type="submit" formaction="/match-sandbox/save">Save settings</button>
+      </div>
+    </div>
+    {% include "match_engine_controls.html" %}
+  </div>
+
+  <div class="panel">
+    <h2>Sample Posting</h2>
+    {% if source_job_id %}
+    <p class="muted">Loaded from saved job package {{ source_job_id }}.</p>
+    {% endif %}
+    <div class="grid">
+      <div><label>Title</label><input name="title" value="{{ sandbox_input.title }}"></div>
+      <div><label>Company</label><input name="company" value="{{ sandbox_input.company }}"></div>
+      <div><label>Source</label><input name="source" value="{{ sandbox_input.source }}"></div>
+      <div><label>Location</label><input name="location" value="{{ sandbox_input.location }}"></div>
+      <div><label>Remote</label><input name="remote" value="{{ sandbox_input.remote }}"></div>
+      <div><label>Rate</label><input name="rate" value="{{ sandbox_input.rate }}"></div>
+      <div><label>Workload</label><input name="workload" value="{{ sandbox_input.workload }}"></div>
+      <div><label>Contract duration</label><input name="contract_duration" value="{{ sandbox_input.contract_duration }}"></div>
+      <div><label>Start date</label><input name="start_date" value="{{ sandbox_input.start_date }}"></div>
+      <div><label>Posted date</label><input name="posted_date" value="{{ sandbox_input.posted_date }}"></div>
+      <div><label>Deadline</label><input name="deadline" value="{{ sandbox_input.deadline }}"></div>
+      <div><label>URL</label><input name="url" value="{{ sandbox_input.url }}"></div>
+      <div style="grid-column: 1 / -1;"><label>Application URL</label><input name="application_url" value="{{ sandbox_input.application_url }}"></div>
+      <div><label>Languages</label><textarea class="compact-textarea" name="languages">{{ sandbox_input.languages }}</textarea></div>
+      <div><label>Required skills</label><textarea class="compact-textarea" name="required_skills">{{ sandbox_input.required_skills }}</textarea></div>
+      <div><label>Required modules</label><textarea class="compact-textarea" name="required_modules">{{ sandbox_input.required_modules }}</textarea></div>
+      <div style="grid-column: 1 / -1;"><label>Description</label><textarea name="description">{{ sandbox_input.description }}</textarea></div>
+    </div>
+    <div class="form-actions">
+      <button type="submit">Score sample</button>
+    </div>
+  </div>
+</form>
+
+<div class="panel" id="sandbox-result-panel">
+  <div class="section-heading-row">
+    <div>
+      <h2>Score Result</h2>
+      <p>
+        <span id="sandbox-score" class="badge {{ match_preview.category }}">{{ match_preview.score }}% {{ match_preview.category }}</span>
+        <span class="badge waiting">Raw <span id="sandbox-raw-score">{{ match_preview.raw_score }}</span></span>
+      </p>
+    </div>
+  </div>
+  <p id="sandbox-exclusion" {% if not match_preview.exclusion_reason %}class="hidden"{% endif %}>
+    <strong>Exclusion:</strong> <span>{{ match_preview.exclusion_reason }}</span>
+  </p>
+  <p><strong>Recommended angle:</strong> <span id="sandbox-angle">{{ match_preview.recommended_angle }}</span></p>
+
+  <table>
+    <thead><tr><th>Component</th><th>Score</th></tr></thead>
+    <tbody id="sandbox-components">
+      {% for component in match_preview.components %}
+      <tr><td>{{ component.label }}</td><td>{{ component.score }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <div class="compare match-preview-lists">
+    <div>
+      <h3>Matched Signals</h3>
+      <ul id="sandbox-matched">
+        {% for item in match_preview.matched_keywords %}
+        <li>{{ item }}</li>
+        {% endfor %}
+      </ul>
+    </div>
+    <div>
+      <h3>Reasons</h3>
+      <ul id="sandbox-reasons">
+        {% for item in match_preview.reasons %}
+        <li>{{ item }}</li>
+        {% endfor %}
+      </ul>
+    </div>
+    <div>
+      <h3>Concerns</h3>
+      <ul id="sandbox-concerns">
+        {% for item in match_preview.concerns %}
+        <li>{{ item }}</li>
+        {% endfor %}
+      </ul>
+    </div>
+    <div>
+      <h3>Missing Information</h3>
+      <ul id="sandbox-missing">
+        {% for item in match_preview.missing_information %}
+        <li>{{ item }}</li>
+        {% endfor %}
+      </ul>
+    </div>
+  </div>
+</div>
+
+<script>
+  const sandboxForm = document.getElementById("match-sandbox-form");
+  let sandboxTimer = null;
+
+  function sandboxEscape(value) {
+    return String(value || "").replace(/[&<>"']/g, (character) => ({
+      "&": "&amp;",
+      "<": "&lt;",
+      ">": "&gt;",
+      '"': "&quot;",
+      "'": "&#39;"
+    })[character]);
+  }
+
+  function sandboxList(items) {
+    if (!items || !items.length) return '<li class="muted">None</li>';
+    return items.map((item) => `<li>${sandboxEscape(item)}</li>`).join("");
+  }
+
+  function updateSandboxResult(data) {
+    const score = document.getElementById("sandbox-score");
+    score.className = `badge ${sandboxEscape(data.category)}`;
+    score.textContent = `${data.score}% ${data.category}`;
+    document.getElementById("sandbox-raw-score").textContent = data.raw_score;
+    document.getElementById("sandbox-angle").textContent = data.recommended_angle || "";
+
+    const exclusion = document.getElementById("sandbox-exclusion");
+    exclusion.classList.toggle("hidden", !data.exclusion_reason);
+    exclusion.querySelector("span").textContent = data.exclusion_reason || "";
+
+    document.getElementById("sandbox-components").innerHTML = data.components.map((component) => (
+      `<tr><td>${sandboxEscape(component.label)}</td><td>${sandboxEscape(component.score)}</td></tr>`
+    )).join("");
+    document.getElementById("sandbox-matched").innerHTML = sandboxList(data.matched_keywords);
+    document.getElementById("sandbox-reasons").innerHTML = sandboxList(data.reasons);
+    document.getElementById("sandbox-concerns").innerHTML = sandboxList(data.concerns);
+    document.getElementById("sandbox-missing").innerHTML = sandboxList(data.missing_information);
+  }
+
+  async function scoreSandboxLive() {
+    const response = await fetch("/api/match-sandbox/score", {
+      method: "POST",
+      body: new FormData(sandboxForm),
+      cache: "no-store"
+    });
+    if (response.ok) updateSandboxResult(await response.json());
+  }
+
+  function queueSandboxScore() {
+    window.clearTimeout(sandboxTimer);
+    sandboxTimer = window.setTimeout(scoreSandboxLive, 250);
+  }
+
+  sandboxForm.addEventListener("input", queueSandboxScore);
+  sandboxForm.addEventListener("change", queueSandboxScore);
+</script>
+{% endblock %}

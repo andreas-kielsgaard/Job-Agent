@@ -11,3 +11,8 @@ router = APIRouter()
 @router.get("/api/health")
 def health() -> JSONResponse:
     return JSONResponse(runtime.health_payload())
+
+
+@router.get("/api/work-status")
+def work_status() -> JSONResponse:
+    return JSONResponse(runtime.active_work_payload())

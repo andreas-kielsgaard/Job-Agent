@@ -3,10 +3,9 @@ from __future__ import annotations
 import argparse
 import re
 from contextlib import suppress
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any
 
 from job_agent.config import ROOT
 from job_agent.io.atomic import atomic_write_text
@@ -139,10 +138,6 @@ def main(argv: list[str] | None = None) -> int:
     for line in _summary_lines(result):
         print(line)
     return 1 if result.error else 0
-
-
-def as_dict(result: BrowserProbeResult) -> dict[str, Any]:
-    return asdict(result)
 
 
 if __name__ == "__main__":

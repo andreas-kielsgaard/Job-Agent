@@ -368,6 +368,7 @@ def test_manual_intake_matches_manual_posting_packages(project_root: Path) -> No
     source = SourceRegistryService(project_root).get_source("manual-intake")
 
     assert source is not None
+    assert source.stats.interesting_count == 1
     assert source.stats.jobs_found_total == 1
     assert source.stats.exploratory_matches == 1
     assert source.stats.value_status == "promising"

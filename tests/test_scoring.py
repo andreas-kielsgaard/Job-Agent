@@ -54,6 +54,56 @@ class ScoringTests(unittest.TestCase):
         self.assertEqual(match.category, "excluded")
         self.assertIn("older", match.exclusion_reason.lower())
 
+    def test_remote_required_excludes_non_remote_role(self) -> None:
+        profile = {**PROFILE, "match_engine": {"remote_policy": "required"}}
+        job = Job(
+            title="SAP ABAP RAP Consultant",
+            location="Copenhagen",
+            remote="Onsite",
+            posted_date="2026-05-04",
+            description="ABAP RAP CDS OData Gateway contract role.",
+        )
+
+        match = score_job(job, profile, today=date(2026, 5, 6))
+
+        self.assertEqual(match.category, "excluded")
+        self.assertIn("remote", match.exclusion_reason.lower())
+
+    def test_required_keyword_group_excludes_when_missing(self) -> None:
+        profile = {
+            **PROFILE,
+            "match_engine": {
+                "technical_keyword_groups": [
+                    {"label": "ABAP variants", "terms": ["abap", "sap abap"], "score": 40, "mode": "required"}
+                ]
+            },
+        }
+        job = Job(
+            title="SAP Technical Consultant",
+            remote="Remote",
+            posted_date="2026-05-04",
+            description="OData Gateway CDS contract role.",
+        )
+
+        match = score_job(job, profile, today=date(2026, 5, 6))
+
+        self.assertEqual(match.category, "excluded")
+        self.assertIn("ABAP variants", match.exclusion_reason)
+
+    def test_permanent_role_is_penalized_by_default(self) -> None:
+        job = Job(
+            title="SAP ABAP Senior Developer",
+            remote="Remote",
+            workload="Permanent",
+            posted_date="2026-05-04",
+            description="ABAP CDS OData Gateway role.",
+        )
+
+        match = score_job(job, PROFILE, today=date(2026, 5, 6))
+
+        self.assertEqual(match.components["contract_fit"], -25)
+        self.assertNotEqual(match.category, "strong")
+
 
 if __name__ == "__main__":
     unittest.main()

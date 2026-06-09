@@ -20,15 +20,17 @@ limits:
 """
 
 
-def test_candidate_detail_shows_adoption_form_only_for_approved_candidates(client: TestClient, project_root: Path) -> None:
+def test_candidate_detail_shows_adoption_form_only_for_approved_candidates(
+    client: TestClient, project_root: Path
+) -> None:
     pending = _candidate(project_root)
     approved = _approved_candidate(project_root)
 
     pending_response = client.get(f"/recipe-candidates/{pending.candidate_id}?source_id=eursap-jobs")
     approved_response = client.get(f"/recipe-candidates/{approved.candidate_id}?source_id=eursap-jobs")
 
-    assert "Use for this source" not in pending_response.text
-    assert "Use for this source" in approved_response.text
+    assert "Use for this source and test" not in pending_response.text
+    assert "Use for this source and test" in approved_response.text
 
 
 def test_web_adoption_updates_registry_and_redirects(client: TestClient, project_root: Path) -> None:

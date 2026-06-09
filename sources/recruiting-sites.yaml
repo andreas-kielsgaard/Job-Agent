@@ -4,7 +4,7 @@ sources:
   type: recipe_html
   url: https://www.whitehallresources.com/sap-jobs/
   recipe_path: sources/recipes/experimental/whitehall-sap-contract.yaml
-  enabled: false
+  enabled: true
 - name: FreelancerMap
   source_id: freelancermap
   type: recipe_html

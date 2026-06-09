@@ -16,17 +16,22 @@ from job_agent.config import ROOT
 from job_agent.services.extraction_quality import quality_as_dict
 from job_agent.services.job_board_check_service import validate_public_url
 from job_agent.services.job_board_recipe_service import (
-    JobBoardRecipe,
-    _fetch_rendered_html,
-    _fetch_static_html,
-    _selectors,
     check_recipe_against_html,
-    discover_application_entries,
-    discover_pagination_links,
     extract_jobs_with_recipe,
-    job_board_recipe_from_mapping,
-    load_job_board_recipe,
 )
+from job_agent.services.recipes.discovery import (
+    discover_application_entries,
+    discover_interactive_pagination_controls,
+    discover_pagination_links,
+)
+from job_agent.services.recipes.fetching import (
+    fetch_rendered_html as _fetch_rendered_html,
+)
+from job_agent.services.recipes.fetching import (
+    fetch_static_html as _fetch_static_html,
+)
+from job_agent.services.recipes.mapping import _selectors, job_board_recipe_from_mapping, load_job_board_recipe
+from job_agent.services.recipes.models import JobBoardRecipe
 from job_agent.services.source_quality_rules import (
     is_probable_detail_url,
     link_text_is_noise,
@@ -135,15 +140,19 @@ def capture_recipe_calibration(
 ) -> RecipeCalibrationResult:
     normalized_url = validate_public_url(url)
     recipe = load_job_board_recipe(Path(recipe_path)) if recipe_path else None
-    use_rendered = recipe.mode == "rendered_html" if rendered is None and recipe else bool(rendered)
-    html, final_url, fetch_warnings = (
-        _fetch_rendered_html(normalized_url, 15) if use_rendered else _fetch_static_html(normalized_url, 15)
+    html, final_url, fetch_warnings, use_rendered = _fetch_calibration_html(
+        normalized_url,
+        recipe=recipe,
+        rendered=rendered,
+        timeout_seconds=15,
     )
     capture_mode = "rendered_html" if use_rendered else "static_html"
     soup = BeautifulSoup(html, "html.parser")
     visible_text = soup.get_text("\n", strip=True)
     candidates = discover_candidate_elements(html, max_candidates=max_candidates)
     pagination_observations = discover_pagination_links(html, final_url)
+    ajax_pagination_observations = discover_ajax_pagination_templates(html, final_url)
+    interactive_pagination_observations = discover_interactive_pagination_controls(html)
     application_entries = discover_application_entries(html, final_url)
     audit = audit_recipe_selectors(html, final_url, recipe) if recipe else None
     quality = check_recipe_against_html(html, final_url, recipe) if recipe else None
@@ -179,6 +188,8 @@ def capture_recipe_calibration(
         "recipe_path": recipe_path or "",
         "candidates": [asdict(candidate) for candidate in candidates],
         "observed_pagination_links": [asdict(link) for link in pagination_observations],
+        "observed_ajax_pagination_templates": ajax_pagination_observations,
+        "observed_interactive_pagination_controls": interactive_pagination_observations,
         "observed_application_entries": [asdict(entry) for entry in application_entries],
         "detail_sample_url": detail_final_url or detail_sample_url,
         "detail_sample_captured": bool(detail_html),
@@ -250,6 +261,9 @@ def build_recipe_blueprint(
             "min_description_length": 0,
         },
     }
+    access = _access_recipe(html, base_url)
+    if access:
+        recipe["access"] = access
     pagination = _pagination_recipe(html, base_url)
     if pagination:
         recipe["pagination"] = pagination
@@ -282,6 +296,57 @@ def build_recipe_blueprint(
     if field_observations:
         result["field_observations"] = field_observations
     return result
+
+
+def _fetch_calibration_html(
+    normalized_url: str,
+    *,
+    recipe: JobBoardRecipe | None,
+    rendered: bool | None,
+    timeout_seconds: int,
+) -> tuple[str, str, list[str], bool]:
+    if rendered is True or (rendered is None and recipe and recipe.mode == "rendered_html"):
+        html, final_url, warnings = _fetch_rendered_html(normalized_url, timeout_seconds)
+        return html, final_url, warnings, True
+    if rendered is False or recipe:
+        html, final_url, warnings = _fetch_static_html(normalized_url, timeout_seconds)
+        return html, final_url, warnings, False
+
+    html, final_url, warnings = _fetch_static_html(normalized_url, timeout_seconds)
+    if _static_capture_has_listing_evidence(html, final_url):
+        return html, final_url, warnings, False
+    try:
+        rendered_html, rendered_final_url, rendered_warnings = _fetch_rendered_html(normalized_url, timeout_seconds)
+    except RuntimeError as exc:
+        return (
+            html,
+            final_url,
+            warnings
+            + [
+                "Static capture did not expose stable job-list evidence, and browser-rendered capture was unavailable: "
+                f"{exc}"
+            ],
+            False,
+        )
+    if _static_capture_has_listing_evidence(rendered_html, rendered_final_url):
+        return rendered_html, rendered_final_url, warnings + rendered_warnings, True
+    return (
+        html,
+        final_url,
+        warnings
+        + rendered_warnings
+        + ["Static and browser-rendered captures both lacked stable job-list evidence."],
+        False,
+    )
+
+
+def _static_capture_has_listing_evidence(html: str, base_url: str) -> bool:
+    blueprint = build_recipe_blueprint(html, base_url, capture_mode="static_html", detail_html="", detail_url="")
+    if blueprint.get("status") == "not_recommended":
+        return False
+    recipe = blueprint.get("recipe") if isinstance(blueprint, dict) else {}
+    listing = recipe.get("listing") if isinstance(recipe, dict) else {}
+    return bool(isinstance(listing, dict) and listing.get("card_selector") and listing.get("title_selector"))
 
 
 def discover_candidate_elements(html: str, max_candidates: int = 30) -> list[CandidateElement]:
@@ -623,6 +688,7 @@ def _pagination_recipe(html: str, base_url: str) -> dict[str, Any]:
     next_selector = 'link[rel="next"]' if soup.select('link[rel="next"][href*="pagenr="]') else ""
     if soup.select("a.page-numbers"):
         return {
+            "strategy": "url",
             "page_link_selector": "a.page-numbers",
             "next_selector": "a.next.page-numbers" if soup.select("a.next.page-numbers") else next_selector,
             "max_pages": _observed_max_page(soup, default=2),
@@ -630,6 +696,7 @@ def _pagination_recipe(html: str, base_url: str) -> dict[str, Any]:
         }
     if soup.select('a[href*="pagenr="]'):
         return {
+            "strategy": "url",
             "page_link_selector": 'a[href*="pagenr="]',
             "next_selector": next_selector,
             "max_pages": _observed_max_page(soup, default=2),
@@ -638,6 +705,7 @@ def _pagination_recipe(html: str, base_url: str) -> dict[str, Any]:
     observed_links = discover_pagination_links(html, base_url)
     if any("pagenr=" in link.url for link in observed_links):
         return {
+            "strategy": "url",
             "page_link_selector": 'a[href*="pagenr="]',
             "next_selector": next_selector,
             "max_pages": _observed_max_page_from_links(observed_links, default=2),
@@ -645,12 +713,185 @@ def _pagination_recipe(html: str, base_url: str) -> dict[str, Any]:
         }
     if next_selector:
         return {
+            "strategy": "url",
             "page_link_selector": next_selector,
             "next_selector": next_selector,
             "max_pages": 2,
             "request_delay_seconds": 1.0,
         }
+    ajax_templates = discover_ajax_pagination_templates(html, base_url)
+    if ajax_templates:
+        return {
+            "strategy": "ajax",
+            "ajax_url_template": ajax_templates[0]["ajax_url_template"],
+            "max_pages": max(2, int(ajax_templates[0].get("observed_page") or 2)),
+            "request_delay_seconds": 1.0,
+        }
+    interactive_controls = discover_interactive_pagination_controls(html)
+    if interactive_controls:
+        return {
+            "strategy": "browser_click",
+            "click_selector": _interactive_pagination_selector(html),
+            "max_pages": 2,
+            "request_delay_seconds": 1.0,
+        }
     return {}
+
+
+def discover_ajax_pagination_templates(html: str, base_url: str) -> list[dict[str, Any]]:
+    templates: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    soup = BeautifulSoup(html, "html.parser")
+    for element in soup.find_all(["a", "button", "input", "form", "div", "span"]):
+        for attr_name, raw_value in element.attrs.items():
+            if attr_name == "href":
+                continue
+            values = raw_value if isinstance(raw_value, list) else [raw_value]
+            for value in values:
+                _collect_ajax_template_candidate(
+                    templates,
+                    seen,
+                    str(value),
+                    base_url,
+                    evidence=f"{element.name}[{attr_name}]",
+                )
+        onclick = str(element.get("onclick") or element.get("onClick") or "")
+        if onclick:
+            _collect_ajax_template_candidate(templates, seen, onclick, base_url, evidence=f"{element.name}[onclick]")
+    for script in soup.find_all("script"):
+        _collect_ajax_template_candidate(
+            templates,
+            seen,
+            script.get_text(" ", strip=True),
+            base_url,
+            evidence="script",
+        )
+    return templates
+
+
+def _collect_ajax_template_candidate(
+    templates: list[dict[str, Any]],
+    seen: set[str],
+    value: str,
+    base_url: str,
+    *,
+    evidence: str,
+) -> None:
+    if not value or not any(token in value.lower() for token in ["page", "offset", "load", "fetch", "ajax", "api"]):
+        return
+    for candidate in _candidate_ajax_urls(value):
+        template, observed_page = _ajax_template_from_url(candidate, base_url)
+        if not template or template in seen:
+            continue
+        seen.add(template)
+        templates.append(
+            {
+                "ajax_url_template": template,
+                "observed_page": observed_page,
+                "evidence": evidence,
+            }
+        )
+
+
+def _candidate_ajax_urls(value: str) -> list[str]:
+    candidates: list[str] = []
+    for pattern in [
+        r"""(?P<url>https?://[^'"\s<>]+)""",
+        r"""(?P<url>/[^'"\s<>]+[?&][^'"\s<>]+)""",
+        r"""['"](?P<url>[^'"]+[?&][^'"]+)['"]""",
+    ]:
+        for match in re.finditer(pattern, value):
+            url = match.group("url").strip()
+            if url not in candidates:
+                candidates.append(url)
+    stripped = value.strip()
+    if ("?" in stripped or re.search(r"/(?:page|pagenr)/\d+\b", stripped, re.I)) and len(stripped) < 300:
+        candidates.append(stripped)
+    return candidates
+
+
+def _ajax_template_from_url(value: str, base_url: str) -> tuple[str, int]:
+    url = urljoin(base_url, value.strip())
+    parsed = urlparse(url)
+    observed_page = 0
+    query = parsed.query
+    for key in ["page", "pagenr", "pageNumber", "pageNo", "pageIndex"]:
+        replacement = _replace_query_number(query, key, "{page}" if key != "pageIndex" else "{page_index}")
+        if replacement != query:
+            observed_page = _query_number(query, key)
+            return parsed._replace(query=replacement).geturl(), observed_page
+    path = re.sub(r"(?i)(/(?:page|pagenr)/)(\d+)(?=/|$)", r"\1{page}", parsed.path)
+    if path != parsed.path:
+        match = re.search(r"(?i)/(?:page|pagenr)/(\d+)(?=/|$)", parsed.path)
+        observed_page = int(match.group(1)) if match else 0
+        return parsed._replace(path=path).geturl(), observed_page
+    return "", 0
+
+
+def _replace_query_number(query: str, key: str, replacement: str) -> str:
+    return re.sub(
+        rf"(?i)(^|&)({re.escape(key)}=)(\d+)(?=&|$)",
+        lambda match: f"{match.group(1)}{match.group(2)}{replacement}",
+        query,
+    )
+
+
+def _query_number(query: str, key: str) -> int:
+    match = re.search(rf"(?i)(^|&){re.escape(key)}=(\d+)(?=&|$)", query)
+    return int(match.group(2)) if match else 0
+
+
+def _interactive_pagination_selector(html: str) -> str:
+    soup = BeautifulSoup(html, "html.parser")
+    for element in soup.find_all(["button", "a", "input", "div", "span"]):
+        if element.name == "input" and str(element.get("type") or "").lower() not in {"button", "submit"}:
+            continue
+        if element.name in {"div", "span"} and str(element.get("role") or "").lower() != "button":
+            continue
+        label = element.get_text(" ", strip=True) or str(element.get("value") or element.get("aria-label") or "")
+        href = str(element.get("href") or "").strip()
+        onclick = str(element.get("onclick") or element.get("onClick") or "")
+        classes = [str(item).strip() for item in element.get("class", []) if str(item).strip()]
+        haystack = " ".join([label, href, onclick, " ".join(classes)]).lower()
+        if not any(token in haystack for token in ["next", "page", "pagination", "paginator", "load more", "more"]):
+            continue
+        element_id = str(element.get("id") or "").strip()
+        if element_id:
+            return f"#{element_id}"
+        if classes:
+            return "." + ".".join(classes[:2])
+        role = str(element.get("role") or "").strip()
+        if role:
+            return f'{element.name}[role="{role}"]'
+        aria_label = str(element.get("aria-label") or "").strip()
+        if aria_label:
+            return f'{element.name}[aria-label="{aria_label}"]'
+        if element.name == "a":
+            return 'a[role="button"], a[href="#"], a[href^="javascript:"]'
+        return str(element.name or "button")
+    return "button, a[role=\"button\"]"
+
+
+def _access_recipe(html: str, base_url: str) -> dict[str, Any]:
+    soup = BeautifulSoup(html, "html.parser")
+    visible_text = soup.get_text(" ", strip=True).lower()
+    gate_phrases = [
+        "sign up free to see more results",
+        "sign up to see more results",
+        "log in to see more",
+        "login to see more",
+        "sign in to see more",
+        "create an account to see more",
+        "register to see more",
+    ]
+    if not any(phrase in visible_text for phrase in gate_phrases):
+        return {}
+    host = urlparse(base_url if "://" in base_url else f"https://{base_url}").netloc.lower()
+    return {
+        "requires_session": True,
+        "session_scope": host or base_url,
+        "setup_hint": "Connect a source session before verifying pagination beyond the public listing page.",
+    }
 
 
 def _observed_max_page(soup: BeautifulSoup, default: int) -> int:

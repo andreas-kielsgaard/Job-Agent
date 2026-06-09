@@ -14,7 +14,6 @@ from job_agent.services.recipe_suggestion_service import (
     suggest_recipe_with_refinement,
 )
 
-
 VALID_RECIPE_YAML = """source_name: Example Jobs
 start_url: https://example.com/jobs
 mode: static_html
@@ -56,6 +55,39 @@ def test_evidence_loader_handles_complete_artifact_folder(project_root: Path) ->
     assert "SAP ABAP Consultant" in evidence.prompt_payload["visible_text_sample"]
 
 
+def test_evidence_loader_includes_ajax_pagination_observations(project_root: Path) -> None:
+    artifact = _write_artifact(project_root)
+    report_path = artifact / "selector-report.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["observed_ajax_pagination_templates"] = [
+        {
+            "ajax_url_template": "https://example.com/api/jobs?page={page}",
+            "observed_page": 2,
+            "evidence": "button[data-url]",
+        }
+    ]
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    evidence = load_recipe_suggestion_evidence(artifact)
+
+    assert evidence.prompt_payload["observed_ajax_pagination_templates"][0]["ajax_url_template"].endswith("page={page}")
+
+
+def test_evidence_loader_includes_source_test_insight(project_root: Path) -> None:
+    insight = {
+        "insight_title": "Paginated page access failed",
+        "pagination_strategy_tested": "url",
+        "summary": "URL pagination returned duplicate listings.",
+    }
+
+    evidence = load_recipe_suggestion_evidence(_write_artifact(project_root), source_test_insight=insight)
+    prompt = build_recipe_suggestion_prompt(evidence)
+
+    assert evidence.prompt_payload["source_test_insight"] == insight
+    assert "source_test_insight" in prompt
+    assert "duplicate pages" in prompt
+
+
 def test_evidence_loader_handles_missing_files_with_warnings(project_root: Path) -> None:
     artifact = project_root / "output" / "recipe-calibration" / "partial"
     artifact.mkdir(parents=True)
@@ -77,6 +109,8 @@ def test_prompt_includes_candidate_selectors_and_visible_text(project_root: Path
     assert "SAP ABAP Consultant" in prompt
     assert "Return only strict JSON" in prompt
     assert "Do not include Python code" in prompt
+    assert "access_fields" in prompt
+    assert "access.requires_session" in prompt
 
 
 def test_fake_llm_response_produces_valid_result(project_root: Path) -> None:
@@ -89,6 +123,43 @@ def test_fake_llm_response_produces_valid_result(project_root: Path) -> None:
     assert result.confidence == "high"
     assert "article.job-card" in client.prompts[0]
     assert not result.validation_errors
+
+
+def test_llm_recipe_response_normalizes_explicit_pagination_strategy(project_root: Path) -> None:
+    artifact = _write_artifact(project_root, page_html=_job_card_page())
+    recipe_yaml = (
+        VALID_RECIPE_YAML
+        + """
+pagination:
+  page_link_selector: a.page-numbers
+  next_selector: a.next
+  max_pages: 3
+"""
+    )
+    client = FakeRecipeSuggestionClient(_llm_response(recipe_yaml))
+
+    result = suggest_recipe_from_artifact(artifact, llm_client=client)
+
+    assert result.schema_valid is True
+    assert "strategy: url" in result.suggested_recipe_yaml
+
+
+def test_llm_recipe_response_normalizes_session_access_flag(project_root: Path) -> None:
+    artifact = _write_artifact(project_root, page_html=_job_card_page())
+    recipe_yaml = (
+        VALID_RECIPE_YAML
+        + """
+access:
+  session_scope: example.com
+  setup_hint: Connect a source session.
+"""
+    )
+    client = FakeRecipeSuggestionClient(_llm_response(recipe_yaml))
+
+    result = suggest_recipe_from_artifact(artifact, llm_client=client)
+
+    assert result.schema_valid is True
+    assert "requires_session: true" in result.suggested_recipe_yaml
 
 
 def test_refinement_accepts_first_valid_high_quality_suggestion(project_root: Path) -> None:
@@ -212,9 +283,156 @@ def test_refinement_accepts_deterministic_whitehall_blueprint_without_llm(projec
     assert client.prompts == []
     assert result.final_result.schema_valid is True
     assert "div.job-item" in result.final_result.suggested_recipe_yaml
+    assert "strategy: url" in result.final_result.suggested_recipe_yaml
     assert "a.page-numbers" in result.final_result.suggested_recipe_yaml
     assert "follow: true" in result.final_result.suggested_recipe_yaml
     assert result.attempts[0].quality_status == "good"
+
+
+def test_refinement_switches_failed_url_pagination_blueprint_to_ajax(project_root: Path) -> None:
+    artifact = _write_whitehall_blueprint_artifact(project_root)
+    report_path = artifact / "selector-report.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["observed_ajax_pagination_templates"] = [
+        {
+            "ajax_url_template": "https://www.whitehallresources.com/api/jobs?page={page}",
+            "observed_page": 2,
+            "evidence": "script",
+        }
+    ]
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+    client = FakeRecipeSuggestionClient("{}")
+
+    result = suggest_recipe_with_refinement(
+        artifact,
+        source_test_insight=_failed_url_pagination_insight(session_status="connected"),
+        llm_client=client,
+        max_attempts=3,
+    )
+
+    assert result.accepted is True
+    assert client.prompts == []
+    assert "strategy: ajax" in result.final_result.suggested_recipe_yaml
+    assert "ajax_url_template: https://www.whitehallresources.com/api/jobs?page={page}" in (
+        result.final_result.suggested_recipe_yaml
+    )
+    assert "requires_session: true" in result.final_result.suggested_recipe_yaml
+    assert any("switched to observed AJAX" in warning for warning in result.final_result.warnings)
+
+
+def test_refinement_prefers_browser_click_when_ajax_evidence_is_plain_listing_url(project_root: Path) -> None:
+    artifact = _write_whitehall_blueprint_artifact(project_root)
+    report_path = artifact / "selector-report.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["observed_ajax_pagination_templates"] = [
+        {
+            "ajax_url_template": "https://www.whitehallresources.com//sap-jobs/?page={page}",
+            "observed_page": 2,
+            "evidence": "script",
+        }
+    ]
+    report["observed_interactive_pagination_controls"] = ["paginator-item next"]
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+    client = FakeRecipeSuggestionClient("{}")
+
+    result = suggest_recipe_with_refinement(
+        artifact,
+        source_test_insight=_failed_url_pagination_insight(),
+        llm_client=client,
+        max_attempts=3,
+    )
+
+    assert result.accepted is True
+    assert client.prompts == []
+    assert "strategy: browser_click" in result.final_result.suggested_recipe_yaml
+    assert "click_selector: .paginator-item.next" in result.final_result.suggested_recipe_yaml
+    assert "strategy: ajax" not in result.final_result.suggested_recipe_yaml
+
+
+def test_refinement_switches_browser_click_required_insight_to_click_pagination(project_root: Path) -> None:
+    artifact = _write_whitehall_blueprint_artifact(project_root)
+    report_path = artifact / "selector-report.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["observed_interactive_pagination_controls"] = ["3", "previous-page", "1", "2", "next-page"]
+    report["recipe_blueprint"]["recipe"]["pagination"] = {
+        "strategy": "ajax",
+        "ajax_url_template": "https://www.whitehallresources.com/api/jobs?page={page}",
+        "max_pages": 3,
+        "request_delay_seconds": 1.0,
+    }
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+    client = FakeRecipeSuggestionClient("{}")
+
+    result = suggest_recipe_with_refinement(
+        artifact,
+        source_test_insight=_browser_click_required_insight(),
+        llm_client=client,
+        max_attempts=3,
+    )
+
+    assert result.accepted is True
+    assert client.prompts == []
+    assert "strategy: browser_click" in result.final_result.suggested_recipe_yaml
+    assert "click_selector: '[aria-label=\"next-page\"]'" in result.final_result.suggested_recipe_yaml
+    assert "strategy: ajax" not in result.final_result.suggested_recipe_yaml
+    assert any("switched to browser-click" in warning for warning in result.final_result.warnings)
+
+
+def test_refinement_retries_when_source_test_rejects_url_pagination_without_alternate_evidence(
+    project_root: Path,
+) -> None:
+    artifact = _write_whitehall_blueprint_artifact(project_root)
+    client = FakeRecipeSuggestionClient(_llm_response(_whitehall_browser_click_recipe_yaml()))
+
+    result = suggest_recipe_with_refinement(
+        artifact,
+        source_test_insight=_failed_url_pagination_insight(),
+        llm_client=client,
+        max_attempts=3,
+    )
+
+    assert result.accepted is True
+    assert len(result.attempts) == 2
+    assert len(client.prompts) == 1
+    assert result.attempts[0].quality_status == "poor"
+    assert any("Source test already proved URL pagination" in warning for warning in result.attempts[0].quality_warnings)
+    assert "strategy: browser_click" in result.final_result.suggested_recipe_yaml
+
+
+def test_llm_response_switches_failed_url_pagination_to_observed_ajax(project_root: Path) -> None:
+    artifact = _write_artifact(project_root, page_html=_job_card_page())
+    report_path = artifact / "selector-report.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["observed_ajax_pagination_templates"] = [
+        {
+            "ajax_url_template": "https://example.com/api/jobs?page={page}",
+            "observed_page": 2,
+            "evidence": "script",
+        }
+    ]
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+    recipe_yaml = (
+        VALID_RECIPE_YAML
+        + """
+pagination:
+  strategy: url
+  page_link_selector: a[href*="page="]
+  max_pages: 3
+"""
+    )
+    client = FakeRecipeSuggestionClient(_llm_response(recipe_yaml))
+
+    result = suggest_recipe_from_artifact(
+        artifact,
+        source_test_insight=_failed_url_pagination_insight(session_status="connected"),
+        llm_client=client,
+    )
+
+    assert result.schema_valid is True
+    assert "strategy: ajax" in result.suggested_recipe_yaml
+    assert "strategy: url" not in result.suggested_recipe_yaml
+    assert "requires_session: true" in result.suggested_recipe_yaml
+    assert any("switched to observed AJAX" in warning for warning in result.warnings)
 
 
 def test_refinement_rejects_non_positive_max_attempts(project_root: Path) -> None:
@@ -533,6 +751,80 @@ def _llm_response(recipe_yaml: str) -> str:
             "selected_strategy": "selector_based",
         }
     )
+
+
+def _failed_url_pagination_insight(session_status: str = "") -> dict:
+    insight = {
+        "insight_title": "Paginated page access failed",
+        "pagination_strategy_tested": "url",
+        "pagination_duplicate_ratio": 0.97,
+        "failed_capabilities": [
+            {
+                "capability": "pagination_strategy",
+                "status": "fail",
+                "detail": "Recipe declares url pagination, but proof-fetched pages returned only duplicate listings.",
+            }
+        ],
+        "warnings": ["Later pages may require a logged-in session or client-side pagination."],
+    }
+    if session_status:
+        insight["source_access_session_status"] = session_status
+    return insight
+
+
+def _browser_click_required_insight() -> dict:
+    return {
+        "insight_title": "Paginated page access failed",
+        "pagination_strategy_tested": "ajax",
+        "interactive_pagination_control_count": 7,
+        "failed_capabilities": [
+            {
+                "capability": "pagination_strategy",
+                "status": "fail",
+                "detail": "Observed 7 interactive pagination control(s), but the recipe does not declare browser-click pagination.",
+            },
+            {
+                "capability": "browser_click_pagination",
+                "status": "fail",
+                "detail": "Interactive pagination controls were observed, but the recipe does not use browser-click pagination.",
+            },
+        ],
+    }
+
+
+def _whitehall_browser_click_recipe_yaml() -> str:
+    return """source_name: Whitehall
+start_url: https://www.whitehallresources.com/sap-jobs/
+mode: static_html
+listing:
+  card_selector: div.job-item
+  title_selector: h3 a
+  link_selector: h3 a
+  location_selector: .job-location
+  workload_selector: .job-type
+accept:
+  url_contains:
+    - /job/
+pagination:
+  strategy: browser_click
+  click_selector: a.next.page-numbers
+  max_pages: 2
+  request_delay_seconds: 0
+detail:
+  follow: true
+  use_json_ld: true
+  title_selector:
+    - .job-single h1
+    - h1
+  location_selector: .job-single .job-location
+  workload_selector: .job-single .job-type
+  max_detail_pages: 5
+  request_delay_seconds: 1.0
+limits:
+  max_cards: 25
+  min_title_length: 8
+  min_description_length: 0
+"""
 
 
 def _job_card_page() -> str:

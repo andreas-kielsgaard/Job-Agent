@@ -10,7 +10,7 @@ from job_agent.services.ai_search_service import (
     parse_ai_search_response,
     should_ai_evaluate_job,
 )
-from job_agent.services.llm_service import LlmCompletion
+from job_agent.llm import LlmCompletion
 
 
 def test_should_ai_evaluate_promising_and_skip_excluded() -> None:

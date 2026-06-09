@@ -11,7 +11,7 @@ from job_agent.prompt_context import (
     PromptContextProvider,
 )
 
-from .llm_service import LlmService
+from job_agent.llm import LlmService
 from .package_index_service import PackageIndexService
 
 

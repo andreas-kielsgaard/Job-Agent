@@ -7,17 +7,19 @@ from job_agent.models import Job
 from job_agent.services.extraction_assessment import listing_count_explanations
 from job_agent.services.extraction_quality import MIN_USEFUL_DESCRIPTION_CHARS
 from job_agent.services.job_board_recipe_service import (
+    extract_job_detail_from_html,
+    extract_jobs_with_recipe_from_html,
+    extract_jobs_with_recipe_from_url,
+    quality_from_recipe_result,
+)
+from job_agent.services.recipes.mapping import load_job_board_recipe
+from job_agent.services.recipes.models import (
     ApplicationEntry,
     DetailPageAttempt,
     PaginationLink,
     RecipeCapabilityCheck,
     RecipeExtractionResult,
     RecipeFieldCheck,
-    extract_job_detail_from_html,
-    extract_jobs_with_recipe_from_html,
-    extract_jobs_with_recipe_from_url,
-    load_job_board_recipe,
-    quality_from_recipe_result,
 )
 
 
@@ -474,35 +476,6 @@ def _capability_sentence(checks) -> str:
     if not checks:
         return "No capability checks were recorded."
     return "; ".join(f"{check.label}: {check.status}" for check in checks) + "."
-
-
-def _pagination_step_detail(recipe, extraction: RecipeExtractionResult) -> str:
-    if not (recipe.pagination.page_link_selector or recipe.pagination.next_selector):
-        return "Recipe has no pagination selectors configured."
-    return (
-        f"Looked for pagination with selectors {_selector_detail(recipe.pagination.page_link_selector)}"
-        f" and next selector {_selector_detail(recipe.pagination.next_selector)}. Found "
-        f"{len(extraction.pagination_links)} links. Preview does not fetch extra pagination pages; recipe cap is "
-        f"{recipe.pagination.max_pages} pages."
-    )
-
-
-def _detail_step_detail(recipe, extraction: RecipeExtractionResult) -> str:
-    if not recipe.detail.follow:
-        return "Recipe detail.follow is false, so no job-specific detail pages were requested."
-    enriched_count = _detail_enriched_count(extraction.jobs)
-    return (
-        f"Recipe detail.follow is true, capped at {recipe.detail.max_detail_pages} detail URLs with "
-        f"{recipe.detail.request_delay_seconds:g}s delay. {enriched_count} jobs show detail-page enrichment notes."
-    )
-
-
-def _detail_enriched_count(jobs: list[Job]) -> int:
-    return sum(
-        1
-        for job in jobs
-        if any("Detail page fetched" in note or "Detail page sample" in note for note in job.extraction_notes)
-    )
 
 
 def _selector_detail(value: object) -> str:

@@ -31,6 +31,7 @@ def build_dashboard_view(root: Path = ROOT) -> dict:
             "include_weak": False,
             "mark_seen": True,
             "generate_materials": False,
+            "detail_extraction_limit": 25,
         },
         "env": dotenv_values(root / ".env"),
     }

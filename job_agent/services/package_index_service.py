@@ -7,6 +7,8 @@ from typing import Any
 from job_agent.application_status_store import ApplicationStatusStore
 from job_agent.config import ROOT
 from job_agent.io.json_store import read_json, write_json
+from job_agent.models import Job
+from job_agent.store import JobStore
 
 
 class PackageIndexService:
@@ -21,6 +23,12 @@ class PackageIndexService:
         except ValueError:
             status_store.recover_corrupt_status_file()
             statuses = {}
+        try:
+            seen_records = JobStore(self.root, create=False).list_seen_records()
+        except ValueError:
+            seen_records = []
+        seen_by_stable = {record.stable_id: record for record in seen_records}
+        seen_by_listing = {record.listing_key: record for record in seen_records if record.listing_key}
         for path in (self.root / "output").glob("*/*/index.json"):
             item = read_json(path, None)
             if not isinstance(item, dict):
@@ -30,6 +38,10 @@ class PackageIndexService:
             status = statuses.get(item.get("stable_id", ""))
             if status:
                 item["application_status"] = status.status
+            listing_key = str(item.get("listing_key") or self.listing_key_for_package(item))
+            item["listing_key"] = listing_key
+            seen = seen_by_stable.get(str(item.get("stable_id") or "")) or seen_by_listing.get(listing_key)
+            item["posting_status"] = seen.posting_status if seen else str(item.get("posting_status") or "active")
             item["material_status"] = self.material_status(item)
             item["_index_path"] = str(path)
             packages.append(item)
@@ -104,3 +116,16 @@ class PackageIndexService:
             except ValueError:
                 continue
         return date.today()
+
+    @staticmethod
+    def listing_key_for_package(package: dict[str, Any]) -> str:
+        return JobStore.listing_key(
+            Job(
+                title=str(package.get("title") or ""),
+                company=str(package.get("company") or "Unknown"),
+                source=str(package.get("source") or "Unknown"),
+                source_id=str(package.get("source_id") or ""),
+                url=str(package.get("source_url") or package.get("url") or ""),
+                application_url=str(package.get("application_url") or package.get("source_url") or ""),
+            )
+        )

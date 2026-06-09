@@ -6,6 +6,7 @@ from job_agent.models import Job
 
 SelectorValue = str | list[str]
 VALID_MODES = {"static_html", "rendered_html"}
+VALID_PAGINATION_STRATEGIES = {"url", "ajax", "browser_click"}
 
 
 @dataclass
@@ -42,10 +43,20 @@ class DetailRecipe:
 
 @dataclass
 class PaginationRecipe:
+    strategy: str = "url"
     page_link_selector: SelectorValue = ""
     next_selector: SelectorValue = ""
+    click_selector: SelectorValue = ""
+    ajax_url_template: str = ""
     max_pages: int = 1
     request_delay_seconds: float = 1.0
+
+
+@dataclass
+class AccessRecipe:
+    requires_session: bool = False
+    session_scope: str = ""
+    setup_hint: str = ""
 
 
 @dataclass
@@ -71,6 +82,9 @@ class RecipeRunStep:
     status: str
     detail: str
     capability: str = ""
+    page_explored_count: int = 0
+    page_total: int = 0
+    jobs_found: int = 0
 
 
 @dataclass
@@ -114,9 +128,15 @@ class RecipeCapabilityCheck:
     def label(self) -> str:
         labels = {
             "listing_cards": "Listing cards",
+            "listing_total_access": "Listing total access",
             "job_urls": "Job URLs",
             "pagination_detection": "Pagination detection",
+            "pagination_strategy": "Pagination strategy",
             "pagination_navigation": "Pagination navigation",
+            "ajax_pagination": "AJAX pagination",
+            "browser_click_pagination": "Browser-click pagination",
+            "pagination_duplicate_pages": "Duplicate pagination pages",
+            "source_access": "Source access",
             "detail_navigation": "Detail navigation",
             "application_entry": "Application entry",
         }
@@ -163,6 +183,7 @@ class JobBoardRecipe:
     listing: ListingRecipe
     start_url: str = ""
     mode: str = "static_html"
+    access: AccessRecipe = field(default_factory=AccessRecipe)
     accept: AcceptRecipe = field(default_factory=AcceptRecipe)
     detail: DetailRecipe = field(default_factory=DetailRecipe)
     pagination: PaginationRecipe = field(default_factory=PaginationRecipe)
@@ -194,8 +215,12 @@ class RecipeExtractionResult:
     detail_fetch_limit: int | None = None
     detail_fetch_count: int = 0
     detail_enriched_count: int = 0
+    detail_listing_page_sample_target: int = 0
+    detail_verified_listing_page_count: int = 0
     pagination_fetch_count: int = 0
     pagination_fetch_attempts: list[str] = field(default_factory=list)
+    source_access_session_used: bool = False
+    source_access_login_gate_detected: bool = False
     listing_pages: list[ListingExtractionStats] = field(default_factory=list)
     listing_observed_count: int = 0
     listing_extracted_count: int = 0
@@ -203,3 +228,9 @@ class RecipeExtractionResult:
     listing_rejected_count: int = 0
     listing_duplicate_count: int = 0
     listing_limit_skipped_count: int = 0
+    visible_total_job_count: int = 0
+    pagination_duplicate_page_count: int = 0
+    pagination_duplicate_ratio: float = 0.0
+    pagination_unique_jobs_from_fetched_pages: int = 0
+    pagination_strategy_used: str = ""
+    interactive_pagination_control_count: int = 0

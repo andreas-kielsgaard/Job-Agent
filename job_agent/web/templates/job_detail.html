@@ -90,4 +90,10 @@
   <pre class="copy-source">{{ files.job }}</pre>
 </div>
 {% endif %}
+
+<div class="panel">
+  <h2>Scoring Sandbox</h2>
+  <p class="muted">Open this posting with its saved job fields prefilled.</p>
+  <a class="button light" href="/match-sandbox?job_id={{ package.stable_id }}&run_id={{ package.run_id }}">Open this posting in sandbox</a>
+</div>
 {% endblock %}

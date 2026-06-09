@@ -7,7 +7,7 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 from .config import ROOT
 from .models import GeneratedPackage, Job, MatchResult
 from .run_store import RunEvent
-from .services.llm_service import LlmService
+from .llm import LlmService
 
 
 def generate_materials(

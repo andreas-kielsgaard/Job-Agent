@@ -5,7 +5,7 @@ from pathlib import Path
 from job_agent.config import load_profile
 from job_agent.generator import generate_materials, maybe_generate_application_with_llm, select_experience
 from job_agent.models import Job, MatchResult
-from job_agent.services.llm_service import LlmCompletion
+from job_agent.llm import LlmCompletion
 
 
 def test_fiori_role_includes_fiori_caveat(template_project: Path) -> None:

@@ -1,0 +1,104 @@
+<div class="grid">
+  <div>
+    <label title="Controls how strongly remote/hybrid work matters. Required means non-remote/non-hybrid postings are excluded. Strong preference penalizes missing remote. Slight preference only adds points when remote/hybrid is visible. Neutral ignores remote status.">Remote policy</label>
+    <select name="remote_policy">
+      {% for option in match_engine.remote_policy_options %}
+      <option value="{{ option.value }}" {% if match_engine.remote_policy == option.value %}selected{% endif %}>{{ option.label }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div>
+    <label title="Controls how permanent employee roles are treated. Exclude removes them from results, Penalize subtracts the configured penalty, Ignore gives no special treatment.">Permanent roles</label>
+    <select name="permanent_policy">
+      {% for option in match_engine.permanent_policy_options %}
+      <option value="{{ option.value }}" {% if match_engine.permanent_policy == option.value %}selected{% endif %}>{{ option.label }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div>
+    <label title="Points subtracted when Permanent roles is set to Penalize and the posting appears to be permanent employment. Use a negative value.">Permanent penalty</label>
+    <input type="number" name="permanent_penalty" value="{{ match_engine.permanent_penalty }}">
+  </div>
+  <div>
+    <label title="The maximum total points technical keyword groups can contribute. Example: if five technical groups match for 90 total points and the cap is 55, technical_match is 55.">Technical cap</label>
+    <input type="number" name="technical_cap" value="{{ match_engine.technical_cap }}">
+  </div>
+  <div>
+    <label title="The maximum total points module keyword groups can contribute. Example: matching QM, WM, and MM can add only up to this cap.">Module cap</label>
+    <input type="number" name="module_cap" value="{{ match_engine.module_cap }}">
+  </div>
+</div>
+
+{% macro rules_section(title, prefix, rows) -%}
+<details class="rule-section">
+  <summary>
+    <span>{{ title }}</span>
+    <span class="muted">expand</span>
+  </summary>
+  <p class="muted">Each row is one keyword group. Put alternatives one per line, such as ABAP, ABAP Coding, and ABAP Development.</p>
+  <table class="rules-table" data-rule-table="{{ prefix }}">
+    <thead>
+      <tr>
+        <th title="Group name shown in explanations and matched signals.">Group</th>
+        <th title="Alternatives for this group. Any one matching term triggers the row. Use one term per line.">Alternatives</th>
+        <th title="Points added when this group matches. Higher values make the group more important, unless capped by the section cap.">Points</th>
+        <th title="Bonus adds points when matched. Required excludes the posting when none of this group's alternatives appear.">Mode</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for rule in rows %}
+      <tr>
+        <td><input name="{{ prefix }}_rule_label" value="{{ rule.label }}"></td>
+        <td><textarea class="compact-textarea" name="{{ prefix }}_rule_terms">{{ rule.terms | join('\n') }}</textarea></td>
+        <td><input type="number" name="{{ prefix }}_rule_score" value="{{ rule.score }}"></td>
+        <td>
+          <select name="{{ prefix }}_rule_mode">
+            {% for option in match_engine.rule_mode_options %}
+            <option value="{{ option.value }}" {% if rule.mode == option.value %}selected{% endif %}>{{ option.label }}</option>
+            {% endfor %}
+          </select>
+        </td>
+        <td><button class="light" type="button" onclick="removeMatchRuleRow(this)">Remove</button></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <button class="light" type="button" onclick="addMatchRuleRow('{{ prefix }}')">Add rule</button>
+</details>
+{%- endmacro %}
+
+{{ rules_section("Technical Keyword Rules", "technical", match_engine.technical_rows) }}
+{{ rules_section("Module Keyword Rules", "module", match_engine.module_rows) }}
+{{ rules_section("Contract Keyword Rules", "contract", match_engine.contract_rows) }}
+
+<script>
+  window.matchRuleRowHtml = function(prefix) {
+    return `
+      <tr>
+        <td><input name="${prefix}_rule_label" value=""></td>
+        <td><textarea class="compact-textarea" name="${prefix}_rule_terms" placeholder="One alternative per line"></textarea></td>
+        <td><input type="number" name="${prefix}_rule_score" value=""></td>
+        <td>
+          <select name="${prefix}_rule_mode">
+            <option value="bonus">Bonus</option>
+            <option value="required">Required</option>
+          </select>
+        </td>
+        <td><button class="light" type="button" onclick="removeMatchRuleRow(this)">Remove</button></td>
+      </tr>`;
+  };
+
+  window.addMatchRuleRow = function(prefix) {
+    const table = document.querySelector(`[data-rule-table="${prefix}"] tbody`);
+    if (!table) return;
+    table.insertAdjacentHTML("beforeend", matchRuleRowHtml(prefix));
+    table.closest("form")?.dispatchEvent(new Event("input", { bubbles: true }));
+  };
+
+  window.removeMatchRuleRow = function(button) {
+    const form = button.closest("form");
+    button.closest("tr")?.remove();
+    form?.dispatchEvent(new Event("input", { bubbles: true }));
+  };
+</script>

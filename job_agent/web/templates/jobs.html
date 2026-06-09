@@ -1,32 +1,91 @@
 {% extends "base.html" %}
+{% macro tri_filter(name, label, options, includes, excludes) %}
+<div class="filter-block">
+  <label>{{ label }}</label>
+  <div class="tri-filter-group" data-filter-name="{{ name }}">
+    {% for item in options %}
+    {% set value = item.id if item.id is defined else item.value if item.value is defined else item %}
+    {% set option_label = item.label if item.label is defined else item %}
+    {% set state = "include" if value in includes else "exclude" if value in excludes else "off" %}
+    <button
+      type="button"
+      class="tri-filter-option {{ state }}"
+      data-state="{{ state }}"
+      data-name="{{ name }}"
+      data-value="{{ value }}"
+      aria-pressed="{{ 'true' if state != 'off' else 'false' }}"
+    >
+      <span>{{ option_label }}</span>
+      <small>{% if state == "include" %}Include{% elif state == "exclude" %}Exclude{% else %}Any{% endif %}</small>
+    </button>
+    {% endfor %}
+  </div>
+</div>
+{% endmacro %}
+
 {% block content %}
 <div class="panel">
   <h1>Jobs</h1>
-  <p class="muted">Browse unique jobs across all runs. Click a row to open the job. Use checkboxes for bulk status actions.</p>
-  <form method="get" class="grid">
+  <p class="muted">Browse jobs across sources and runs. Weak and excluded matches are hidden by default; use the filters to include or exclude multiple values.</p>
+  <form method="get" class="grid" id="jobs-filter-form">
+    {{ tri_filter("category", "Categories", [
+      {"value": "strong", "label": "Strong"},
+      {"value": "exploratory", "label": "Exploratory"},
+      {"value": "weak", "label": "Weak"},
+      {"value": "excluded", "label": "Excluded"},
+      {"value": "not_scored", "label": "Indexed only"}
+    ], filters.category_includes, filters.category_excludes) }}
+
+    {{ tri_filter("source_id", "Sources", source_options, filters.source_id_includes, filters.source_id_excludes) }}
+
+    {{ tri_filter("app_status", "Application statuses", [
+      {"value": "unreviewed", "label": "Unreviewed"},
+      {"value": "interesting", "label": "Interesting"},
+      {"value": "not_interesting", "label": "Not interesting"},
+      {"value": "applied", "label": "Applied"},
+      {"value": "archived", "label": "Archived"}
+    ], filters.app_status_includes, filters.app_status_excludes) }}
+
+    {{ tri_filter("run_id", "Runs", run_options, filters.run_id_includes, filters.run_id_excludes) }}
+
     <div>
-      <label>Categories</label>
-      <select class="compact-select" name="category" multiple>
-        {% for item in ["strong", "exploratory", "weak", "excluded"] %}
-        <option value="{{ item }}" {% if item in filters.categories %}selected{% endif %}>{{ item }}</option>
-        {% endfor %}
-      </select>
+      <label>Run date from</label>
+      <input type="date" name="date_from" value="{{ filters.date_from }}">
     </div>
     <div>
-      <label>Application statuses</label>
-      <select class="compact-select" name="app_status" multiple>
-        {% for item in ["unreviewed", "interesting", "not_interesting", "applied", "archived"] %}
-        <option value="{{ item }}" {% if item in filters.app_statuses %}selected{% endif %}>{{ item }}</option>
-        {% endfor %}
-      </select>
+      <label>Run date to</label>
+      <input type="date" name="date_to" value="{{ filters.date_to }}">
     </div>
-    <div><button type="submit">Filter</button><a class="button light" href="/jobs">Clear</a></div>
+    <div>
+      <label>Source text</label>
+      <input name="source" value="{{ filters.source }}" placeholder="Name, id, or URL">
+    </div>
+
+    {{ tri_filter("material_status", "Material status", [
+      {"value": "generated", "label": "Generated"},
+      {"value": "missing", "label": "Missing"}
+    ], filters.material_status_includes, filters.material_status_excludes) }}
+
+    {{ tri_filter("posting_status", "Posting status", [
+      {"value": "active", "label": "Active"},
+      {"value": "no_longer_posted", "label": "No longer posted"}
+    ], filters.posting_status_includes, filters.posting_status_excludes) }}
+
+    <label class="check"><input type="checkbox" name="ai_prioritized" value="1" {% if filters.ai_prioritized %}checked{% endif %}> AI-prioritized</label>
+    <input type="hidden" name="dedupe" value="0">
+    <label class="check"><input type="checkbox" name="dedupe" value="1" {% if filters.dedupe %}checked{% endif %}> Show latest instance of each job</label>
+    <div id="tri-filter-inputs"></div>
+    <div>
+      <button type="submit">Filter</button>
+      <a class="button light" href="/jobs">Clear</a>
+    </div>
   </form>
+  <p class="muted">{{ result_count }} job{% if result_count != 1 %}s{% endif %} shown.</p>
 </div>
 
 <div class="panel">
   <form method="post" action="/api/jobs/bulk-status">
-    <input type="hidden" name="return_to" value="/jobs">
+    <input type="hidden" name="return_to" value="{{ return_to }}">
     <div class="row">
       <select name="status" style="max-width:260px;">
         <option value="unreviewed">Mark unreviewed/seen</option>
@@ -38,21 +97,79 @@
       <button type="submit">Apply to selected</button>
     </div>
     <table>
-      <thead><tr><th><input type="checkbox" onchange="toggleAll(this, '.job-check')"></th><th>Role</th><th>Company</th><th>Location</th><th>Match</th><th>Status</th><th>Run</th></tr></thead>
+      <thead><tr><th><input type="checkbox" onchange="toggleAll(this, '.job-check:not(:disabled)')"></th><th>Role</th><th>Company</th><th>Source</th><th>Location</th><th>Match</th><th>Status</th><th>Run</th></tr></thead>
       <tbody>
         {% for job in jobs %}
+        {% if job.has_package %}
         <tr class="clickable-row" onclick="goToRow(event, '/jobs/{{ job.stable_id }}?run_id={{ job.run_id }}')">
-          <td><input class="job-check" type="checkbox" name="job_ids" value="{{ job.stable_id }}"></td>
+        {% elif job.source_url %}
+        <tr class="clickable-row" onclick="goToRow(event, {{ job.source_url|tojson }})">
+        {% else %}
+        <tr>
+        {% endif %}
+          <td><input class="job-check" type="checkbox" name="job_ids" value="{{ job.stable_id }}" {% if not job.can_update_status %}disabled title="Open job details before changing follow-up status."{% endif %}></td>
           <td><strong>{{ job.title }}</strong><br><span class="muted">{{ job.state }}</span></td>
           <td>{{ job.company }}{% if job.recruiter %}<br><span class="muted">{{ job.recruiter }}</span>{% endif %}</td>
+          <td>{{ job.source or job.source_id }}<br><span class="muted">{{ job.source_id }}</span></td>
           <td>{{ job.location }}<br><span class="muted">{{ job.remote }}</span></td>
           <td><span class="badge {{ job.match_category }}">{{ job.match_score }}% {{ job.match_category }}</span></td>
-          <td><span class="badge {{ job.application_status }}">{{ job.application_status }}</span></td>
-          <td>{{ job.run_id }}</td>
+          <td>
+            <span class="badge {{ job.application_status }}">{{ job.application_status }}</span>
+            {% if job.posting_status == "no_longer_posted" %}
+            <br><span class="badge low">No longer posted</span>
+            {% endif %}
+          </td>
+          <td>{{ job.run_label or job.run_id }}<br><span class="muted">{{ job.run_date }}</span></td>
         </tr>
+        {% else %}
+        <tr><td colspan="8">No jobs match the current filters.</td></tr>
         {% endfor %}
       </tbody>
     </table>
   </form>
 </div>
+
+<script>
+  function initTriFilters() {
+    const form = document.getElementById("jobs-filter-form");
+    if (!form) return;
+    const hiddenInputs = document.getElementById("tri-filter-inputs");
+    const states = ["off", "include", "exclude"];
+    const stateLabels = { off: "Any", include: "Include", exclude: "Exclude" };
+
+    function renderHiddenInputs() {
+      hiddenInputs.innerHTML = "";
+      form.querySelectorAll(".tri-filter-option").forEach((button) => {
+        const state = button.dataset.state || "off";
+        if (state === "off") return;
+        const input = document.createElement("input");
+        input.type = "hidden";
+        input.name = `${button.dataset.name}_${state}`;
+        input.value = button.dataset.value || "";
+        hiddenInputs.appendChild(input);
+      });
+    }
+
+    function applyState(button, state) {
+      button.dataset.state = state;
+      button.classList.remove("off", "include", "exclude");
+      button.classList.add(state);
+      button.setAttribute("aria-pressed", state === "off" ? "false" : "true");
+      const label = button.querySelector("small");
+      if (label) label.textContent = stateLabels[state];
+    }
+
+    form.querySelectorAll(".tri-filter-option").forEach((button) => {
+      button.addEventListener("click", () => {
+        const current = button.dataset.state || "off";
+        const next = states[(states.indexOf(current) + 1) % states.length];
+        applyState(button, next);
+        renderHiddenInputs();
+      });
+    });
+    renderHiddenInputs();
+  }
+
+  document.addEventListener("DOMContentLoaded", initTriFilters);
+</script>
 {% endblock %}

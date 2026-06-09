@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="source-detail-header">
+  <div>
+    <p class="eyebrow">Source session</p>
+    <h1>Connect Source Session</h1>
+    <p class="muted">{{ source.name }}</p>
+  </div>
+  <a class="button light" href="/sources/{{ source.id }}">Back to source</a>
+</div>
+
+{% if message %}
+<div class="panel"><span class="badge high">{{ message }}</span></div>
+{% endif %}
+{% if warning %}
+<div class="panel"><span class="badge low">{{ warning }}</span></div>
+{% endif %}
+
+<div class="panel">
+  <h2>Session Status</h2>
+  <div class="grid">
+    <div class="stat"><span>Status</span><strong>{{ source_session.label }}</strong></div>
+    <div class="stat"><span>Scope</span><strong>{{ source_session.session_scope or source.id }}</strong></div>
+    <div class="stat"><span>Connected</span><strong>{{ source_session.connected_at or "Never" }}</strong></div>
+    <div class="stat"><span>Verified</span><strong>{{ source_session.verified_at or "Not yet" }}</strong></div>
+    <div class="stat"><span>Expires</span><strong>{{ source_session.expires_at or "Not set" }}</strong></div>
+  </div>
+  <p class="muted">{{ source_session.summary }}</p>
+  {% if source_session.usable %}
+  <form method="post" action="/sources/{{ source.id }}/session/verify" class="inline-form">
+    <button type="submit">Verify session</button>
+  </form>
+  {% endif %}
+</div>
+
+<div class="panel">
+  <h2>Connect Browser Session</h2>
+  <p class="muted">Open this source in a browser and sign in if needed. The app saves this source-only session while the browser is open; close every sign-in window when you are done.</p>
+  <form method="post" action="/sources/{{ source.id }}/session/capture">
+    <input type="hidden" name="storage_state_path" value="{{ source_session.storage_state_path or default_storage_state_path }}">
+    <input type="hidden" name="expires_at" value="{{ source_session.expires_at }}">
+    <div class="form-actions">
+      <button type="submit">Open sign-in browser</button>
+    </div>
+  </form>
+</div>
+
+<div class="panel">
+  <h2>Use Existing Browser Session</h2>
+  <p class="muted">Use this if a session file was already captured for the source. After connecting it, verify the session here before daily runs rely on it.</p>
+  <form method="post" action="/sources/{{ source.id }}/session/connect">
+    <div class="form-grid">
+      <div>
+        <label>Saved browser session file</label>
+        <input name="storage_state_path" value="{{ source_session.storage_state_path or default_storage_state_path }}">
+      </div>
+      <div>
+        <label>Expires at</label>
+        <input name="expires_at" value="{{ source_session.expires_at }}" placeholder="2026-07-01T09:00:00+00:00">
+      </div>
+    </div>
+    <div class="form-actions">
+      <button type="submit">Connect session</button>
+    </div>
+  </form>
+  {% if source_session.storage_state_path %}
+  <form method="post" action="/sources/{{ source.id }}/session/clear" class="inline-form">
+    <button type="submit" class="button light">Clear session</button>
+  </form>
+  {% endif %}
+</div>
+{% endblock %}
