@@ -10,6 +10,9 @@ from job_agent.services.extraction_quality import ExtractionQuality, candidate_q
 from job_agent.services.job_board_recipe_service import (
     AcceptRecipe,
     AccessRecipe,
+    ApiFieldMapping,
+    ApiPaginationRecipe,
+    ApiRequestRecipe,
     DetailRecipe,
     JobBoardRecipe,
     ListingRecipe,
@@ -17,16 +20,18 @@ from job_agent.services.job_board_recipe_service import (
     PaginationRecipe,
     PatternsRecipe,
     RejectRecipe,
+    _pagination_urls_to_fetch,
     check_recipe_against_html,
     discover_visible_total_job_count,
     enrich_jobs_with_detail_pages,
     extract_job_detail_from_html,
     extract_jobs_with_recipe,
+    extract_jobs_with_recipe_from_api_payload,
     extract_jobs_with_recipe_from_html,
     extract_jobs_with_recipe_from_url,
     find_pagination_links,
+    job_board_recipe_from_mapping,
     load_job_board_recipe,
-    _pagination_urls_to_fetch,
 )
 from job_agent.sources import extract_generic_jobs_from_html
 
@@ -43,6 +48,213 @@ def test_recipe_extracts_real_job_cards_and_dedupes_urls() -> None:
     assert jobs[0].source_confidence == "recipe"
     assert jobs[0].freshness_confidence == "recipe"
     assert jobs[0].extraction_notes == ["Recipe-based extraction; verify details manually."]
+
+
+def test_api_recipe_schema_accepts_listing_api_without_html_selectors() -> None:
+    recipe = job_board_recipe_from_mapping(
+        {
+            "source_name": "API Board",
+            "start_url": "https://example.com/jobs",
+            "listing_api": {
+                "method": "POST",
+                "url": "https://example.com/api/search",
+                "body": {"query": "SAP", "resultFrom": 0},
+                "results_path": "result.results",
+                "total_path": "result.hits",
+                "fields": {
+                    "title": "title",
+                    "url_template": "https://example.com/jobs/{slug}/{jobReference}/",
+                    "location": "location",
+                    "description_html": "description",
+                },
+                "pagination": {
+                    "strategy": "offset",
+                    "offset_param": "resultFrom",
+                    "page_size_param": "resultSize",
+                    "page_size": 20,
+                    "max_pages": 3,
+                },
+            },
+        }
+    )
+
+    assert recipe.listing.card_selector == ""
+    assert recipe.listing_api.method == "POST"
+    assert recipe.listing_api.results_path == "result.results"
+
+
+def test_api_recipe_schema_rejects_credentials_and_missing_access_plan() -> None:
+    with pytest.raises(ValueError, match="missing required listing selector"):
+        job_board_recipe_from_mapping({"source_name": "Broken"})
+
+    with pytest.raises(ValueError, match="must not contain credentials"):
+        job_board_recipe_from_mapping(
+            {
+                "source_name": "API Board",
+                "listing_api": {
+                    "url": "https://example.com/api/search",
+                    "headers": {"Authorization": "Bearer secret"},
+                    "results_path": "items",
+                    "fields": {"title": "title", "url": "url"},
+                },
+            }
+        )
+
+    with pytest.raises(ValueError, match="listing_api.body must not contain credentials"):
+        job_board_recipe_from_mapping(
+            {
+                "source_name": "API Board",
+                "listing_api": {
+                    "url": "https://example.com/api/search",
+                    "body": {"token": "secret"},
+                    "results_path": "items",
+                    "fields": {"title": "title", "url": "url"},
+                },
+            }
+        )
+
+
+def test_extract_jobs_with_api_payload_maps_json_records_to_jobs() -> None:
+    payload = {
+        "result": {
+            "hits": 95,
+            "results": [
+                {
+                    "title": "SAP ABAP Consultant",
+                    "slug": "sap-abap-consultant",
+                    "jobReference": "123",
+                    "location": "Remote",
+                    "remoteWorkingAvailable": True,
+                    "salaryText": "EUR 750/day",
+                    "jobType": "Contract",
+                    "postDate": "2026-06-09",
+                    "description": "<p>ABAP RAP project with CDS and OData delivery.</p>",
+                }
+            ],
+        }
+    }
+
+    result = extract_jobs_with_recipe_from_api_payload(payload, "https://example.com/en-gb/job-search/", _api_recipe())
+
+    assert result.access_strategy == "api"
+    assert result.visible_total_job_count == 95
+    assert result.records_observed_count == 1
+    assert result.jobs[0].title == "SAP ABAP Consultant"
+    assert result.jobs[0].url == "https://example.com/en-gb/job/sap-abap-consultant/123/"
+    assert result.jobs[0].remote == "Yes"
+    assert "ABAP RAP project" in result.jobs[0].description
+    checks = {check.capability: check for check in result.capability_checks}
+    assert checks["api_listing"].status == "pass"
+
+
+def test_api_pagination_fetches_bounded_pages(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = []
+    pages = [
+        {
+            "result": {
+                "hits": 3,
+                "results": [
+                    {"title": "SAP Consultant 1", "slug": "sap-1", "jobReference": "1", "description": "SAP one"}
+                ],
+            }
+        },
+        {
+            "result": {
+                "hits": 3,
+                "results": [
+                    {"title": "SAP Consultant 2", "slug": "sap-2", "jobReference": "2", "description": "SAP two"}
+                ],
+            }
+        },
+        {
+            "result": {
+                "hits": 3,
+                "results": [
+                    {"title": "SAP Consultant 3", "slug": "sap-3", "jobReference": "3", "description": "SAP three"}
+                ],
+            }
+        },
+    ]
+
+    def fake_fetch_json_api(**kwargs):
+        calls.append(kwargs)
+        index = len(calls) - 1
+        return pages[index], f"https://example.com/api/search?call={index}", []
+
+    monkeypatch.setattr("job_agent.services.job_board_recipe_service._fetch_json_api", fake_fetch_json_api)
+
+    result = extract_jobs_with_recipe_from_url(
+        "https://example.com/en-gb/job-search/",
+        _api_recipe(),
+        fetch_pagination=True,
+        pagination_page_limit=3,
+    )
+
+    assert [job.title for job in result.jobs] == ["SAP Consultant 1", "SAP Consultant 2", "SAP Consultant 3"]
+    assert result.api_request_count == 3
+    assert result.pagination_fetch_count == 2
+    assert calls[1]["body"]["resultFrom"] == 20
+    assert calls[2]["body"]["resultFrom"] == 40
+    checks = {check.capability: check for check in result.capability_checks}
+    assert checks["api_pagination"].status == "pass"
+
+
+def test_api_listing_can_merge_html_detail_pages(monkeypatch: pytest.MonkeyPatch) -> None:
+    payload = {
+        "result": {
+            "hits": 1,
+            "results": [
+                {
+                    "title": "SAP Basis Consultant",
+                    "slug": "sap-basis",
+                    "jobReference": "9",
+                    "description": "Short listing text.",
+                }
+            ],
+        }
+    }
+    detail_html = (
+        "<main><h1>SAP Basis Lead Consultant</h1>"
+        "<section class='detail-description'>Basis migration and S/4HANA operations contract.</section>"
+        "<span class='detail-location'>Copenhagen</span></main>"
+    )
+
+    class FakeResponse:
+        text = detail_html
+        url = "https://example.com/en-gb/job/sap-basis/9/"
+
+        def raise_for_status(self) -> None:
+            return None
+
+    monkeypatch.setattr(
+        "job_agent.services.job_board_recipe_service._fetch_json_api",
+        lambda **kwargs: (payload, "https://example.com/api/search", []),
+    )
+    monkeypatch.setattr(
+        "job_agent.services.job_board_recipe_service._requests_get_with_session_state",
+        lambda *args, **kwargs: FakeResponse(),
+    )
+    recipe = _api_recipe(
+        detail=DetailRecipe(
+            follow=True,
+            title_selector="h1",
+            description_selector=".detail-description",
+            location_selector=".detail-location",
+            max_detail_pages=1,
+        )
+    )
+
+    result = extract_jobs_with_recipe_from_url(
+        "https://example.com/en-gb/job-search/",
+        recipe,
+        detail_page_limit=1,
+    )
+
+    assert result.detail_fetch_count == 1
+    assert result.detail_enriched_count == 1
+    assert result.jobs[0].title == "SAP Basis Lead Consultant"
+    assert result.jobs[0].location == "Copenhagen"
+    assert "Basis migration" in result.jobs[0].description
 
 
 def test_recipe_extraction_result_explains_listing_count_mismatch() -> None:
@@ -83,6 +295,48 @@ def test_visible_total_count_failure_when_extractor_reaches_too_few_jobs() -> No
     assert "advertise 66 posting" in checks["listing_total_access"].detail
 
 
+def test_visible_total_count_allows_bounded_pagination_proof(monkeypatch: pytest.MonkeyPatch) -> None:
+    page_1 = """
+    <main>
+      <p>Showing 1-10 of 30 jobs</p>
+      <article class="job-card"><h2><a class="job-link" href="/jobs/sap-1">SAP Consultant 1</a></h2><p class="summary">SAP role one with useful context.</p></article>
+      <a class="page-link" href="/jobs?page=2">2</a>
+      <a class="page-link" href="/jobs?page=3">3</a>
+    </main>
+    """
+    page_2 = """
+    <main>
+      <article class="job-card"><h2><a class="job-link" href="/jobs/sap-2">SAP Consultant 2</a></h2><p class="summary">SAP role two with useful context.</p></article>
+    </main>
+    """
+
+    def fake_fetch(url: str, timeout_seconds: int):
+        if "page=2" in url:
+            return page_2, url, []
+        return page_1, "https://example.com/jobs?page=1", []
+
+    recipe = _recipe(
+        pagination=PaginationRecipe(
+            page_link_selector='a.page-link[href*="page="]',
+            max_pages=3,
+            request_delay_seconds=0,
+        )
+    )
+    monkeypatch.setattr("job_agent.services.job_board_recipe_service._fetch_static_html", fake_fetch)
+
+    result = extract_jobs_with_recipe_from_url(
+        "https://example.com/jobs?page=1",
+        recipe,
+        fetch_pagination=True,
+        pagination_page_limit=2,
+    )
+
+    checks = {check.capability: check for check in result.capability_checks}
+    assert [job.title for job in result.jobs] == ["SAP Consultant 1", "SAP Consultant 2"]
+    assert checks["listing_total_access"].status == "pass"
+    assert "confirmed pagination" in checks["listing_total_access"].detail
+
+
 def test_visible_total_count_reads_formatted_showing_total() -> None:
     html = "<main><p>Showing 1-25 of 1,234 projects</p></main>"
 
@@ -99,6 +353,40 @@ def test_pagination_urls_skip_first_page_links() -> None:
     assert _pagination_urls_to_fetch(links, max_pages=4) == [
         "https://example.com/jobs?pagenr=2",
         "https://example.com/jobs?pagenr=3",
+    ]
+
+
+def test_page_query_pagination_normalizes_undefined_links_to_current_search_url() -> None:
+    html = """
+    <nav class="search-pagination-wrap">
+      <a class="page-link" href="undefined?page=1" aria-label="Page 1">1</a>
+      <a class="page-link" href="undefined?page=2" aria-label="Go to page 2">2</a>
+      <a class="page-link" href="undefined?page=3" aria-label="Go to page 3">3</a>
+      <a class="page-link more" href="undefined?page=2" aria-label="Next">Next</a>
+    </nav>
+    """
+    recipe = _recipe(
+        pagination=PaginationRecipe(
+            page_link_selector='a.page-link[href*="page="]',
+            next_selector='a.page-link[href*="page="][aria-label*="Next"]',
+            max_pages=3,
+        )
+    )
+
+    links = find_pagination_links(
+        html,
+        "https://www.experis.pl/en/search?page=1&searchKeyword=SAP",
+        recipe,
+    )
+
+    assert [(link.label, link.url, link.is_next) for link in links] == [
+        ("1", "https://www.experis.pl/en/search?page=1&searchKeyword=SAP", False),
+        ("2", "https://www.experis.pl/en/search?page=2&searchKeyword=SAP", True),
+        ("3", "https://www.experis.pl/en/search?page=3&searchKeyword=SAP", False),
+    ]
+    assert _pagination_urls_to_fetch(links, max_pages=3) == [
+        "https://www.experis.pl/en/search?page=2&searchKeyword=SAP",
+        "https://www.experis.pl/en/search?page=3&searchKeyword=SAP",
     ]
 
 
@@ -489,9 +777,107 @@ def test_recipe_flags_pagination_pages_that_return_duplicates(monkeypatch: pytes
     assert checks["pagination_strategy"].status == "fail"
     assert checks["pagination_navigation"].status == "fail"
     assert checks["pagination_duplicate_pages"].status == "fail"
-    assert "returned only duplicate listings" in checks["pagination_strategy"].detail
-    assert "logged-in session or client-side pagination" in checks["pagination_navigation"].detail
-    assert any("returned only listings already seen" in warning for warning in result.warnings)
+    assert "repeated postings" in checks["pagination_strategy"].detail
+    assert "produced no new jobs" in checks["pagination_navigation"].detail
+    assert any("duplicate listing" in warning for warning in result.warnings)
+
+
+def test_url_pagination_skips_links_back_to_start_page(monkeypatch: pytest.MonkeyPatch) -> None:
+    def job_cards(start: int, stop: int) -> str:
+        return "\n".join(
+            (
+                f'<div class="job-card"><h2><a class="job-link" href="/jobs/sap-{index}">'
+                f"SAP Consultant {index}</a></h2><p class=\"summary\">SAP listing {index} with useful context.</p></div>"
+            )
+            for index in range(start, stop + 1)
+        )
+
+    page_1 = job_cards(1, 15) + '<a class="page-numbers" href="/jobs/page/2/">2</a>'
+    page_2 = (
+        job_cards(16, 30)
+        + '<a class="page-numbers" href="/jobs/page/3/">3</a>'
+        + '<a class="page-numbers" href="/jobs/">Previous</a>'
+    )
+    page_3 = job_cards(31, 40) + '<a class="page-numbers" href="/jobs/">Back to first page</a>'
+
+    def fake_fetch(url: str, timeout_seconds: int):
+        if url.endswith("/page/2/"):
+            return page_2, url, []
+        if url.endswith("/page/3/"):
+            return page_3, url, []
+        return page_1, "https://example.com/jobs/", []
+
+    recipe = _recipe(
+        pagination=PaginationRecipe(
+            page_link_selector="a.page-numbers",
+            max_pages=4,
+            request_delay_seconds=0,
+        )
+    )
+    monkeypatch.setattr("job_agent.services.job_board_recipe_service._fetch_static_html", fake_fetch)
+
+    result = extract_jobs_with_recipe_from_url(
+        "https://example.com/jobs/",
+        recipe,
+        fetch_pagination=True,
+        fetch_details=False,
+        pagination_page_limit=0,
+    )
+
+    checks = {check.capability: check for check in result.capability_checks}
+    assert len(result.jobs) == 40
+    assert result.pagination_fetch_attempts == [
+        "https://example.com/jobs/page/2/",
+        "https://example.com/jobs/page/3/",
+    ]
+    assert result.pagination_duplicate_page_count == 0
+    assert result.listing_duplicate_count == 0
+    assert result.warnings == []
+    assert checks["pagination_strategy"].status == "pass"
+    assert checks["pagination_duplicate_pages"].status == "pass"
+
+
+def test_url_pagination_allows_duplicate_overlap_when_page_adds_new_jobs(monkeypatch: pytest.MonkeyPatch) -> None:
+    page_1 = """
+    <div class="job-card"><h2><a class="job-link" href="/jobs/sap-1">SAP ABAP Consultant</a></h2><p class="summary">ABAP listing one with useful context.</p></div>
+    <a class="page-numbers" href="https://example.com/jobs/page/2/">2</a>
+    """
+    page_2 = """
+    <div class="job-card"><h2><a class="job-link" href="/jobs/sap-1">SAP ABAP Consultant</a></h2><p class="summary">ABAP listing one with useful context.</p></div>
+    <div class="job-card"><h2><a class="job-link" href="/jobs/sap-2">SAP Basis Consultant</a></h2><p class="summary">Basis listing two with useful context.</p></div>
+    """
+
+    def fake_fetch(url: str, timeout_seconds: int):
+        if url.endswith("/page/2/"):
+            return page_2, url, []
+        return page_1, "https://example.com/jobs", []
+
+    recipe = _recipe(
+        pagination=PaginationRecipe(
+            page_link_selector="a.page-numbers",
+            max_pages=2,
+            request_delay_seconds=0,
+        )
+    )
+    monkeypatch.setattr("job_agent.services.job_board_recipe_service._fetch_static_html", fake_fetch)
+
+    result = extract_jobs_with_recipe_from_url(
+        "https://example.com/jobs",
+        recipe,
+        fetch_pagination=True,
+        fetch_details=False,
+    )
+
+    checks = {check.capability: check for check in result.capability_checks}
+    assert [job.title for job in result.jobs] == ["SAP ABAP Consultant", "SAP Basis Consultant"]
+    assert result.pagination_duplicate_page_count == 1
+    assert result.pagination_duplicate_ratio == 0.5
+    assert result.warnings == []
+    assert checks["pagination_strategy"].status == "pass"
+    assert checks["pagination_navigation"].status == "pass"
+    assert checks["pagination_duplicate_pages"].status == "pass"
+    assert "duplicate listing overlap" in checks["pagination_navigation"].detail
+    assert "every fetched page added new jobs" in checks["pagination_duplicate_pages"].detail
 
 
 def test_connected_session_passes_source_access_even_when_pagination_strategy_fails(
@@ -947,6 +1333,47 @@ def test_cli_local_fixture_ignores_rendered_recipe_mode(capsys: pytest.CaptureFi
 
     assert "Input mode: local_fixture_html" in output
     assert "Warning: Local fixture HTML ignores recipe mode: rendered_html." in output
+
+
+def _api_recipe(detail: DetailRecipe | None = None) -> JobBoardRecipe:
+    return JobBoardRecipe(
+        source_name="API Board",
+        start_url="https://example.com/en-gb/job-search/",
+        listing_api=ApiRequestRecipe(
+            method="POST",
+            url="https://example.com/api/search",
+            body={"resultSize": 20, "resultFrom": 0, "resultPage": 0},
+            results_path="result.results",
+            total_path="result.hits",
+            fields=ApiFieldMapping(
+                title="title",
+                url_template="https://example.com/en-gb/job/{slug}/{jobReference}/",
+                location="location",
+                remote="remoteWorkingAvailable",
+                rate="salaryText",
+                workload="jobType",
+                posted_date="postDate",
+                description_html="description",
+                job_id="jobReference",
+            ),
+            pagination=ApiPaginationRecipe(
+                strategy="offset",
+                offset_param="resultFrom",
+                offset_start=0,
+                page_param="resultPage",
+                page_start=0,
+                page_size_param="resultSize",
+                page_size=20,
+                max_pages=3,
+                request_delay_seconds=0,
+            ),
+        ),
+        accept=AcceptRecipe(url_contains=["/job/"]),
+        reject=RejectRecipe(),
+        detail=detail or DetailRecipe(),
+        pagination=PaginationRecipe(),
+        patterns=PatternsRecipe(),
+    )
 
 
 def _recipe(

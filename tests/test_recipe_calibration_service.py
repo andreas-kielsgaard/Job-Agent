@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -14,6 +15,7 @@ from job_agent.services.recipe_calibration_service import (
     build_recipe_blueprint,
     capture_recipe_calibration,
     discover_ajax_pagination_templates,
+    discover_api_access_candidates,
     discover_candidate_elements,
 )
 
@@ -81,6 +83,190 @@ def test_blueprint_rejects_media_project_links_as_non_job_evidence() -> None:
 
     assert blueprint["status"] == "not_recommended"
     assert all(candidate.likely_noise for candidate in candidates)
+
+
+def test_blueprint_detects_experis_rendered_jobb_cards() -> None:
+    html = """
+    <!doctype html>
+    <html><body>
+      <section class="search-job-results">
+        <div id="job_0">
+          <div class="job-search-result card">
+            <div class="card-body">
+              <div class="date">10/06/2026</div>
+              <div class="job-position">
+                <h2 class="title experis">
+                  <a href="/en/jobb/27021/sap-pp-pi-consultant">SAP PP-PI Consultant</a>
+                </h2>
+              </div>
+              <div class="job-details"><div class="location">Wroclaw, Dolnoslaskie</div><div class="type">Contract</div></div>
+              <div class="job-description"><p class="excerpt">SAP PP-PI contract role with S/4HANA delivery context.</p></div>
+            </div>
+          </div>
+        </div>
+        <div id="job_1">
+          <div class="job-search-result card">
+            <div class="card-body">
+              <div class="date">09/06/2026</div>
+              <div class="job-position">
+                <h2 class="title experis">
+                  <a href="/en/jobb/26934/sap-solution-manager">SAP Solution Manager</a>
+                </h2>
+              </div>
+              <div class="job-details"><div class="location">Warszawa</div><div class="type">Contract</div></div>
+              <div class="job-description"><p class="excerpt">SAP Solution Manager project role.</p></div>
+            </div>
+          </div>
+        </div>
+        <div id="job_2">
+          <div class="job-search-result card">
+            <div class="card-body">
+              <div class="date">31/05/2026</div>
+              <div class="job-position">
+                <h2 class="title experis">
+                  <a href="/en/jobb/25755/sap-s4hana-developer">SAP S4HANA Developer</a>
+                </h2>
+              </div>
+              <div class="job-details"><div class="location">Remote</div><div class="type">Contract</div></div>
+              <div class="job-description"><p class="excerpt">ABAP development in an S/4HANA programme.</p></div>
+            </div>
+          </div>
+        </div>
+        <div class="search-pagination-wrap">
+          <a class="page-link" href="undefined?page=1" aria-label="Page 1">1</a>
+          <a class="page-link" href="undefined?page=2" aria-label="Go to page 2">2</a>
+          <a class="page-link" href="undefined?page=3" aria-label="Go to page 3">3</a>
+          <a class="page-link" href="undefined?page=9" aria-label="Go to page 9">9</a>
+          <a class="page-link more" href="undefined?page=2" aria-label="Next">Next</a>
+        </div>
+      </section>
+    </body></html>
+    """
+
+    blueprint = build_recipe_blueprint(
+        html,
+        "https://www.experis.pl/en/search?page=1&searchKeyword=SAP",
+        capture_mode="rendered_html",
+    )
+
+    assert blueprint["status"] == "draft"
+    recipe = blueprint["recipe"]
+    assert recipe["mode"] == "rendered_html"
+    assert recipe["listing"]["card_selector"] == "div.card-body"
+    assert recipe["listing"]["title_selector"] == "h2 a"
+    assert recipe["listing"]["description_selector"] == ".job-description"
+    assert recipe["accept"]["url_contains"] == ["/jobb/"]
+    assert recipe["pagination"]["strategy"] == "url"
+    assert recipe["pagination"]["page_link_selector"] == 'a.page-link[href*="page="]'
+    assert recipe["pagination"]["next_selector"] == 'a.page-link[href*="page="][aria-label*="Next"]'
+    assert recipe["pagination"]["max_pages"] == 9
+
+
+def test_blueprint_uses_heading_title_when_job_link_is_empty_overlay() -> None:
+    html = """
+    <!doctype html>
+    <html><body>
+      <ul class="job-list">
+        <li class="single-job">
+          <a class="main" href="https://next-ventures.com/jobs/sap-program-manager/"></a>
+          <div class="outer">
+            <span class="ref">Ref: #73942</span>
+            <h4>SAP Program Manager - 12 month contract</h4>
+            <ul class="meta">
+              <li><p><b>Dallas, United States</b></p></li>
+              <li><p><b>SAP Technology Jobs</b></p></li>
+              <li><p><b>SAP</b></p></li>
+              <li><p><b>Contract</b></p></li>
+            </ul>
+          </div>
+        </li>
+        <li class="single-job">
+          <a class="main" href="https://next-ventures.com/jobs/sap-is-retail-consultant/"></a>
+          <div class="outer">
+            <span class="ref">Ref: #73939</span>
+            <h4>SAP IS-Retail Consultant</h4>
+            <ul class="meta">
+              <li><p><b>Barcelona, Spain</b></p></li>
+              <li><p><b>SAP Technology Jobs</b></p></li>
+              <li><p><b>SAP</b></p></li>
+              <li><p><b>Contract</b></p></li>
+            </ul>
+          </div>
+        </li>
+      </ul>
+    </body></html>
+    """
+
+    blueprint = build_recipe_blueprint(html, "https://next-ventures.com/practices/sap-recruitment/sap-jobs/")
+    recipe = blueprint["recipe"]
+
+    assert blueprint["status"] == "draft"
+    assert recipe["listing"]["card_selector"] == "li.single-job"
+    assert recipe["listing"]["title_selector"] == "h4"
+    assert recipe["listing"]["link_selector"] == 'a.main[href*="/jobs/"]'
+    jobs = extract_jobs_with_recipe(html, recipe["start_url"], job_board_recipe_from_mapping(recipe))
+    assert [job.title for job in jobs] == [
+        "SAP Program Manager - 12 month contract",
+        "SAP IS-Retail Consultant",
+    ]
+
+
+def test_blueprint_detects_job_role_listing_urls() -> None:
+    html = """
+    <!doctype html>
+    <html><body>
+      <div class="row">
+        <div class="col-12 col-md-4">Keyword Search SAP SD Consultant SAP Fiori Lead</div>
+        <div class="col-12 col-md-8">
+          <div class="facetwp-template">
+            <div class="job-item">
+              <div class="row no-gutters">
+                <div class="col-12 job-title">
+                  <h2><a href="https://www.sapcontractors.com/job-role/sap-program-manager-2/">SAP Program Manager</a></h2>
+                </div>
+                <div class="left">Engagement Type: Projects and support... <a href="https://www.sapcontractors.com/job-role/sap-program-manager-2/">See full description</a></div>
+                <div class="job_type"><span>Contract</span></div>
+                <div class="start_date"><span>Immediately</span></div>
+                <div class="salary"><span>$140/hr</span></div>
+                <div class="location"><span>Houston, TX</span>, <span>USA</span></div>
+              </div>
+            </div>
+            <div class="job-item">
+              <div class="row no-gutters">
+                <div class="col-12 job-title">
+                  <h2><a href="https://www.sapcontractors.com/job-role/sap-project-manager/">SAP Project Manager</a></h2>
+                </div>
+                <div class="left">Engagement Type: Projects and support... <a href="https://www.sapcontractors.com/job-role/sap-project-manager/">See full description</a></div>
+                <div class="job_type"><span>Contract</span></div>
+                <div class="start_date"><span>Immediately</span></div>
+                <div class="salary"><span>$120/hr</span></div>
+                <div class="location"><span>Houston, TX</span>, <span>USA</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </body></html>
+    """
+
+    blueprint = build_recipe_blueprint(html, "https://www.sapcontractors.com/search-jobs/?fwp_keyword=")
+    recipe = blueprint["recipe"]
+
+    assert blueprint["status"] == "draft"
+    assert recipe["listing"]["card_selector"] == "div.job-item"
+    assert recipe["listing"]["title_selector"] == "h2 a"
+    assert recipe["listing"]["link_selector"] == "h2 a"
+    assert recipe["listing"]["description_selector"] == ".left"
+    assert recipe["listing"]["workload_selector"] == ".job_type"
+    assert recipe["listing"]["start_date_selector"] == ".start_date"
+    assert recipe["listing"]["rate_selector"] == ".salary"
+    assert recipe["listing"]["location_selector"] == ".location"
+    assert recipe["accept"]["url_contains"] == ["/job-role/"]
+    jobs = extract_jobs_with_recipe(html, recipe["start_url"], job_board_recipe_from_mapping(recipe))
+    assert len(jobs) == 2
+    assert jobs[0].title == "SAP Program Manager"
+    assert jobs[0].workload == "Contract"
+    assert jobs[0].rate == "$140/hr"
 
 
 def test_selector_audit_reports_zero_card_matches() -> None:
@@ -266,6 +452,99 @@ def test_calibration_auto_mode_falls_back_to_rendered_when_static_has_no_jobs(
     assert "rendered_html" in (result.artifact_dir / "selector-report.json").read_text(encoding="utf-8")
 
 
+def test_calibration_warns_for_client_rendered_job_search_with_default_country_and_blocked_render(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    static_html = """
+    <html><body>
+      <div id="hitsList"></div>
+      <script id="result-row" type="text/x-handlebars-template">
+        <li class="job-search__item"><h2>{{title}}</h2><a href="/en-gb/job/{{slug}}/{{jobReference}}/"></a></li>
+      </script>
+      <script>
+        var queryParams = new URLSearchParams(window.location.search);
+        var urlCountry = queryParams.get('country') || FacHelpers.getCountryByCulture(jobLanguage);
+        var initParams = { apiUrl: 'https://api.example.test/', country: urlCountry };
+        jobSearch.init(initParams);
+      </script>
+    </body></html>
+    """
+    blocked_rendered_html = """
+    <html><head><title>Attention Required! | Cloudflare</title></head>
+      <body>Sorry, you have been blocked. Cloudflare Ray ID: test</body>
+    </html>
+    """
+
+    def fake_static(url: str, timeout_seconds: int):
+        return static_html, url, []
+
+    def fake_rendered(url: str, timeout_seconds: int):
+        return blocked_rendered_html, url, []
+
+    monkeypatch.setattr("job_agent.services.recipe_calibration_service._fetch_static_html", fake_static)
+    monkeypatch.setattr("job_agent.services.recipe_calibration_service._fetch_rendered_html", fake_rendered)
+
+    result = capture_recipe_calibration(
+        "https://www.globalenterprisepartners.com/en-gb/job-search/?industry=SAP&type=Contract&searchRadius=20mi",
+        root=tmp_path,
+        capture_detail=False,
+    )
+
+    assert result.capture_mode == "static_html"
+    assert any("client-side job-search templates" in warning for warning in result.warnings)
+    assert any("default a missing country filter" in warning for warning in result.warnings)
+    assert any("blocked by site protection" in warning for warning in result.warnings)
+
+
+def test_calibration_discovers_page_declared_sthree_api_without_default_country_filter(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    html = _sthree_shell_html()
+    calls = []
+
+    def fake_static(url: str, timeout_seconds: int):
+        return html, url, []
+
+    def fake_json_api(**kwargs):
+        calls.append(kwargs)
+        country = kwargs["body"].get("country") or []
+        total = 2 if country else 95
+        count = 2 if country else 20
+        return _sthree_payload(total=total, count=count), kwargs["url"], []
+
+    monkeypatch.setattr("job_agent.services.recipe_calibration_service._fetch_static_html", fake_static)
+    monkeypatch.setattr("job_agent.services.recipe_calibration_service._fetch_json_api", fake_json_api)
+
+    result = capture_recipe_calibration(
+        "https://www.globalenterprisepartners.com/en-gb/job-search/?industry=SAP&type=Contract&searchRadius=20mi",
+        root=tmp_path,
+        rendered=False,
+        capture_detail=False,
+    )
+
+    report = json.loads((result.artifact_dir / "selector-report.json").read_text(encoding="utf-8"))
+    api_candidate = report["observed_api_candidates"][0]
+    blueprint_recipe = report["recipe_blueprint"]["recipe"]
+    assert calls[0]["body"]["country"] == []
+    assert calls[0]["body"]["industry"] == ["SAP"]
+    assert calls[0]["body"]["type"] == ["Contract"]
+    assert api_candidate["total_count"] == 95
+    assert api_candidate["record_count"] == 20
+    assert (result.artifact_dir / "api-listing-response-1.json").exists()
+    assert "listing_api" in blueprint_recipe
+    assert blueprint_recipe["listing_api"]["fields"]["url_template"].endswith("/job/{slug}/{jobReference}/")
+
+    country_artifact = tmp_path / "country-api"
+    country_artifact.mkdir()
+    country_candidates, _warnings = discover_api_access_candidates(
+        html,
+        "https://www.globalenterprisepartners.com/en-gb/job-search/?industry=SAP&type=Contract&searchRadius=20mi&country=United+Kingdom",
+        artifact_dir=country_artifact,
+    )
+    assert calls[-1]["body"]["country"] == ["United Kingdom"]
+    assert country_candidates[0]["total_count"] == 2
+
+
 def test_calibration_writes_ajax_pagination_observations(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     html = """
     <main>
@@ -284,6 +563,54 @@ def test_calibration_writes_ajax_pagination_observations(tmp_path: Path, monkeyp
     report = (result.artifact_dir / "selector-report.json").read_text(encoding="utf-8")
     assert "observed_ajax_pagination_templates" in report
     assert "https://example.com/api/jobs?query=sap&page={page}" in report
+
+
+def test_calibration_passes_session_state_to_rendered_listing_and_detail(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    listing_html = """
+    <main>
+      <article class="job-card">
+        <a href="/jobs/sap-1">SAP ABAP Consultant</a>
+        <p>SAP contract role with useful listing context.</p>
+      </article>
+    </main>
+    """
+    detail_html = """
+    <main class="job-single">
+      <h1>SAP ABAP Consultant</h1>
+      <div class="job-description">Detailed SAP ABAP contract role supporting an S/4HANA programme.</div>
+    </main>
+    """
+    state_path = tmp_path / "source.storage-state.json"
+    state_path.write_text('{"cookies": []}', encoding="utf-8")
+    calls: list[tuple[str, Path | None]] = []
+
+    def fake_rendered(url: str, timeout_seconds: int, *, session_state_path=None):
+        calls.append((url, Path(session_state_path) if session_state_path else None))
+        if url.endswith("/jobs/sap-1"):
+            return detail_html, url, []
+        return listing_html, url, []
+
+    monkeypatch.setattr("job_agent.services.recipe_calibration_service._fetch_rendered_html", fake_rendered)
+
+    result = capture_recipe_calibration(
+        "https://example.com/jobs",
+        rendered=True,
+        root=tmp_path,
+        max_candidates=5,
+        session_state_path=state_path,
+        source_session_scope="example.com",
+    )
+
+    assert calls == [
+        ("https://example.com/jobs", state_path),
+        ("https://example.com/jobs/sap-1", state_path),
+    ]
+    report = json.loads(result.selector_report_path.read_text(encoding="utf-8"))
+    assert report["source_session_used"] is True
+    assert report["source_session_scope"] == "example.com"
+    assert str(state_path) not in json.dumps(report)
 
 
 def test_blueprint_detects_whitehall_style_listing_pagination_and_detail() -> None:
@@ -540,6 +867,42 @@ def test_calibration_uses_recipe_rendered_mode_without_playwright_in_unit_test(
 
     assert calls == {"rendered": "https://example.com/jobs"}
     assert result.capture_mode == "rendered_html"
+
+
+def _sthree_shell_html() -> str:
+    return """
+    <html><body>
+      <div id="hitsList"></div>
+      <script id="result-row" type="text/x-handlebars-template">
+        <li class="job-search__item"><h2>{{title}}</h2><a href="/en-gb/job/{{slug}}/{{jobReference}}/"></a></li>
+      </script>
+      <script>
+        var jobLanguage = 'en-gb';
+        var initParams = {
+          apiUrl:'https://api.globalenterprisepartners.example/',
+          brandCode:'GEP'
+        };
+      </script>
+    </body></html>
+    """
+
+
+def _sthree_payload(*, total: int, count: int) -> dict:
+    records = [
+        {
+            "title": f"SAP Consultant {index}",
+            "slug": f"sap-consultant-{index}",
+            "jobReference": f"GEP-{index}",
+            "location": "Remote",
+            "remoteWorkingAvailable": True,
+            "salaryText": "EUR 750/day",
+            "jobType": "Contract",
+            "postDate": "2026-06-09",
+            "description": "<p>SAP contract delivery role with S/4HANA programme context.</p>",
+        }
+        for index in range(1, count + 1)
+    ]
+    return {"result": {"hits": total, "results": records}}
 
 
 WHITEHALL_LIST_HTML = """

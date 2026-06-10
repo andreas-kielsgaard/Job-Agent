@@ -127,12 +127,24 @@ def run_daily_agent(
         processed_states = []
         processed_keys: set[str] = set()
         remaining_detail_budget = options.detail_extraction_limit
+        max_parallel_sources = _max_parallel_sources_from_profile(profile)
         fetch_options = SourceFetchOptions(
             fetch_details=False,
             use_source_job_limit=False,
             use_recipe_card_limit=False,
             pagination_page_limit=0,
             enforce_saved_readiness=True,
+            require_setup_complete=not bool(source_id),
+            max_parallel_sources=max_parallel_sources,
+        )
+        emit(
+            "source_parallelism_configured",
+            (
+                f"Using up to {max_parallel_sources} parallel source lane(s); "
+                "same-host source requests remain serialized."
+            ),
+            "startup",
+            counts={"max_parallel_sources": max_parallel_sources},
         )
 
         for source_fetch in iter_source_results(
@@ -517,6 +529,15 @@ def _store_nested_event(run_store: RunStore, event: RunEvent, progress_callback:
     run_store.append_event(event)
     if progress_callback:
         progress_callback(event)
+
+
+def _max_parallel_sources_from_profile(profile: dict) -> int:
+    runtime = profile.get("runtime", {}) if isinstance(profile.get("runtime", {}), dict) else {}
+    try:
+        configured = int(runtime.get("max_parallel_sources") or 10)
+    except (TypeError, ValueError):
+        configured = 10
+    return max(1, configured)
 
 
 def _prepare_detail_review(

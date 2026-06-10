@@ -135,6 +135,8 @@ def _source_test_required_pagination_strategy(insight: dict[str, Any]) -> str:
 def _source_test_browser_click_required(insight: dict[str, Any]) -> bool:
     if not isinstance(insight, dict) or not insight:
         return False
+    if bool(insight.get("pagination_working_with_unique_pages")):
+        return False
     strategy = str(insight.get("pagination_strategy_tested") or "").strip().lower()
     if strategy == "browser_click":
         return False
@@ -165,31 +167,45 @@ def _source_test_browser_click_required(insight: dict[str, Any]) -> bool:
 def _source_test_url_pagination_failed(insight: dict[str, Any]) -> bool:
     if not isinstance(insight, dict) or not insight:
         return False
+    if bool(insight.get("pagination_working_with_unique_pages")):
+        return False
     strategy = str(insight.get("pagination_strategy_tested") or "").strip().lower()
     if strategy and strategy != "url":
         return False
-    duplicate_ratio = _float_value(insight.get("pagination_duplicate_ratio"))
-    haystack = _source_test_text(insight)
-    return (
-        strategy == "url"
-        and (
-            "paginated page access failed" in haystack
-            or "url pagination" in haystack and "duplicate" in haystack
-            or "duplicate listings" in haystack
-            or "duplicate pages" in haystack
-            or duplicate_ratio >= 0.8
-        )
-    )
+    if bool(insight.get("pagination_duplicate_postings")):
+        return strategy == "url"
+    failed = insight.get("failed_capabilities")
+    if isinstance(failed, list):
+        for item in failed:
+            if not isinstance(item, dict) or str(item.get("status") or "") != "fail":
+                continue
+            capability = str(item.get("capability") or "")
+            detail = str(item.get("detail") or "").lower()
+            if capability in {"pagination_strategy", "pagination_navigation", "pagination_duplicate_pages"} and (
+                "duplicate" in detail or "repeated" in detail or "inaccessible" in detail
+            ):
+                return strategy == "url"
+    return False
 
 
 def _source_test_session_indicated(insight: dict[str, Any]) -> bool:
     if not isinstance(insight, dict) or not insight:
         return False
-    status = str(insight.get("source_access_session_status") or "").strip().lower()
-    if status in {"connected", "verified", "usable"}:
+    if bool(insight.get("source_access_requires_session")):
         return True
-    haystack = _source_test_text(insight)
-    return "logged-in session" in haystack or "connected session" in haystack or "requires a session" in haystack
+    if bool(insight.get("source_access_failed")):
+        return True
+    if bool(insight.get("source_access_login_gate_detected")):
+        return True
+    if bool(insight.get("source_access_session_used")) and bool(insight.get("pagination_working_with_unique_pages")):
+        return True
+    failed = insight.get("failed_capabilities")
+    if isinstance(failed, list):
+        for item in failed:
+            if isinstance(item, dict) and str(item.get("capability") or "") == "source_access":
+                return True
+    status = str(insight.get("source_access_session_status") or "").strip().lower()
+    return status in {"verified", "usable"} and bool(insight.get("source_access_requires_session"))
 
 
 def _source_test_text(insight: dict[str, Any]) -> str:
@@ -335,10 +351,3 @@ def _positive_int(value: Any, default: int) -> int:
     except (TypeError, ValueError):
         return default
     return parsed if parsed > 0 else default
-
-
-def _float_value(value: Any) -> float:
-    try:
-        return float(value or 0.0)
-    except (TypeError, ValueError):
-        return 0.0

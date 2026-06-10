@@ -168,7 +168,7 @@ def build_source_page_status(
                 else "Ready for a safe source test",
                 "summary": "The reading plan changed since the last source test. Run a fresh source test before indexing or daily runs."
                 if bool(getattr(readiness, "checks", {}).get("recipe_changed_after_source_test"))
-                else "Test this source the way the daily run would use it, without saving jobs or marking postings as seen.",
+                else "Test this source the way the daily run would use it, without saving job packages or marking postings as seen.",
                 "badge": "Needs source test",
                 "badge_class": "medium",
                 "primary_action": {
@@ -183,13 +183,13 @@ def build_source_page_status(
         if not index_complete:
             status.update(
                 {
-                    "title": "Ready to index listings",
-                    "summary": "The source test passed. Capture the listing index before including this source in daily runs.",
+                    "title": "Ready to refresh listing index",
+                    "summary": "The source test passed, but no listing index is saved yet.",
                     "badge": "Needs index",
                     "badge_class": "medium",
                     "primary_action": {
                         "type": "post",
-                        "label": "Index job listings",
+                        "label": "Refresh listing index",
                         "action": f"/sources/{source.id}/index-listings",
                     },
                 }
@@ -218,7 +218,7 @@ def build_source_page_status(
                     "badge_class": "medium",
                     "primary_action": {
                         "type": "post",
-                        "label": "Index job listings",
+                        "label": "Refresh listing index",
                         "action": f"/sources/{source.id}/index-listings",
                     },
                 }
@@ -232,7 +232,7 @@ def build_source_page_status(
                     "badge_class": "high",
                     "primary_action": {
                         "type": "post",
-                        "label": "Run this source now",
+                        "label": "Run daily check now",
                         "action": f"/sources/{source.id}/run-now",
                     },
                 }
@@ -348,7 +348,7 @@ def build_source_setup_steps(
             if test_blocked_by_issue
             else readiness.readiness_summary
             if source.recipe_path
-            else "A source test runs the plan without saving jobs.",
+            else "A source test runs the plan without saving job packages.",
             "badge": "Passed"
             if test_ready
             else str(pagination_issue.get("badge") or "Needs attention")
@@ -390,7 +390,7 @@ def build_source_setup_steps(
     index_available = bool(source.recipe_path and test_ready and source.status != "archived" and not pagination_issue)
     steps.append(
         {
-            "title": "Index job listings",
+            "title": "Listing index",
             "summary": str(
                 index_status.get("summary")
                 or "Scan all listing and pagination pages without opening posting details or marking jobs as seen."
@@ -399,7 +399,7 @@ def build_source_setup_steps(
             "badge_class": "high" if index_complete else "medium",
             "state": "complete" if index_complete else ("active" if index_available else "blocked"),
             "action": (
-                {"type": "post", "label": "Index job listings", "action": f"/sources/{source.id}/index-listings"}
+                {"type": "post", "label": "Refresh listing index", "action": f"/sources/{source.id}/index-listings"}
                 if index_available and not index_complete
                 else None
             ),
@@ -438,7 +438,7 @@ def build_source_setup_steps(
     detail_available = bool(index_complete and source.status != "archived" and not pagination_issue)
     steps.append(
         {
-            "title": "Initial complete ingestion",
+            "title": "Initial ingestion",
             "summary": str(
                 detail_status.get("summary")
                 or "Optional: open details for every indexed job once and add the results to today's daily run when one exists."
@@ -450,7 +450,7 @@ def build_source_setup_steps(
             "action": (
                 {
                     "type": "post",
-                    "label": "Investigate all jobs on source",
+                    "label": "Ingest all indexed jobs",
                     "action": f"/sources/{source.id}/investigate-all",
                 }
                 if source.recipe_path and detail_available and not detail_complete

@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block content %}
+{% set guide = setup_guide_page %}
+<div class="source-detail-header">
+  <div>
+    <p class="eyebrow">Setup Guide</p>
+    <h1>Get To The First Run</h1>
+    <p class="muted">A short guided path from empty local setup to scored job results. The companion follows the next unfinished step unless you skip it or dismiss the guide.</p>
+  </div>
+  <form method="post" action="/api/setup-guide/reset" class="inline-form">
+    <input type="hidden" name="return_to" value="/setup-guide">
+    <button class="light" type="submit">Reset guide</button>
+  </form>
+</div>
+
+<div class="panel setup-guide-overview">
+  <img class="setup-guide-character" src="/static/icons/job-agent-folio-character-transparent.svg?v={{ asset_version }}" width="112" height="112" alt="" aria-hidden="true">
+  <div>
+    <h2>Suggested path</h2>
+    <p class="muted">Connect Claude, bring in your CV, review the local profile and matching preferences, enable sources, then start a daily run.</p>
+  </div>
+  <div class="setup-guide-meter">
+    <strong>{{ guide.progress_label }}</strong>
+    <span>{{ guide.dismissed_count }} skipped</span>
+  </div>
+</div>
+
+<div class="setup-guide-roadmap">
+  {% for step in guide.steps %}
+  <article class="setup-roadmap-step {{ step.state }}">
+    <div class="setup-roadmap-number">{{ loop.index }}</div>
+    <div>
+      <div class="source-title-row">
+        <h2>{{ step.title }}</h2>
+        <span class="badge {{ step.badge_class }}">{{ step.badge }}</span>
+      </div>
+      <p>{{ step.summary }}</p>
+      {% if step.detail %}<p class="muted">{{ step.detail }}</p>{% endif %}
+      <div class="action-row">
+        <a class="button {% if step.complete %}light{% endif %}" href="{{ step.href }}">{{ step.action_label }}</a>
+        {% if not step.complete and not step.dismissed %}
+        <form method="post" action="/api/setup-guide/steps/{{ step.id }}/dismiss" class="inline-form">
+          <input type="hidden" name="return_to" value="/setup-guide">
+          <button class="light" type="submit">Skip step</button>
+        </form>
+        {% endif %}
+      </div>
+    </div>
+  </article>
+  {% endfor %}
+</div>
+
+<div class="panel setup-guide-file-note">
+  <div>
+    <h2>Local Guide State</h2>
+    <p class="muted">Dismissed steps are saved in <code>{{ guide.state_path }}</code>. Completion is read from the real profile, source, and run state each time the page loads.</p>
+  </div>
+  {% if not guide.guide_dismissed %}
+  <form method="post" action="/api/setup-guide/dismiss" class="inline-form">
+    <input type="hidden" name="return_to" value="/setup-guide">
+    <button class="light" type="submit">Dismiss companion</button>
+  </form>
+  {% endif %}
+</div>
+{% endblock %}

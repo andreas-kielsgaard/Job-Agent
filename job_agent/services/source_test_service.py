@@ -11,6 +11,7 @@ from job_agent.io.json_store import read_json
 from job_agent.models import Job, SeenJobRecord
 from job_agent.services.execution_source_service import ExecutionSourceService
 from job_agent.services.extraction_assessment import listing_count_explanations, seen_state_explanation
+from job_agent.services.source_test_log_service import SourceTestMaterialLog
 from job_agent.sources import SourceFetchOptions, adapter_for_source
 from job_agent.store import JobStore
 
@@ -53,6 +54,10 @@ class SourceTestResult:
     recipe_source_name: str = ""
     base_url: str = ""
     mode_used: str = ""
+    access_strategy: str = ""
+    api_request_count: int = 0
+    records_observed_count: int = 0
+    json_records_extracted_count: int = 0
     run_steps: list[dict] = field(default_factory=list)
     pagination_configured: bool = False
     pagination_strategy: str = ""
@@ -95,6 +100,8 @@ class SourceTestResult:
     detail_attempts: list[dict] = field(default_factory=list)
     field_checks: list[dict] = field(default_factory=list)
     capability_checks: list[dict] = field(default_factory=list)
+    log_dir: str = ""
+    log_manifest_path: str = ""
 
 
 class SourceTestService:
@@ -108,12 +115,16 @@ class SourceTestService:
         *,
         force_disabled: bool = False,
         progress_callback: SourceTestProgressCallback | None = None,
+        export_log: bool = True,
     ) -> SourceTestResult:
         source_id = source_id.strip()
         source = self.execution_sources.find_by_source_id(source_id)
         if not source:
             return SourceTestResult(source_id=source_id, status="not_found")
 
+        material_log = SourceTestMaterialLog(self.root, source_id) if export_log else None
+        if material_log:
+            material_log.record_source(source)
         source_name = str(source.get("name") or source_id)
         source_type = str(source.get("type") or "")
         enabled = bool(source.get("enabled", True))
@@ -124,20 +135,22 @@ class SourceTestService:
             f"Resolved {source_name} ({source_type or 'unknown type'}).",
         )
         if not enabled and not force_disabled:
-            return SourceTestResult(
+            disabled_result = SourceTestResult(
                 source_id=source_id,
                 source_name=source_name,
                 source_type=source_type,
                 source_enabled=False,
                 status="disabled",
             )
+            _finalize_material_log(material_log, disabled_result)
+            return disabled_result
 
         try:
             adapter = adapter_for_source(source, self.root)
             _emit_progress(progress_callback, "Source adapter selected", "completed", adapter.__class__.__name__)
-            result = _fetch_source_test_adapter(adapter, progress_callback)
+            result = _fetch_source_test_adapter(adapter, progress_callback, material_log=material_log)
         except Exception as exc:
-            return SourceTestResult(
+            failed_result = SourceTestResult(
                 source_id=source_id,
                 source_name=source_name,
                 source_type=source_type,
@@ -147,6 +160,8 @@ class SourceTestService:
                 warning_count=1,
                 warnings=[f"Source adapter failed: {exc}"],
             )
+            _finalize_material_log(material_log, failed_result)
+            return failed_result
 
         warnings = [f"{warning.source}: {warning.message}" for warning in result.warnings]
         jobs = [_job_preview(job) for job in result.jobs]
@@ -159,7 +174,7 @@ class SourceTestService:
             "completed" if jobs else "warning",
             f"Extracted {len(jobs)} job(s) and {len(warnings)} warning(s).",
         )
-        return SourceTestResult(
+        source_test_result = SourceTestResult(
             source_id=source_id,
             source_name=source_name,
             source_type=source_type,
@@ -174,6 +189,10 @@ class SourceTestService:
             recipe_source_name=str(metadata.get("recipe_source_name") or ""),
             base_url=str(metadata.get("base_url") or source.get("url") or ""),
             mode_used=str(metadata.get("mode_used") or ""),
+            access_strategy=str(metadata.get("access_strategy") or ""),
+            api_request_count=_int(metadata.get("api_request_count")),
+            records_observed_count=_int(metadata.get("records_observed_count")),
+            json_records_extracted_count=_int(metadata.get("json_records_extracted_count")),
             run_steps=list(metadata.get("run_steps") or []),
             pagination_configured=bool(metadata.get("pagination_configured", False)),
             pagination_strategy=str(metadata.get("pagination_strategy") or ""),
@@ -217,6 +236,8 @@ class SourceTestService:
             field_checks=list(metadata.get("field_checks") or []),
             capability_checks=list(metadata.get("capability_checks") or []),
         )
+        _finalize_material_log(material_log, source_test_result, source_run_metadata=metadata)
+        return source_test_result
 
     def dry_run(
         self,
@@ -356,7 +377,12 @@ def _emit_progress(
         callback({"phase": phase, "status": status, "detail": detail, "capability": capability})
 
 
-def _fetch_source_test_adapter(adapter, progress_callback: SourceTestProgressCallback | None):
+def _fetch_source_test_adapter(
+    adapter,
+    progress_callback: SourceTestProgressCallback | None,
+    *,
+    material_log: SourceTestMaterialLog | None = None,
+):
     options = SourceFetchOptions(
         fetch_details=True,
         use_source_job_limit=False,
@@ -364,6 +390,7 @@ def _fetch_source_test_adapter(adapter, progress_callback: SourceTestProgressCal
         detail_page_limit=SOURCE_TEST_DETAIL_PAGE_LIMIT,
         detail_listing_page_sample_target=SOURCE_TEST_DETAIL_LISTING_PAGE_SAMPLE_TARGET,
         pagination_page_limit=0,
+        material_log=material_log,
     )
     kwargs: dict[str, Any] = {}
     if _adapter_accepts_parameter(adapter, "progress_callback") and progress_callback:
@@ -371,6 +398,19 @@ def _fetch_source_test_adapter(adapter, progress_callback: SourceTestProgressCal
     if _adapter_accepts_parameter(adapter, "options"):
         kwargs["options"] = options
     return adapter.fetch(**kwargs)
+
+
+def _finalize_material_log(
+    material_log: SourceTestMaterialLog | None,
+    result: SourceTestResult,
+    *,
+    source_run_metadata: dict[str, Any] | None = None,
+) -> None:
+    if not material_log:
+        return
+    result.log_dir = material_log.relative_dir
+    result.log_manifest_path = material_log.relative_manifest_path
+    material_log.finalize(result, source_run_metadata=source_run_metadata)
 
 
 def _adapter_accepts_parameter(adapter, name: str) -> bool:

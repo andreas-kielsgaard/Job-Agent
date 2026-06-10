@@ -71,6 +71,7 @@ def recipe_preview_form(
         "recipe_preview.html",
         {
             "request": request,
+            "title": f"Recipe Preview - {selected_source.name}" if selected_source else "Recipe Preview",
             "preview": None,
             "source_review": source_review,
             "recipe_explanation": recipe_explanation,
@@ -146,6 +147,7 @@ def run_recipe_preview(
             "recipe_preview.html",
             {
                 "request": request,
+                "title": f"Recipe Preview - {selected_source.name}",
                 "preview": None,
                 "source_review": source_review,
                 "recipe_explanation": recipe_explanation,
@@ -253,6 +255,7 @@ def run_recipe_preview(
         "recipe_preview.html",
         {
             "request": request,
+            "title": f"Recipe Preview - {selected_source.name}" if selected_source else "Recipe Preview",
             "preview": preview,
             "source_review": None,
             "recipe_explanation": recipe_explanation,

@@ -60,7 +60,7 @@ sources:
     enabled: false
 ```
 
-Use recipe preview and saved source health before enabling a recipe-backed source. When a `recipe_html` source is enabled, it loads the configured constrained YAML recipe, follows the recipe's listing/detail/pagination instructions within configured limits, and returns normal jobs to the existing daily-run pipeline.
+Use recipe preview and saved source health before enabling a recipe-backed source. When a `recipe_html` source is enabled, it loads the configured constrained YAML recipe, follows the recipe's listing/detail/pagination instructions within configured limits, and returns normal jobs to the existing daily-run pipeline. A recipe may read listing/detail data from HTML selectors, rendered HTML, or a public page-declared JSON API captured during calibration; the recipe remains the source of truth for request shape and field mapping.
 
 Recipe-backed jobs carry `source_id` into package indexes so later value reporting can match results back to the source without relying on source names or URLs.
 
@@ -105,7 +105,9 @@ Disabled sources are not run unless explicitly forced:
 python -m job_agent.cli test-source eursap-jobs --force-disabled
 ```
 
-Source test reports source status, extracted jobs, warnings, and source ids. It does not write packages, generated materials, seen-job state, digests, application statuses, or run records. It is a low-risk check to use before including a source in the morning workflow.
+Source test reports source status, extracted jobs, warnings, and source ids. When a passing readiness result is saved, it also refreshes the lightweight listing index from the listings already found by that test. It does not write packages, generated materials, seen-job state, digests, application statuses, or run records. It is a low-risk check to use before including a source in the morning workflow.
+
+For API-backed recipes, source test records API request counts, observed JSON records, mapped job counts, pagination requests, and any detail access steps in the same trace view as HTML recipes. Material logs redact sensitive keys and API recipes must not use auth headers, cookies, or login sessions.
 
 ## Single-Source Run
 
@@ -195,3 +197,4 @@ Source value does not enable a source and does not change daily-run behavior.
 - Automatic recipe enabling
 - Recruiter/contact tracking
 - Application submission or form filling
+- Hidden endpoint discovery or protected-page bypass

@@ -8,7 +8,7 @@ The workflow uses local artifacts under:
 output/recipe-calibration/
 ```
 
-Generation and refinement read files such as `summary.md`, `selector-report.json`, `candidate-elements.html`, `visible-text.txt`, and `page.html`. Tests use fake LLM clients; real API calls are not required for automated tests.
+Generation and refinement read files such as `summary.md`, `selector-report.json`, `candidate-elements.html`, `visible-text.txt`, and `page.html`. When a public page declares a JSON search API in its own page config or referenced public scripts, calibration can also save `api-listing-request-*.json` and `api-listing-response-*.json` evidence. Tests use fake LLM clients; real API calls are not required for automated tests.
 
 ## Lifecycle
 
@@ -104,9 +104,9 @@ Approval is the first point where generated YAML becomes a real recipe file. It:
 - requires an explicit recipe path under `sources/recipes/`
 - refuses overwrite unless `--overwrite` is supplied
 - validates the YAML again
-- requires local artifact `page.html`
+- requires local artifact `page.html`, or a saved API listing response for API-backed recipes
 - writes the recipe YAML
-- runs local recipe preview against `page.html`
+- runs local recipe preview against `page.html` or the saved API response
 - saves source health when a source id is supplied
 - marks the candidate `approved` with recipe path, source id, preview counts, and warnings
 
@@ -140,7 +140,7 @@ Readiness is saved under `sources/source-execution-readiness.yaml` after an expl
 python -m job_agent.cli test-source <source-id> --force-disabled --save-readiness
 ```
 
-The readiness record includes the source-test status, extracted job count, warnings, sample job titles/URLs, source health status, daily-run projection state, recipe path matching, and blockers. Source-test readiness writes no packages, materials, seen state, digests, or run records.
+The readiness record includes the source-test status, extracted job count, warnings, sample job titles/URLs, source health status, daily-run projection state, recipe path matching, and blockers. A passing saved source test refreshes the lightweight listing index from the listings it already extracted. Source-test readiness writes no packages, materials, seen state, digests, or run records.
 
 Enablement is guarded:
 
@@ -153,7 +153,7 @@ python -m job_agent.cli enable-source-when-ready <source-id>
 
 ## Troubleshooting
 
-Missing `page.html`: approval fails before writing a recipe, because local preview and health would be misleading.
+Missing `page.html`: approval fails before writing an HTML-selector recipe, because local preview and health would be misleading. API-backed recipes may instead use a saved `api-listing-response-*.json` artifact from calibration evidence.
 
 Invalid YAML: suggestion can save a candidate for review, but approval blocks schema-invalid YAML.
 
@@ -170,7 +170,8 @@ Go-live status is blocked: check `source-go-live-status <source-id>` for blocker
 ## Boundaries
 
 - Generation/refinement uses local saved artifacts.
-- No hidden endpoint or API discovery is performed.
+- API recipes are limited to public endpoints explicitly declared by the captured page or its referenced public scripts.
+- No hidden endpoint discovery, guessed URL scanning, login/session bypass, cookies, credentials, captcha handling, or protected-page automation is performed.
 - No arbitrary executable adapters are generated.
 - No source is enabled automatically.
 - Daily-run enablement for recipe-backed sources is controlled by the source registry and projected into execution config.

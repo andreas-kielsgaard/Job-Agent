@@ -1,14 +1,14 @@
 contact:
-  name: Your Name
-  title: SAP ABAP / RAP Consultant
-  phone: "+00 0000 0000"
-  email: "you@example.com"
-  linkedin: "https://www.linkedin.com/in/your-profile/"
-  location: Your Country
-  address: "Your address or fixed personal fields"
-  post_code: "0000"
-  city: Your City
-  country: Your Country
-  kommune: Your Kommune
-  first_name: Your
-  last_name: Name
+  name: ""
+  title: ""
+  phone: ""
+  email: ""
+  linkedin: ""
+  location: ""
+  address: ""
+  post_code: ""
+  city: ""
+  country: ""
+  kommune: ""
+  first_name: ""
+  last_name: ""

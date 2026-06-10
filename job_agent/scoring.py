@@ -7,9 +7,6 @@ from typing import Any
 
 from .models import Job, MatchResult
 
-PROJECT_TERMS = ("project manager", "transition manager", "service delivery manager", "coordination", "technical lead")
-FRONTEND_PATTERNS = (r"\bpure\s+fiori\b", r"\bui5\s+frontend\b", r"\bfrontend\s+ui5\b")
-FUNCTIONAL_PATTERNS = (r"\bpure\s+functional\b", r"functional consultant")
 LANGUAGE_NAMES = ("dutch", "french", "portuguese", "german")
 REMOTE_TERMS = ("remote", "hybrid", "work from home", "wfh")
 PERMANENT_TERMS = ("permanent", "permanent employee", "full-time employee", "perm role")
@@ -18,45 +15,23 @@ REMOTE_POLICIES = {"required", "strong_preference", "slight_preference", "neutra
 PERMANENT_POLICIES = {"exclude", "penalize", "ignore"}
 
 DEFAULT_MATCH_ENGINE_CONFIG: dict[str, Any] = {
-    "remote_policy": "slight_preference",
-    "permanent_policy": "penalize",
+    "remote_policy": "neutral",
+    "permanent_policy": "ignore",
     "permanent_penalty": -25,
     "technical_cap": 55,
     "module_cap": 25,
-    "technical_keyword_groups": [
-        {"label": "ABAP core", "terms": ["abap", "sap abap", "abap oo"], "score": 22, "mode": "bonus"},
-        {"label": "RAP", "terms": ["rap", "restful application programming"], "score": 12, "mode": "bonus"},
-        {"label": "CDS", "terms": ["cds", "cds views"], "score": 10, "mode": "bonus"},
-        {"label": "OData / Gateway", "terms": ["odata", "gateway", "sap gateway"], "score": 10, "mode": "bonus"},
-        {"label": "S/4HANA or ECC", "terms": ["s/4hana", "s4hana", "ecc"], "score": 8, "mode": "bonus"},
-        {
-            "label": "Debugging / quality",
-            "terms": ["debugging", "aunit", "hana performance", "clean core"],
-            "score": 8,
-            "mode": "bonus",
-        },
-        {
-            "label": "Classic ABAP APIs",
-            "terms": ["bapi", "badi", "user exits"],
-            "score": 6,
-            "mode": "bonus",
-        },
-    ],
-    "module_keyword_groups": [
-        {"label": "QM", "terms": ["qm", "quality management"], "score": 7, "mode": "bonus"},
-        {"label": "WM", "terms": ["wm", "warehouse management"], "score": 7, "mode": "bonus"},
-        {"label": "EWM", "terms": ["ewm", "extended warehouse management"], "score": 7, "mode": "bonus"},
-        {"label": "MM", "terms": ["mm", "materials management"], "score": 7, "mode": "bonus"},
-        {"label": "SD", "terms": ["sd", "sales and distribution"], "score": 5, "mode": "bonus"},
-        {"label": "PP", "terms": ["pp", "production planning"], "score": 5, "mode": "bonus"},
-        {"label": "CATS", "terms": ["cats"], "score": 5, "mode": "bonus"},
-        {"label": "MDG", "terms": ["mdg"], "score": 5, "mode": "bonus"},
-    ],
-    "contract_keyword_groups": [
-        {"label": "Contract / freelance", "terms": ["contract", "freelance"], "score": 8, "mode": "bonus"},
-        {"label": "Interim", "terms": ["interim"], "score": 6, "mode": "bonus"},
-        {"label": "Temporary", "terms": ["temporary"], "score": 4, "mode": "bonus"},
-    ],
+    "technical_keyword_groups": [],
+    "module_keyword_groups": [],
+    "contract_keyword_groups": [],
+}
+
+DEFAULT_AI_REVIEW_POLICY: dict[str, Any] = {
+    "min_score": 35,
+    "evaluate_categories": ["strong", "exploratory"],
+    "trigger_on_highlights": True,
+    "trigger_on_review_triggers": True,
+    "trigger_on_low_source_confidence": True,
+    "evaluate_excluded_with_triggers": False,
 }
 
 
@@ -84,9 +59,60 @@ def match_engine_config_from_profile(profile: dict[str, Any]) -> dict[str, Any]:
     return normalize_match_engine_config(profile.get("match_engine", {}))
 
 
+def normalize_match_review_config(profile: dict[str, Any]) -> dict[str, Any]:
+    configured = profile.get("match_review")
+    if isinstance(configured, dict):
+        rules = _normalize_caveat_rules(configured.get("caveat_rules", []))
+    else:
+        rules = _legacy_caveat_rules(profile)
+    return {"caveat_rules": rules}
+
+
+def normalize_ai_review_policy(profile: dict[str, Any]) -> dict[str, Any]:
+    configured = profile.get("ai_review_policy")
+    configured = configured if isinstance(configured, dict) else {}
+    policy = deepcopy(DEFAULT_AI_REVIEW_POLICY)
+    policy["min_score"] = max(0, _int_value(configured.get("min_score"), policy["min_score"]))
+    policy["evaluate_categories"] = _terms_from_value(
+        configured.get("evaluate_categories", policy["evaluate_categories"])
+    )
+    for key in [
+        "trigger_on_highlights",
+        "trigger_on_review_triggers",
+        "trigger_on_low_source_confidence",
+        "evaluate_excluded_with_triggers",
+    ]:
+        policy[key] = _bool_value(configured.get(key), policy[key])
+    return policy
+
+
+def normalize_language_policy(profile: dict[str, Any]) -> dict[str, Any]:
+    if "language_policy" not in profile:
+        return {
+            "mode": "legacy",
+            "acceptable": [],
+            "fluent": [],
+            "exclude_if_mandatory_unmatched": True,
+            "penalty": -25,
+        }
+    configured = profile.get("language_policy")
+    configured = configured if isinstance(configured, dict) else {}
+    return {
+        "mode": "configured",
+        "acceptable": _terms_from_value(configured.get("acceptable", [])),
+        "fluent": _terms_from_value(configured.get("fluent", [])),
+        "exclude_if_mandatory_unmatched": _bool_value(
+            configured.get("exclude_if_mandatory_unmatched"), False
+        ),
+        "penalty": min(0, _int_value(configured.get("penalty"), -25)),
+    }
+
+
 def score_job(job: Job, profile: dict, today: date | None = None) -> MatchResult:
     today = today or date.today()
     settings = match_engine_config_from_profile(profile)
+    review_settings = normalize_match_review_config(profile)
+    language_policy = normalize_language_policy(profile)
     text = _job_text(job)
     technical_match, technical_matches, missing_technical = _score_rule_groups(
         text, settings["technical_keyword_groups"], settings["technical_cap"]
@@ -95,37 +121,40 @@ def score_job(job: Job, profile: dict, today: date | None = None) -> MatchResult
         text, settings["module_keyword_groups"], settings["module_cap"]
     )
     missing_required_rules = missing_technical + missing_modules
+    language_risk = _language_risk(text, job, language_policy)
     components = {
         "technical_match": technical_match,
         "module_match": module_match,
         "contract_fit": _contract_fit(text, job, settings),
         "location_fit": _location_fit(job, profile, settings),
         "seniority_fit": _seniority_fit(text),
-        "leadership_project_management_interest": _project_interest(text),
-        "language_risk": _language_risk(text, job),
-        "frontend_or_functional_risk": _frontend_functional_risk(text),
+        "role_interest_fit": _role_interest_fit(text, profile),
+        "language_risk": language_risk,
         "freshness_risk": _freshness_risk(job, today),
         "rate_visibility_or_rate_fit": _rate_fit(job),
     }
     matched_keywords = _dedupe(technical_matches + module_matches)
+    review_matches = _matching_review_rules(text, review_settings["caveat_rules"])
+    review_triggers = [rule["id"] for rule in review_matches if rule["ai_review"]]
+    review_trigger_labels = [rule["label"] for rule in review_matches if rule["ai_review"]]
     reasons: list[str] = []
     concerns: list[str] = []
     missing_information: list[str] = []
 
     _add_positive_reasons(components, technical_matches, module_matches, reasons)
-    _add_concerns(job, components, text, profile, concerns, missing_required_rules, settings)
+    concerns.extend(_review_concerns(profile, review_matches))
+    _add_concerns(job, components, text, concerns, missing_required_rules, settings)
     _add_missing(job, missing_information)
 
-    exclusion_reason = _exclusion_reason(job, today, text, settings, missing_required_rules)
+    exclusion_reason = _exclusion_reason(
+        job, today, text, settings, missing_required_rules, language_risk, language_policy
+    )
     raw_score = sum(components.values())
     total_score = max(0, min(100, raw_score))
 
     if exclusion_reason:
         category = "excluded"
         total_score = 0
-    elif _is_fiori_adjacent_partial(text) or _is_exploratory_pm(text, components):
-        category = "exploratory"
-        total_score = min(total_score, 68)
     elif total_score >= 70:
         category = "strong"
     elif total_score >= 45:
@@ -133,9 +162,9 @@ def score_job(job: Job, profile: dict, today: date | None = None) -> MatchResult
     else:
         category = "weak"
 
-    recommended_angle = _recommended_angle(job, category, matched_keywords, text)
+    recommended_angle = _recommended_angle(category, matched_keywords, review_trigger_labels)
     if not reasons:
-        reasons.append("Some SAP relevance found, but the role needs manual review.")
+        reasons.append("Configured match signals were limited; review manually.")
 
     return MatchResult(
         total_score=total_score,
@@ -147,6 +176,11 @@ def score_job(job: Job, profile: dict, today: date | None = None) -> MatchResult
         recommended_angle=recommended_angle,
         exclusion_reason=exclusion_reason,
         matched_keywords=_dedupe(matched_keywords),
+        review_triggers=_dedupe(review_triggers),
+        review_trigger_labels=_dedupe(review_trigger_labels),
+        deterministic_confidence=_deterministic_confidence(
+            category, total_score, concerns, review_triggers, job.source_confidence
+        ),
     )
 
 
@@ -225,43 +259,44 @@ def _location_fit(job: Job, profile: dict, settings: dict[str, Any]) -> int:
 
 
 def _seniority_fit(text: str) -> int:
-    if "junior" in text and "project manager" not in text:
+    if "junior" in text:
         return -5
     if "senior" in text or "lead" in text:
         return 5
     return 2
 
 
-def _project_interest(text: str) -> int:
-    if any(term in text for term in PROJECT_TERMS):
-        score = 10
-        if "technical background" in text or "sap technical" in text:
-            score += 12
-        if "sap process" in text or "delivery tracking" in text or "stakeholder coordination" in text:
-            score += 8
-        return min(score, 28)
-    return 0
+def _role_interest_fit(text: str, profile: dict[str, Any]) -> int:
+    terms = _terms_from_value(profile.get("role_preferences", {}).get("interests", []))
+    target_roles = profile.get("target_roles", {})
+    if isinstance(target_roles, dict):
+        for key in ["high_match", "exploratory_match"]:
+            terms.extend(_terms_from_value(target_roles.get(key, [])))
+    target_role_aliases = profile.get("target_role_aliases", {})
+    if isinstance(target_role_aliases, dict):
+        for values in target_role_aliases.values():
+            terms.extend(_terms_from_value(values))
+    return 8 if any(_term_matches(text, term) for term in _dedupe(terms)) else 0
 
 
-def _language_risk(text: str, job: Job) -> int:
-    if "english required" in text or "english is enough" in text or "english sufficient" in text:
+def _language_risk(text: str, job: Job, policy: dict[str, Any]) -> int:
+    if policy["mode"] == "legacy":
+        if "english required" in text or "english is enough" in text or "english sufficient" in text:
+            return 0
+        penalty = 0
+        for language in LANGUAGE_NAMES:
+            if _has_mandatory_language(text, language):
+                penalty -= 25
+        return max(penalty, -35)
+
+    allowed = _dedupe(policy["acceptable"] + policy["fluent"])
+    if not allowed:
         return 0
-    penalty = 0
-    for language in LANGUAGE_NAMES:
-        if re.search(rf"\bmandatory\s+{language}\b|\b{language}\s+required\b|\bfluent\s+{language}\b", text):
-            penalty -= 25
-    return max(penalty, -35)
-
-
-def _frontend_functional_risk(text: str) -> int:
-    penalty = 0
-    if any(re.search(pattern, text) for pattern in FRONTEND_PATTERNS):
-        penalty -= 20
-    elif "fiori" in text or "ui5" in text:
-        penalty -= 6
-    if any(re.search(pattern, text) for pattern in FUNCTIONAL_PATTERNS) and "abap" not in text:
-        penalty -= 20
-    return penalty
+    required = _required_language_terms(text, job, allowed)
+    if not required:
+        return 0
+    unmatched = [language for language in required if not _language_allowed(language, allowed)]
+    return int(policy["penalty"]) if unmatched else 0
 
 
 def _freshness_risk(job: Job, today: date) -> int:
@@ -288,6 +323,8 @@ def _exclusion_reason(
     text: str,
     settings: dict[str, Any],
     missing_required_rules: list[str],
+    language_risk: int,
+    language_policy: dict[str, Any],
 ) -> str:
     posted = _parse_date(job.posted_date)
     deadline = _parse_date(job.deadline)
@@ -295,7 +332,7 @@ def _exclusion_reason(
         return f"Posting is older than 4 months ({job.posted_date})."
     if deadline and (today - deadline).days > 21:
         return f"Application deadline is more than 3 weeks overdue ({job.deadline})."
-    if _language_risk(text, job) <= -25 and "english required" not in text:
+    if language_risk <= -25 and language_policy["exclude_if_mandatory_unmatched"]:
         return "Mandatory language requirement appears incompatible."
     if settings["remote_policy"] == "required" and not _is_remote_or_hybrid(job):
         return "Remote or hybrid setup is required by match settings."
@@ -313,13 +350,13 @@ def _add_positive_reasons(
     reasons: list[str],
 ) -> None:
     if components["technical_match"] > 0:
-        reasons.append("Technical SAP overlap: " + ", ".join(technical_matches[:8]) + ".")
+        reasons.append("Technical overlap: " + ", ".join(technical_matches[:8]) + ".")
     if components["module_match"] > 0:
-        reasons.append("Relevant module exposure: " + ", ".join(module_matches[:8]) + ".")
+        reasons.append("Relevant domain/module exposure: " + ", ".join(module_matches[:8]) + ".")
     if components["contract_fit"] > 0:
-        reasons.append("Contract/freelance format appears aligned with preferences.")
-    if components["leadership_project_management_interest"] > 0:
-        reasons.append("Includes project coordination, delivery, or leadership angle.")
+        reasons.append("Employment or contract format appears aligned with preferences.")
+    if components["role_interest_fit"] > 0:
+        reasons.append("Role text overlaps with configured interests or target roles.")
     if components["location_fit"] > 0:
         reasons.append("Location or remote setup appears potentially workable.")
 
@@ -328,21 +365,12 @@ def _add_concerns(
     job: Job,
     components: dict[str, int],
     text: str,
-    profile: dict,
     concerns: list[str],
     missing_required_rules: list[str],
     settings: dict[str, Any],
 ) -> None:
     if components["language_risk"] < 0:
         concerns.append("Language requirement may need manual confirmation.")
-    if "fiori" in text or "ui5" in text:
-        concerns.append(profile.get("skills", {}).get("caveats", {}).get("fiori", "Clarify Fiori/UI5 depth."))
-    if any(term in text for term in PROJECT_TERMS):
-        concerns.append(
-            profile.get("skills", {})
-            .get("caveats", {})
-            .get("project_management", "Clarify project management ownership depth.")
-        )
     if components["freshness_risk"] < 0 and components["freshness_risk"] > -100:
         concerns.append("Freshness is uncertain because no reliable posting date or deadline was found.")
     if components["rate_visibility_or_rate_fit"] < 0:
@@ -370,28 +398,121 @@ def _add_missing(job: Job, missing: list[str]) -> None:
             missing.append(label)
 
 
-def _recommended_angle(job: Job, category: str, matched_keywords: list[str], text: str) -> str:
+def _recommended_angle(category: str, matched_keywords: list[str], review_trigger_labels: list[str]) -> str:
     if category == "excluded":
         return "Do not prioritize unless manual review overturns the exclusion."
-    if "project manager" in text:
-        return "Position as SAP technical consultant with coordination/planning experience, not as a formal PM owner."
-    if "fiori" in text or "ui5" in text:
-        return "Position around ABAP, Gateway/OData, RAP/CDS, and backend support for Fiori-related applications."
     if matched_keywords:
-        return "Lead with " + ", ".join(matched_keywords[:5]) + " and concrete SAP delivery examples."
+        return "Lead with " + ", ".join(matched_keywords[:5]) + " and concrete relevant examples."
+    if review_trigger_labels:
+        return "Review the flagged caveats and keep positioning aligned with verified experience."
     return "Review manually and keep the application concise."
 
 
-def _is_exploratory_pm(text: str, components: dict[str, int]) -> bool:
-    return any(term in text for term in PROJECT_TERMS) and components["technical_match"] < 25
+def _deterministic_confidence(
+    category: str, total_score: int, concerns: list[str], review_triggers: list[str], source_confidence: str
+) -> str:
+    if category == "excluded" or total_score < 35:
+        return "low"
+    if review_triggers or source_confidence in {"low", "unknown"}:
+        return "medium"
+    if category == "strong" and not concerns:
+        return "high"
+    return "medium"
 
 
-def _is_fiori_adjacent_partial(text: str) -> bool:
-    if "fiori" not in text and "ui5" not in text:
-        return False
-    backend_central = "backend integration is central" in text or "gateway" in text or "odata" in text
-    has_rap = "rap" in text
-    return backend_central and not has_rap
+def _matching_review_rules(text: str, rules: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [rule for rule in rules if any(_term_matches(text, term) for term in rule["terms"])]
+
+
+def _review_concerns(profile: dict[str, Any], rules: list[dict[str, Any]]) -> list[str]:
+    caveats = profile.get("skills", {}).get("caveats", {})
+    caveats = caveats if isinstance(caveats, dict) else {}
+    concerns = []
+    for rule in rules:
+        concern = ""
+        caveat_key = rule.get("caveat_key")
+        if caveat_key:
+            concern = str(caveats.get(caveat_key, "")).strip()
+        concern = concern or str(rule.get("concern", "")).strip()
+        concerns.append(concern or f"Review caveat: {rule['label']}.")
+    return concerns
+
+
+def _normalize_caveat_rules(value: Any) -> list[dict[str, Any]]:
+    source = value if isinstance(value, list) else []
+    rules: list[dict[str, Any]] = []
+    for item in source:
+        if not isinstance(item, dict):
+            continue
+        label = str(item.get("label") or item.get("id") or "").strip()
+        terms = _terms_from_value(item.get("terms", []))
+        if not label or not terms:
+            continue
+        rule_id = str(item.get("id") or _slug(label)).strip()
+        rules.append(
+            {
+                "id": rule_id,
+                "label": label,
+                "terms": terms,
+                "caveat_key": str(item.get("caveat_key", "")).strip(),
+                "concern": str(item.get("concern", "")).strip(),
+                "ai_review": _bool_value(item.get("ai_review"), True),
+            }
+        )
+    return rules
+
+
+def _legacy_caveat_rules(profile: dict[str, Any]) -> list[dict[str, Any]]:
+    caveats = profile.get("skills", {}).get("caveats", {})
+    caveats = caveats if isinstance(caveats, dict) else {}
+    rules = []
+    if caveats.get("fiori"):
+        rules.append(
+            {
+                "id": "fiori_ui5_depth",
+                "label": "Fiori/UI5 depth",
+                "terms": ["fiori", "ui5", "sapui5"],
+                "caveat_key": "fiori",
+                "concern": "",
+                "ai_review": True,
+            }
+        )
+    if caveats.get("project_management"):
+        rules.append(
+            {
+                "id": "project_management_scope",
+                "label": "Project management scope",
+                "terms": ["project manager", "transition manager", "service delivery manager"],
+                "caveat_key": "project_management",
+                "concern": "",
+                "ai_review": True,
+            }
+        )
+    return rules
+
+
+def _required_language_terms(text: str, job: Job, allowed: list[str]) -> list[str]:
+    known = _dedupe([*allowed, *LANGUAGE_NAMES, "english", "danish", "swedish", "norwegian", "spanish", "italian"])
+    required = _terms_from_value(job.required_languages)
+    for language in known:
+        if _has_mandatory_language(text, language):
+            required.append(language)
+    return _dedupe(required)
+
+
+def _has_mandatory_language(text: str, language: str) -> bool:
+    language = re.escape(language.lower())
+    return bool(
+        re.search(
+            rf"\bmandatory\s+{language}\b|\b{language}\s+required\b|\bfluent\s+{language}\b|\b{language}\s+mandatory\b",
+            text,
+        )
+    )
+
+
+def _language_allowed(language: str, allowed: list[str]) -> bool:
+    language_text = " ".join(str(language).lower().split())
+    return any(allowed_language in language_text or language_text in allowed_language for allowed_language in allowed)
 
 
 def _parse_date(value: object) -> date | None:
@@ -440,6 +561,14 @@ def _int_value(value: Any, default: int) -> int:
         return default
 
 
+def _bool_value(value: Any, default: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    return str(value).strip().lower() in {"1", "true", "on", "yes"}
+
+
 def _term_matches(text: str, term: str) -> bool:
     term = term.strip().lower()
     return bool(term and re.search(rf"(?<![a-z0-9]){re.escape(term)}(?![a-z0-9])", text))
@@ -456,6 +585,10 @@ def _is_permanent_role(text: str) -> bool:
 
 def _has_listed_value(value: str) -> bool:
     return bool(value and value != "Not listed")
+
+
+def _slug(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", value.lower()).strip("_") or "review_rule"
 
 
 def _dedupe(items: list[str]) -> list[str]:

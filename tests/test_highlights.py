@@ -36,20 +36,20 @@ def test_remote_preferred_location_and_part_time_produce_highlights() -> None:
     assert "matches preferred location: Denmark" in reasons
 
 
-def test_project_interest_high_rate_and_core_keywords_produce_highlights() -> None:
+def test_configured_interest_high_rate_and_core_keywords_produce_highlights() -> None:
     reasons = build_match_highlights(
         Job(
-            title="SAP Project Coordinator",
-            description="ABAP RAP CDS OData Gateway coordination role",
+            title="Project Coordination Lead",
+            description="ABAP RAP CDS OData Gateway project coordination role",
             rate="EUR 850/day",
         ),
         MatchResult(total_score=72, category="exploratory", matched_keywords=["ABAP", "RAP", "CDS"]),
         _profile(),
     )
 
-    assert "exploratory project/coordination angle" in reasons
+    assert "matches configured role interests" in reasons
     assert "visible high compensation" in reasons
-    assert "strong ABAP/RAP/CDS/OData/Gateway keyword overlap" in reasons
+    assert "strong core keyword overlap" in reasons
 
 
 def test_weak_low_score_job_produces_no_highlight() -> None:
@@ -66,5 +66,6 @@ def _profile(highlight_score: int = 75) -> dict:
     return {
         "thresholds": {"highlight_score": highlight_score},
         "location_policy": {"preferred_regions": ["Denmark", "Remote"]},
-        "role_preferences": {"interests": ["SAP project coordination", "SAP technical lead"]},
+        "role_preferences": {"interests": ["project coordination", "technical lead"]},
+        "highlighting": {"core_match_groups": ["abap", "rap", "cds"]},
     }

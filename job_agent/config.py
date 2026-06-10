@@ -29,6 +29,13 @@ def load_profile(root: Path = ROOT) -> dict[str, Any]:
     data: dict[str, Any] = {}
     for name in ["contact", "preferences", "skills", "experience"]:
         data.update(load_yaml(profile_dir / f"{name}.yaml"))
+    application_examples = load_yaml(profile_dir / "application-examples.yaml")
+    if isinstance(application_examples, dict):
+        data["application_examples"] = application_examples.get("application_examples", [])
+    elif isinstance(application_examples, list):
+        data["application_examples"] = application_examples
+    else:
+        data["application_examples"] = []
     data["canonical_cv"] = load_text(profile_dir / "canonical-cv.md")
     data["writing_style"] = load_text(profile_dir / "writing-style.md")
     return data

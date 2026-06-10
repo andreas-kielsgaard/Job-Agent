@@ -55,6 +55,9 @@ class SourceFetchOptions:
     pagination_page_limit: int | None = None
     session_state_path: str | Path | None = None
     enforce_saved_readiness: bool = False
+    require_setup_complete: bool = False
+    max_parallel_sources: int | None = 10
+    material_log: Any | None = None
 
 
 @dataclass
@@ -108,6 +111,14 @@ class LocalYamlAdapter(SourceAdapter):
         _emit_fetch_progress(progress_callback, "Local YAML read", "running", f"Reading {path}.")
         with path.open("r", encoding="utf-8") as handle:
             data = yaml.safe_load(handle) or {}
+        options = options or SourceFetchOptions()
+        _record_material_text(
+            options.material_log,
+            "input/local-source.yaml",
+            path.read_text(encoding="utf-8"),
+            kind="local_yaml",
+            metadata={"source_path": _relative_path(path, self.root)},
+        )
         jobs = []
         today = str(date.today())
         for item in data.get("jobs", []):
@@ -150,6 +161,14 @@ class GenericHtmlAdapter(SourceAdapter):
         )
 
         options = options or SourceFetchOptions()
+        _record_material_html(
+            options.material_log,
+            kind="generic_listing",
+            url=url,
+            final_url=str(response.url),
+            html=response.text,
+            mode="static_html",
+        )
         max_results = _positive_int(self.source.get("max_results"), 25) if options.use_source_job_limit else None
         all_jobs = extract_generic_jobs_from_html(
             response.text,
@@ -218,6 +237,7 @@ class RecipeHtmlAdapter(SourceAdapter):
 
             recipe = load_job_board_recipe(self.root / recipe_path)
             options = options or SourceFetchOptions()
+            _record_material_recipe(options.material_log, recipe_path)
             _emit_fetch_progress(
                 progress_callback,
                 "Recipe selected",
@@ -281,6 +301,7 @@ class RecipeHtmlAdapter(SourceAdapter):
                 fetch_details=options.fetch_details,
                 use_recipe_card_limit=options.use_recipe_card_limit,
                 session_state_path=self.root / session_state_path if session_state_path else None,
+                material_log=options.material_log,
                 progress_callback=lambda step: _emit_fetch_progress(
                     progress_callback,
                     step.phase,
@@ -341,6 +362,20 @@ def iter_source_results(
     sources = load_sources(root) if not include_disabled else _load_all_sources(root)
     if source_id:
         sources = [source for source in sources if str(source.get("source_id") or "") == source_id]
+    if fetch_options and fetch_options.require_setup_complete and not source_id:
+        sources, skipped_sources = _filter_setup_complete_sources(sources, root)
+        if skipped_sources:
+            _emit_source_progress(
+                progress_callback,
+                SourceProgressEvent(
+                    event_type="source_setup_skipped",
+                    source_name="Daily-run setup",
+                    source_index=0,
+                    source_count=len(sources),
+                    warnings_count=len(skipped_sources),
+                    message=_setup_skipped_message(skipped_sources),
+                ),
+            )
     source_count = len(sources)
     items = [
         _SourceWorkItem(
@@ -370,7 +405,9 @@ def _iter_source_results_parallel(
 ):
     queue: Queue[_SourceQueueItem] = Queue()
     completed = 0
-    max_workers = min(3, len(items))
+    submitted = 0
+    max_workers = _source_worker_limit(len(items), fetch_options)
+    pending_items = iter(items)
 
     def worker(item: _SourceWorkItem) -> None:
         result = _run_source_item(
@@ -382,15 +419,37 @@ def _iter_source_results_parallel(
         queue.put(_SourceQueueItem("result", result=result))
 
     with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="source-fetch") as executor:
-        for item in items:
+        def submit_next() -> bool:
+            nonlocal submitted
+            try:
+                item = next(pending_items)
+            except StopIteration:
+                return False
             executor.submit(worker, item)
-        while completed < len(items):
+            submitted += 1
+            return True
+
+        for _ in range(max_workers):
+            submit_next()
+        while completed < submitted:
             item = queue.get()
             if item.kind == "event" and item.event:
                 _emit_source_progress(progress_callback, item.event)
             elif item.kind == "result" and item.result:
                 completed += 1
+                submit_next()
                 yield item.result
+
+
+def _source_worker_limit(source_count: int, fetch_options: SourceFetchOptions | None = None) -> int:
+    if source_count <= 0:
+        return 0
+    configured = fetch_options.max_parallel_sources if fetch_options else 10
+    try:
+        limit = int(configured or 10)
+    except (TypeError, ValueError):
+        limit = 10
+    return max(1, min(source_count, limit))
 
 
 def _run_source_item(
@@ -548,6 +607,44 @@ def _fetch_adapter(
     return adapter.fetch(**kwargs)
 
 
+def _record_material_html(material_log: Any, **kwargs: Any) -> None:
+    if not material_log:
+        return
+    recorder = getattr(material_log, "record_html", None)
+    if callable(recorder):
+        recorder(**kwargs)
+
+
+def _record_material_text(
+    material_log: Any,
+    filename: str,
+    content: str,
+    *,
+    kind: str,
+    metadata: dict[str, Any] | None = None,
+) -> None:
+    if not material_log:
+        return
+    recorder = getattr(material_log, "record_text", None)
+    if callable(recorder):
+        recorder(filename, content, kind=kind, metadata=metadata)
+
+
+def _record_material_recipe(material_log: Any, recipe_path: str) -> None:
+    if not material_log:
+        return
+    recorder = getattr(material_log, "record_recipe", None)
+    if callable(recorder):
+        recorder(recipe_path)
+
+
+def _relative_path(path: Path, root: Path) -> str:
+    try:
+        return path.relative_to(root).as_posix()
+    except ValueError:
+        return path.as_posix()
+
+
 def saved_readiness_warning_for_source(
     source: dict,
     root: Path,
@@ -576,6 +673,55 @@ def saved_readiness_warning_for_source(
         f"Saved source readiness is {readiness.readiness_status}; {detail} "
         "Rerun the safe source test or refresh source access before this source is used."
     )
+
+
+def _filter_setup_complete_sources(
+    sources: list[dict],
+    root: Path,
+) -> tuple[list[dict], list[tuple[dict, str]]]:
+    included = []
+    skipped = []
+    for source in sources:
+        ready, reason = _source_setup_complete_for_daily_run(source, root)
+        if ready:
+            included.append(source)
+        else:
+            skipped.append((source, reason))
+    return included, skipped
+
+
+def _source_setup_complete_for_daily_run(source: dict, root: Path) -> tuple[bool, str]:
+    if source.get("type") != "recipe_html" or not str(source.get("recipe_path") or "").strip():
+        return True, ""
+    source_id = str(source.get("source_id") or "").strip()
+    if not source_id:
+        return False, "missing source_id"
+    try:
+        from .services.source_execution_readiness_service import SourceExecutionReadinessService
+
+        readiness = SourceExecutionReadinessService(root).evaluate(source_id)
+    except Exception as exc:
+        return False, f"readiness check failed: {exc}"
+    if readiness.readiness_status != "ready":
+        return False, f"readiness is {readiness.readiness_status}"
+    try:
+        from .services.source_listing_index_store import SourceListingIndexStore
+
+        index = SourceListingIndexStore(root).summary_for_source(source_id, str(source.get("name") or source_id))
+    except Exception as exc:
+        return False, f"listing index check failed: {exc}"
+    if not index.is_indexed:
+        return False, "listing index is missing"
+    return True, ""
+
+
+def _setup_skipped_message(skipped_sources: list[tuple[dict, str]]) -> str:
+    names = []
+    for source, reason in skipped_sources[:5]:
+        name = str(source.get("name") or source.get("source_id") or "Unknown source")
+        names.append(f"{name} ({reason})" if reason else name)
+    suffix = "" if len(skipped_sources) <= 5 else f" and {len(skipped_sources) - 5} more"
+    return "Skipped sources still in setup: " + ", ".join(names) + suffix + "."
 
 
 def _adapter_accepts_parameter(adapter: SourceAdapter, name: str) -> bool:
@@ -615,12 +761,32 @@ def _recipe_result_metadata(
     max_results: int | None,
     session_status: Any | None = None,
 ) -> dict[str, Any]:
+    api_pagination_configured = bool(
+        getattr(recipe, "listing_api", None)
+        and recipe.listing_api.url
+        and recipe.listing_api.pagination.strategy != "none"
+    )
+    html_pagination_configured = bool(
+        recipe.pagination.strategy in {"ajax", "browser_click"}
+        or recipe.pagination.page_link_selector
+        or recipe.pagination.next_selector
+    )
+    pagination_strategy = result.pagination_strategy_used or (
+        f"api_{recipe.listing_api.pagination.strategy}" if api_pagination_configured else recipe.pagination.strategy
+    )
+    pagination_max_pages = (
+        recipe.listing_api.pagination.max_pages if api_pagination_configured else recipe.pagination.max_pages
+    )
     return {
         "adapter": "recipe_html",
         "recipe_path": recipe_path,
         "recipe_source_name": recipe.source_name,
         "base_url": result.base_url,
         "mode_used": result.mode_used,
+        "access_strategy": getattr(result, "access_strategy", "html"),
+        "api_request_count": getattr(result, "api_request_count", 0),
+        "records_observed_count": getattr(result, "records_observed_count", 0),
+        "json_records_extracted_count": getattr(result, "json_records_extracted_count", 0),
         "configured_source_url": source.get("url", ""),
         "retained_job_count": retained_job_count,
         "job_limit": max_results,
@@ -633,18 +799,14 @@ def _recipe_result_metadata(
             }
             for step in result.steps
         ],
-        "pagination_configured": bool(
-            recipe.pagination.strategy in {"ajax", "browser_click"}
-            or recipe.pagination.page_link_selector
-            or recipe.pagination.next_selector
-        ),
-        "pagination_strategy": recipe.pagination.strategy,
+        "pagination_configured": bool(api_pagination_configured or html_pagination_configured),
+        "pagination_strategy": pagination_strategy,
         "pagination_ajax_url_template_present": bool(recipe.pagination.ajax_url_template),
         "pagination_click_selector_configured": bool(
             recipe.pagination.click_selector or recipe.pagination.next_selector or recipe.pagination.page_link_selector
         ),
         "pagination_link_count": len(result.pagination_links),
-        "pagination_max_pages": recipe.pagination.max_pages,
+        "pagination_max_pages": pagination_max_pages,
         "pagination_fetch_count": result.pagination_fetch_count,
         "pagination_fetch_attempts": list(result.pagination_fetch_attempts),
         "pagination_duplicate_page_count": result.pagination_duplicate_page_count,

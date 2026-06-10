@@ -44,6 +44,7 @@ def new_source_form(
         "source_new.html",
         {
             "request": request,
+            "title": "Add Source",
             "name": name,
             "url": url,
             "recipe_path": recipe_path,
@@ -75,6 +76,7 @@ def create_source(
             "source_new.html",
             {
                 "request": request,
+                "title": "Add Source",
                 "name": name,
                 "url": url,
                 "recipe_path": recipe_path,
@@ -484,7 +486,7 @@ def index_source_listings(source_id: str) -> RedirectResponse:
         task = workflow_handler().source.launch_listing_index(runtime, source_id)
     except (RuntimeError, ValueError) as exc:
         return _redirect_to_source(source_id, warning=str(exc))
-    return _redirect_to_source(source_id, message=f"Indexing started for {task.source_name}.")
+    return _redirect_to_source(source_id, message=f"Listing index refresh started for {task.source_name}.")
 
 
 @router.post("/sources/{source_id}/investigate-all")
@@ -527,6 +529,7 @@ def recipe_generation_run_detail(request: Request, source_id: str, run_id: str) 
         "recipe_generation_run.html",
         {
             "request": request,
+            "title": f"Reading Plan - {source.name}",
             "source": source,
             "run": run,
         },

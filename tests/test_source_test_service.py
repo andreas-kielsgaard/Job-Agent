@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from job_agent.cli import test_source as run_source_test_cli
@@ -187,6 +188,19 @@ def test_source_test_verifies_detail_reads_across_paginated_listing_pages(
     assert detail_urls == ["https://example.com/jobs/sap-1", "https://example.com/jobs/sap-5"]
     assert checks["detail_navigation"]["status"] == "pass"
     assert "2/2 listing page" in checks["detail_navigation"]["detail"]
+    assert result.log_dir
+    artifact_dir = project_root / result.log_dir
+    manifest = json.loads((project_root / result.log_manifest_path).read_text(encoding="utf-8"))
+    entry_kinds = [entry["kind"] for entry in manifest["entries"]]
+    assert artifact_dir.exists()
+    assert "source_config" in entry_kinds
+    assert "recipe" in entry_kinds
+    assert "listing" in entry_kinds
+    assert "pagination" in entry_kinds
+    assert "detail" in entry_kinds
+    assert (artifact_dir / "source-test-result.json").exists()
+    assert (artifact_dir / "source-run-metadata.json").exists()
+    assert any("SAP Consultant 5" in (project_root / entry["html_path"]).read_text(encoding="utf-8") for entry in manifest["entries"] if entry["kind"] == "pagination")
 
 
 def test_source_test_reports_missing_session_for_session_required_recipe(project_root: Path) -> None:
@@ -303,6 +317,10 @@ def test_source_test_uses_connected_session_even_when_recipe_does_not_require_on
     assert result.source_access_session_used is True
     assert result.source_access_session_status == "connected"
     assert "sid" in observed_cookie_names
+    manifest_text = (project_root / result.log_manifest_path).read_text(encoding="utf-8")
+    result_text = (project_root / result.log_dir / "source-test-result.json").read_text(encoding="utf-8")
+    assert "abc" not in manifest_text
+    assert "abc" not in result_text
 
 
 def test_source_test_collects_warnings(monkeypatch, project_root: Path) -> None:
@@ -436,7 +454,7 @@ def test_cli_source_test_prints_key_fields_and_no_writes(monkeypatch, capsys) ->
     assert "Source test status: success" in output
     assert "SAP ABAP Consultant" in output
     assert "Source id: sample-source" in output
-    assert "No packages, seen state, materials, digests, or run records were written." in output
+    assert "No packages, seen state, application materials, digests, or run records were written." in output
 
 
 def _write_execution_source(

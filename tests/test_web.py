@@ -15,6 +15,43 @@ def test_dashboard_loads(client: TestClient) -> None:
     assert response.status_code == 200
     assert "Overview" in response.text
     assert "Perform daily run" in response.text
+    assert "Open setup guide" in response.text
+    assert 'id="setup-guide-companion"' in response.text
+    assert "job-agent-folio-character-avatar.svg" in response.text
+
+
+def test_setup_guide_page_and_dismissal_state(client: TestClient, project_root) -> None:
+    response = client.get("/setup-guide")
+
+    assert response.status_code == 200
+    assert "<title>Setup Guide - Job Agent</title>" in response.text
+    assert "Get To The First Run" in response.text
+    assert "Connect Claude" in response.text
+    assert "profile/setup-guide.json" in response.text
+    assert "job-agent-folio-character-transparent.svg" in response.text
+
+    skip = client.post(
+        "/api/setup-guide/steps/claude/dismiss",
+        data={"return_to": "/setup-guide"},
+        follow_redirects=False,
+    )
+    assert skip.status_code == 303
+    assert skip.headers["location"] == "/setup-guide"
+    state = (project_root / "profile" / "setup-guide.json").read_text(encoding="utf-8")
+    assert '"claude"' in state
+
+    dashboard = client.get("/")
+    assert dashboard.status_code == 200
+    assert "Open sources" in dashboard.text
+
+    dismiss = client.post(
+        "/api/setup-guide/dismiss",
+        data={"return_to": "/"},
+        follow_redirects=False,
+    )
+    assert dismiss.status_code == 303
+    assert '"guide_dismissed": true' in (project_root / "profile" / "setup-guide.json").read_text(encoding="utf-8")
+    assert 'id="setup-guide-companion"' not in client.get("/").text
 
 
 def test_setup_loads_friendly_sections(client: TestClient) -> None:
@@ -24,25 +61,31 @@ def test_setup_loads_friendly_sections(client: TestClient) -> None:
     assert "Worker Profile" in response.text
     assert "CV Reference" in response.text
     assert "Upload or Replace CV" in response.text
-    assert "Profile Map" in response.text
-    assert "profile-checklist-panel" in response.text
-    assert "profile-checklist-board" in response.text
-    assert "cv-reference-dashboard" in response.text
+    assert "Profile Checklist" not in response.text
+    assert "Profile Map" not in response.text
+    assert "profile-checklist-panel" not in response.text
+    assert "profile-checklist-board" not in response.text
     assert "cv-reference-workspace" in response.text
-    assert "profile-map-panel" in response.text
-    assert "Use this map to see where profile information lives" in response.text
-    assert "Core:" in response.text
-    assert "Basics / Preferences / Profile signals" in response.text
-    assert "Skill matrix and caveats" in response.text
+    assert "profile-map-panel" not in response.text
+    assert "Skill Matrix" in response.text
+    assert "Writing Style &amp; Examples" in response.text
+    assert "AI Review &amp; Writing" in response.text
     assert 'class="setup-outline"' in response.text
     assert 'href="#cv-reference"' in response.text
-    assert 'href="#profile-contract"' in response.text
+    assert 'href="#profile-contract"' not in response.text
     assert "Open scoring sandbox" in response.text
+    assert 'name="skill_terms"' not in response.text
+    assert 'name="module_terms"' not in response.text
+    assert 'name="caveat_terms"' not in response.text
+    assert "One matching term per line" not in response.text
+    assert 'id="tag-editor-dialog"' in response.text
+    assert "data-case-linked-skills" not in response.text
+    assert 'data-case-link-list="skills"' in response.text
     assert "Advanced profile files and writing templates" in response.text
     assert "Template variable reference" in response.text
     assert "Highest performance" in response.text
-    assert "Minimum digest score" in response.text
-    assert response.text.index('id="profile-checklist"') < response.text.index('id="cv-reference"')
+    assert "Daily-run inclusion score" in response.text
+    assert "Minimum digest score" not in response.text
     assert "Job Sources" not in response.text
     assert "Manage sources" not in response.text
     assert "Add source" not in response.text
@@ -190,6 +233,115 @@ def test_run_status_log_and_lifecycle_routes_use_executor_boundary(client: TestC
     assert RunStore(project_root).get(record.run_id).visibility == "deleted"
 
 
+def test_run_status_payload_includes_live_view_sections(client: TestClient, project_root) -> None:
+    store = RunStore(project_root)
+    record = store.create_run(RunOptions())
+    store.update(record.run_id, status="running")
+    store.append_event(
+        RunEvent(
+            record.run_id,
+            "source_started",
+            "Checking source 1/1: Local",
+            phase="source_ingestion",
+            current_source="Local",
+            counts={"source_index": 1, "source_count": 1},
+        )
+    )
+    store.append_event(
+        RunEvent(
+            record.run_id,
+            "match_highlight",
+            "Highlighted match: SAP ABAP Consultant - 90% - strong match category",
+            phase="scoring",
+            current_source="Local",
+            current_job="SAP ABAP Consultant",
+            counts={"score": 90, "source_index": 1, "source_count": 1},
+        )
+    )
+    store.append_event(
+        RunEvent(
+            record.run_id,
+            "match_highlight",
+            "Highlighted match: SAP Basis Consultant - 88% - strong match category",
+            phase="scoring",
+            current_source="Local",
+            current_job="SAP Basis Consultant",
+            counts={"score": 88, "source_index": 1, "source_count": 1},
+        )
+    )
+
+    response = client.get(f"/api/runs/{record.run_id}/status")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["run_overview"]["is_running"] is True
+    assert data["run_progress"]["running_sources"] == 1
+    assert data["source_progress"]["summary"]["total_sources"] == 1
+    assert data["source_progress"]["items"][0]["source_name"] == "Local"
+    assert data["source_progress"]["items"][0]["highlights"][0]["title"] == "SAP ABAP Consultant"
+    assert data["source_progress"]["items"][0]["highlights"][1]["title"] == "SAP Basis Consultant"
+    assert data["match_highlights"][0]["current_job"] == "SAP ABAP Consultant"
+    assert "packages" in data
+
+
+def test_running_run_detail_uses_live_status_polling(client: TestClient, project_root) -> None:
+    store = RunStore(project_root)
+    record = store.create_run(RunOptions())
+    store.update(record.run_id, status="running")
+
+    response = client.get(f"/runs/{record.run_id}")
+
+    assert response.status_code == 200
+    assert "/api/runs/" in response.text
+    assert "refreshRunDetail" in response.text
+    assert "setTimeout(() => location.reload(), 2500)" not in response.text
+
+
+def test_completed_run_status_does_not_show_unfinished_sources_as_running(
+    client: TestClient, project_root
+) -> None:
+    store = RunStore(project_root)
+    record = store.create_run(RunOptions())
+    store.update(record.run_id, status="completed")
+    store.append_event(
+        RunEvent(
+            record.run_id,
+            "source_started",
+            "Checking source 1/2: First",
+            phase="source_ingestion",
+            current_source="First",
+            counts={"source_index": 1, "source_count": 2},
+        )
+    )
+    store.append_event(
+        RunEvent(
+            record.run_id,
+            "source_completed",
+            "Completed source 1/2: First - 2 jobs found, 0 warnings",
+            phase="source_ingestion",
+            current_source="First",
+            counts={"source_index": 1, "source_count": 2, "jobs_found": 2},
+        )
+    )
+    store.append_event(
+        RunEvent(
+            record.run_id,
+            "source_started",
+            "Checking source 2/2: Second",
+            phase="source_ingestion",
+            current_source="Second",
+            counts={"source_index": 2, "source_count": 2},
+        )
+    )
+
+    data = client.get(f"/api/runs/{record.run_id}/status").json()
+
+    assert data["run_progress"]["running_sources"] == 0
+    assert data["run_progress"]["finished_sources"] == 2
+    assert data["source_progress"]["items"][1]["status"] == "deferred"
+    assert data["source_progress"]["items"][1]["highlight"]["title"] == "Left for another pass"
+
+
 def _write_package(project_root, run_date: str, run_id: str, package_id: str, data: dict) -> None:
     package_dir = project_root / "output" / run_date / package_id
     package_dir.mkdir(parents=True, exist_ok=True)
@@ -203,3 +355,4 @@ def test_ai_edit_context_endpoint(client: TestClient) -> None:
     data = response.json()
     assert "blocks" in data
     assert "selected_blocks" in data
+    assert any(block["key"] == "application_examples" for block in data["blocks"])

@@ -42,15 +42,81 @@ sources:
     health_status: good
     health_summary: 6 jobs extracted, 6 useful titles, no generic labels.
   experis:
-    last_preview_at: ''
-    last_input_type: ''
-    last_input_value: ''
-    mode_used: ''
-    extracted_job_count: 0
-    useful_titles: 0
+    last_preview_at: '2026-06-10T08:30:32+00:00'
+    last_input_type: local artifact
+    last_input_value: output/recipe-calibration/20260610-102856-www-experis-pl-en-search-page-1-searchkeyword-sap/page.html
+    mode_used: local_fixture_html
+    extracted_job_count: 10
+    useful_titles: 10
     generic_labels: 0
-    unique_urls: 0
-    average_description_length: 0
+    unique_urls: 10
+    average_description_length: 1485
+    warnings:
+    - 'Local fixture HTML ignores recipe mode: rendered_html.'
+    health_status: warning
+    health_summary: 10 jobs extracted, 1 warnings.
+  red-global:
+    last_preview_at: '2026-06-10T09:46:43+00:00'
+    last_input_type: local artifact
+    last_input_value: output/recipe-calibration/20260610-114507-www-redglobal-com-jobs-search-keywords-role-h021hnpu-workplace-types/page.html
+    mode_used: local_fixture_html
+    extracted_job_count: 10
+    useful_titles: 10
+    generic_labels: 0
+    unique_urls: 10
+    average_description_length: 291
     warnings: []
-    health_status: untested
-    health_summary: No preview has been saved for this source yet.
+    health_status: good
+    health_summary: 10 jobs extracted, 10 useful titles, no generic labels.
+  masento-group:
+    last_preview_at: '2026-06-10T09:49:36+00:00'
+    last_input_type: local artifact
+    last_input_value: output/recipe-calibration/20260610-114913-www-masentogroup-com-job-search-section-jobs-search-jobdivision-2614-jobtype-5b-/page.html
+    mode_used: local_fixture_html
+    extracted_job_count: 10
+    useful_titles: 10
+    generic_labels: 0
+    unique_urls: 10
+    average_description_length: 482
+    warnings: []
+    health_status: good
+    health_summary: 10 jobs extracted, 10 useful titles, no generic labels.
+  next-ventures:
+    last_preview_at: '2026-06-10T12:32:01+00:00'
+    last_input_type: local artifact
+    last_input_value: output/recipe-calibration/20260610-143152-next-ventures-com-practices-sap-recruitment-sap-jobs/page.html
+    mode_used: local_fixture_html
+    extracted_job_count: 8
+    useful_titles: 8
+    generic_labels: 0
+    unique_urls: 8
+    average_description_length: 102
+    warnings: []
+    health_status: good
+    health_summary: 8 jobs extracted, 8 useful titles, no generic labels.
+  sap-contractors:
+    last_preview_at: '2026-06-10T12:32:32+00:00'
+    last_input_type: local artifact
+    last_input_value: output/recipe-calibration/20260610-143221-www-sapcontractors-com-search-jobs-fwp-keyword/page.html
+    mode_used: local_fixture_html
+    extracted_job_count: 10
+    useful_titles: 10
+    generic_labels: 0
+    unique_urls: 10
+    average_description_length: 63
+    warnings: []
+    health_status: good
+    health_summary: 10 jobs extracted, 10 useful titles, no generic labels.
+  global-enterprise-partners:
+    last_preview_at: '2026-06-10T14:12:04+00:00'
+    last_input_type: local JSON fixture
+    last_input_value: output/recipe-calibration/20260610-161148-www-globalenterprisepartners-com-en-gb-job-search-industry-sap-type-contract-sea/api-listing-response-1.json
+    mode_used: local_api_fixture
+    extracted_job_count: 20
+    useful_titles: 20
+    generic_labels: 0
+    unique_urls: 20
+    average_description_length: 2508
+    warnings: []
+    health_status: good
+    health_summary: 20 jobs extracted, 20 useful titles, no generic labels.

@@ -69,6 +69,10 @@ class SetupServiceTests(unittest.TestCase):
             self.assertEqual(preferences["thresholds"]["minimum_digest_score"], 55)
             self.assertEqual(preferences["location_policy"]["preferred_regions"], ["Denmark", "Sweden"])
 
+            service.save_runtime_settings(max_parallel_sources=12)
+            preferences = yaml.safe_load((root / "profile" / "preferences.yaml").read_text(encoding="utf-8"))
+            self.assertEqual(preferences["runtime"]["max_parallel_sources"], 12)
+
     def test_setup_files(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -76,8 +80,217 @@ class SetupServiceTests(unittest.TestCase):
 
             service.save_setup_file("canonical_cv", "CV text")
             self.assertEqual((root / "profile" / "canonical-cv.md").read_text(encoding="utf-8"), "CV text")
+            self.assertIn("application_examples", service.setup_files())
             with self.assertRaises(KeyError):
                 service.save_setup_file("unknown", "nope")
+
+    def test_saves_skill_matrix_and_preserves_unrelated_match_rules(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            profile = root / "profile"
+            profile.mkdir()
+            (profile / "skills.yaml").write_text(
+                "skills:\n"
+                "  strongest:\n"
+                "    - SAP ABAP\n"
+                "  modules:\n"
+                "    strong:\n"
+                "      - QM\n"
+                "    experienced: []\n"
+                "    adjacent: []\n"
+                "  caveats:\n"
+                "    fiori: Old caveat\n"
+                "target_roles:\n"
+                "  high_match:\n"
+                "    - SAP Developer\n",
+                encoding="utf-8",
+            )
+            (profile / "preferences.yaml").write_text(
+                "match_engine:\n"
+                "  technical_keyword_groups:\n"
+                "    - label: SAP ABAP\n"
+                "      terms: [abap]\n"
+                "      score: 22\n"
+                "      mode: bonus\n"
+                "    - label: Manual scoring rule\n"
+                "      terms: [keep me]\n"
+                "      score: 5\n"
+                "      mode: bonus\n"
+                "  module_keyword_groups:\n"
+                "    - label: QM\n"
+                "      terms: [qm]\n"
+                "      score: 7\n"
+                "      mode: bonus\n"
+                "match_review:\n"
+                "  caveat_rules:\n"
+                "    - id: caveat_fiori\n"
+                "      label: Fiori\n"
+                "      terms: [fiori]\n"
+                "      caveat_key: fiori\n"
+                "      ai_review: true\n",
+                encoding="utf-8",
+            )
+
+            SetupService(root).save_skill_matrix_from_form(
+                FakeForm(
+                    lists={
+                        "skill_name": ["SAP ABAP", "RAP"],
+                        "skill_terms": ["abap\nsap abap", "rap"],
+                        "skill_score": ["24", "12"],
+                        "skill_mode": ["bonus", "required"],
+                        "module_lane": ["strong"],
+                        "module_name": ["QM"],
+                        "module_terms": ["qm\nquality management"],
+                        "module_score": ["8"],
+                        "module_mode": ["bonus"],
+                        "role_bucket": ["high_match"],
+                        "role_name": ["SAP Developer"],
+                        "role_aliases": ["ABAP consultant"],
+                        "caveat_key": ["fiori"],
+                        "caveat_text": ["Backend Fiori experience, not pure UI5."],
+                        "caveat_terms": ["fiori\nui5"],
+                        "caveat_ai_review": ["true"],
+                    }
+                )
+            )
+
+            skills = yaml.safe_load((profile / "skills.yaml").read_text(encoding="utf-8"))
+            preferences = yaml.safe_load((profile / "preferences.yaml").read_text(encoding="utf-8"))
+            self.assertEqual(skills["skills"]["strongest"], ["SAP ABAP", "RAP"])
+            self.assertEqual(skills["target_role_aliases"]["SAP Developer"], ["ABAP consultant"])
+            technical_labels = [rule["label"] for rule in preferences["match_engine"]["technical_keyword_groups"]]
+            self.assertIn("Manual scoring rule", technical_labels)
+            self.assertIn("RAP", technical_labels)
+            self.assertEqual(preferences["match_review"]["caveat_rules"][0]["caveat_key"], "fiori")
+
+    def test_simple_skill_matrix_save_preserves_advanced_matching(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            profile = root / "profile"
+            profile.mkdir()
+            (profile / "skills.yaml").write_text(
+                "skills:\n"
+                "  strongest:\n"
+                "    - SAP ABAP\n"
+                "  modules:\n"
+                "    strong:\n"
+                "      - QM\n"
+                "    experienced: []\n"
+                "    adjacent: []\n"
+                "  caveats:\n"
+                "    fiori: Backend Fiori experience, not pure UI5.\n"
+                "target_roles:\n"
+                "  high_match:\n"
+                "    - SAP Developer\n"
+                "  exploratory_match: []\n"
+                "  lower_match: []\n"
+                "target_role_aliases:\n"
+                "  SAP Developer:\n"
+                "    - ABAP consultant\n",
+                encoding="utf-8",
+            )
+            (profile / "preferences.yaml").write_text(
+                "match_engine:\n"
+                "  technical_keyword_groups:\n"
+                "    - label: SAP ABAP\n"
+                "      terms: [abap]\n"
+                "      score: 22\n"
+                "      mode: required\n"
+                "    - label: Manual scoring rule\n"
+                "      terms: [keep me]\n"
+                "      score: 5\n"
+                "      mode: bonus\n"
+                "  module_keyword_groups:\n"
+                "    - label: QM\n"
+                "      terms: [qm]\n"
+                "      score: 7\n"
+                "      mode: bonus\n"
+                "match_review:\n"
+                "  caveat_rules:\n"
+                "    - id: caveat_fiori\n"
+                "      label: Fiori\n"
+                "      terms: [fiori]\n"
+                "      caveat_key: fiori\n"
+                "      ai_review: true\n",
+                encoding="utf-8",
+            )
+            before_preferences = yaml.safe_load((profile / "preferences.yaml").read_text(encoding="utf-8"))
+
+            SetupService(root).save_skill_matrix_from_form(
+                FakeForm(
+                    lists={
+                        "skill_name": ["SAP ABAP", "CDS Views"],
+                        "module_lane": ["strong"],
+                        "module_name": ["QM"],
+                        "role_bucket": ["high_match"],
+                        "role_name": ["SAP Developer"],
+                        "caveat_key": ["fiori"],
+                        "caveat_text": ["Backend Fiori experience, not pure UI5."],
+                    }
+                )
+            )
+
+            skills = yaml.safe_load((profile / "skills.yaml").read_text(encoding="utf-8"))
+            preferences = yaml.safe_load((profile / "preferences.yaml").read_text(encoding="utf-8"))
+            self.assertEqual(skills["skills"]["strongest"], ["SAP ABAP", "CDS Views"])
+            self.assertEqual(skills["target_role_aliases"]["SAP Developer"], ["ABAP consultant"])
+            self.assertEqual(preferences, before_preferences)
+
+    def test_saves_case_studies_application_examples_and_ai_policy(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            profile = root / "profile"
+            profile.mkdir()
+            service = SetupService(root)
+
+            service.save_case_studies_from_form(
+                FakeForm(
+                    lists={
+                        "case_company": ["LEGO"],
+                        "case_role": ["Developer"],
+                        "case_highlights": ["Built service\nImproved flow"],
+                        "case_keywords": ["ABAP"],
+                        "case_linked_skills": ["SAP ABAP"],
+                        "case_linked_modules": ["QM"],
+                        "case_linked_roles": ["Developer"],
+                    }
+                )
+            )
+            experience = yaml.safe_load((profile / "experience.yaml").read_text(encoding="utf-8"))
+            self.assertEqual(experience["experience"][0]["linked_skills"], ["SAP ABAP"])
+
+            service.save_application_examples_from_form(
+                FakeForm(
+                    lists={
+                        "example_id": [""],
+                        "example_label": ["Concise ABAP note"],
+                        "example_application_text": ["Human edited text"],
+                        "example_job_title": ["ABAP Consultant"],
+                        "example_company": ["Recruiter"],
+                        "example_url": ["https://example.com"],
+                        "example_linked_skills": ["SAP ABAP"],
+                        "example_linked_modules": ["QM"],
+                        "example_linked_roles": ["Developer"],
+                        "example_notes": ["Good tone"],
+                    }
+                )
+            )
+            examples = yaml.safe_load((profile / "application-examples.yaml").read_text(encoding="utf-8"))
+            self.assertEqual(examples["application_examples"][0]["application_text"], "Human edited text")
+            self.assertTrue(examples["application_examples"][0]["id"])
+
+            service.save_ai_policy_from_form(
+                FakeForm(
+                    {"ai_min_score": "40", "language_penalty": "-20", "min_core_matches": "2", "high_rate_threshold": "900"},
+                    {
+                        "evaluate_category": ["strong", "exploratory"],
+                    },
+                )
+            )
+            preferences = yaml.safe_load((profile / "preferences.yaml").read_text(encoding="utf-8"))
+            self.assertEqual(preferences["ai_review_policy"]["min_score"], 40)
+            self.assertEqual(preferences["ai_review_policy"]["evaluate_categories"], ["strong", "exploratory"])
+            self.assertEqual(preferences["language_policy"]["penalty"], -20)
 
     def test_saves_match_engine_settings_and_scores_sandbox_form(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

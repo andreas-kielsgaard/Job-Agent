@@ -24,7 +24,12 @@ def build_run_list_view(view: str, root: Path = ROOT) -> dict:
         runs = [run for run in all_runs if run.visibility == "deleted"]
     else:
         runs = [run for run in all_runs if run.visibility == "active" and not run.is_test]
-    return {"runs": runs, "view": view}
+    view_titles = {
+        "test": "Test Runs",
+        "archived": "Archived Runs",
+        "deleted": "Deleted Runs",
+    }
+    return {"title": view_titles.get(view, "Runs"), "runs": runs, "view": view}
 
 
 def build_run_detail_view(
@@ -70,11 +75,15 @@ def build_run_detail_view(
     match_highlights = [event for event in all_events if event.get("event_type") == "match_highlight"]
     ai_evaluation_events = [event for event in all_events if event.get("event_type", "").startswith("ai_evaluation_")]
     source_progress = build_source_progress(all_events)
+    finalize_source_progress_for_run(source_progress, record.status)
     run_overview = build_run_overview(record, all_packages, all_events, match_highlights)
+    run_progress = build_run_progress(record, source_progress["summary"], all_events, run_overview)
     activity = build_activity_view(all_events)
     return {
+        "title": f"Run - {record.started_at[:10] or record.run_id}",
         "run": record,
         "run_overview": run_overview,
+        "run_progress": run_progress,
         "packages": packages,
         "events": activity["recent"],
         "activity": activity,
@@ -132,6 +141,121 @@ def build_run_overview(
         "is_running": record.status in {"pending", "running"},
         "option_summary": build_option_summary(record.options),
     }
+
+
+def build_run_progress(
+    record,
+    source_summary: dict[str, Any],
+    events: list[dict[str, Any]],
+    run_overview: dict[str, Any],
+) -> dict[str, Any]:
+    total_sources = int(source_summary.get("total_sources") or 0)
+    completed_sources = int(source_summary.get("sources_completed") or 0)
+    failed_sources = int(source_summary.get("sources_failed") or 0)
+    deferred_sources = int(source_summary.get("sources_deferred") or 0)
+    running_sources = int(source_summary.get("sources_running") or 0)
+    waiting_sources = int(source_summary.get("sources_waiting") or 0)
+    finished_sources = completed_sources + failed_sources + deferred_sources
+    progress_percent = int(source_summary.get("progress_percent") or 0)
+    if not progress_percent:
+        if record.status == "completed":
+            progress_percent = 100
+        elif record.status == "failed":
+            progress_percent = max(8, int((finished_sources / total_sources) * 100)) if total_sources else 100
+        elif total_sources:
+            progress_percent = max(8, int((finished_sources / total_sources) * 100))
+        else:
+            progress_percent = 8 if record.status in {"pending", "running"} else 100
+
+    if record.status == "completed":
+        phase = "Completed"
+    elif record.status == "failed":
+        phase = "Failed"
+    elif running_sources:
+        phase = "Sources running in parallel"
+    elif waiting_sources:
+        phase = "Preparing source queue"
+    else:
+        phase = "Starting daily run"
+
+    latest_event = next((event for event in reversed(events) if str(event.get("message") or "").strip()), {})
+    if total_sources:
+        checked_summary = f"{finished_sources}/{total_sources} sources finished"
+        if deferred_sources:
+            checked_summary = f"{checked_summary}; {completed_sources} checked, {deferred_sources} deferred"
+        summary = f"{checked_summary}; {running_sources} running, {waiting_sources} waiting."
+    else:
+        summary = str(latest_event.get("message") or "Preparing the daily run.")
+
+    return {
+        "status": record.status,
+        "phase": phase,
+        "summary": summary,
+        "latest_message": str(latest_event.get("message") or ""),
+        "progress_percent": max(0, min(100, progress_percent)),
+        "total_sources": total_sources,
+        "completed_sources": completed_sources,
+        "failed_sources": failed_sources,
+        "deferred_sources": deferred_sources,
+        "running_sources": running_sources,
+        "waiting_sources": waiting_sources,
+        "finished_sources": finished_sources,
+        "jobs_found": int(source_summary.get("jobs_found_so_far") or record.total_loaded or 0),
+        "warnings": int(source_summary.get("warnings_so_far") or record.source_warnings or 0),
+        "proposed_jobs": int(run_overview.get("proposed_jobs") or 0),
+        "interesting_signals": int(run_overview.get("interesting_signals") or 0),
+    }
+
+
+def finalize_source_progress_for_run(source_progress: dict[str, Any], run_status: str) -> None:
+    if run_status not in {"completed", "failed"}:
+        return
+    items = list(source_progress.get("items") or [])
+    if not items:
+        return
+    for item in items:
+        if item.get("processed") or item.get("status") == "failed":
+            continue
+        if item.get("status") not in {"running", "waiting", "completed", "warning"}:
+            continue
+        item["status"] = "deferred" if run_status == "completed" else "failed"
+        item["stage"] = "Deferred" if run_status == "completed" else "Stopped"
+        item["progress_percent"] = 100
+        if run_status == "completed":
+            jobs_found = int(item.get("jobs_found") or 0)
+            item["latest_message"] = (
+                f"{jobs_found} listing(s) were seen, but this source was left outside today's review pass."
+                if jobs_found
+                else "This source was left outside today's review pass."
+            )
+            highlight = {
+                "kind": "deferred",
+                "label": "Deferred",
+                "title": "Left for another pass",
+                "detail": item["latest_message"],
+                "score": 0,
+            }
+        else:
+            item["latest_message"] = "Run stopped before this source reported final results."
+            highlight = {
+                "kind": "warning",
+                "label": "Stopped",
+                "title": item["stage"],
+                "detail": item["latest_message"],
+                "score": 0,
+            }
+        item["source_summary_highlight"] = highlight
+        item["highlight"] = highlight
+        item["highlights"] = [highlight]
+    summary = source_progress.setdefault("summary", {})
+    summary["sources_completed"] = sum(1 for item in items if item["status"] in {"completed", "warning"})
+    summary["sources_failed"] = sum(1 for item in items if item["status"] == "failed")
+    summary["sources_deferred"] = sum(1 for item in items if item["status"] == "deferred")
+    summary["sources_running"] = 0
+    summary["sources_waiting"] = 0
+    summary["progress_percent"] = 100
+    summary["current_source"] = ""
+    summary["active_source_names"] = []
 
 
 def build_option_summary(options: dict[str, Any]) -> list[str]:
@@ -389,6 +513,7 @@ def build_source_progress(events: list[dict[str, Any]]) -> dict[str, Any]:
             item["status"] = "running"
             item["activity_count"] += 1
             item["stage"] = _source_stage(event.get("message", ""))
+            item["latest_message"] = _source_activity_summary(event.get("message", ""))
             if int(counts.get("jobs_found") or 0):
                 item["jobs_found"] = int(counts.get("jobs_found") or 0)
             if int(counts.get("page_explored_count") or 0):
@@ -417,6 +542,7 @@ def build_source_progress(events: list[dict[str, Any]]) -> dict[str, Any]:
             item["status"] = "warning" if item["warnings_count"] > 0 else "completed"
             item["finished_at"] = event.get("timestamp", "")
             item["stage"] = "Completed"
+            item["latest_message"] = f"{item['jobs_found']} listing(s) seen; preparing review decisions."
         elif event_type == "source_failed":
             item["warnings_count"] = max(item["warnings_count"], int(counts.get("warnings_count") or 1))
             item["status"] = "failed"
@@ -424,6 +550,7 @@ def build_source_progress(events: list[dict[str, Any]]) -> dict[str, Any]:
             item["stage"] = "Failed"
         elif event_type == "source_processed":
             item["status"] = "warning" if item["warnings_count"] > 0 else "completed"
+            item["processed"] = True
             item["finished_at"] = event.get("timestamp", item.get("finished_at", ""))
             item["stage"] = "Processed"
             item["new_changed"] = int(counts.get("new_roles") or 0) + int(counts.get("changed_roles") or 0)
@@ -454,20 +581,88 @@ def build_source_progress(events: list[dict[str, Any]]) -> dict[str, Any]:
                 int(counts.get("reviewed_in_detail_count") or 0),
             )
             item["detail_limit_skipped_count"] = int(counts.get("detail_limit_skipped_count") or 0)
+            _apply_source_processed_highlight(item)
+            item["latest_message"] = _source_processed_pulse(item)
+
+    for event in events:
+        event_type = str(event.get("event_type") or "")
+        if event_type not in {"match_highlight", "ai_evaluation_completed", "ai_evaluation_failed"}:
+            continue
+        counts = event.get("counts") or {}
+        source_index = int(counts.get("source_index") or 0)
+        if source_index <= 0 or source_index not in items_by_index:
+            continue
+        item = items_by_index[source_index]
+        if event_type == "match_highlight":
+            highlight = {
+                "kind": "strong",
+                "label": "Interesting finding",
+                "title": str(event.get("current_job") or "Promising match"),
+                "detail": str(event.get("message") or "A promising role matched the profile."),
+                "score": int(counts.get("score") or 0),
+            }
+            item.setdefault("highlights", []).append(highlight)
+            item["highlight"] = highlight
+        elif (
+            event_type == "ai_evaluation_completed"
+            and item["highlight"]["kind"] not in {"strong", "high"}
+            and not item.get("highlights")
+        ):
+            highlight = {
+                "kind": "medium",
+                "label": "AI review",
+                "title": str(event.get("current_job") or "Role reviewed"),
+                "detail": str(event.get("message") or "AI relevance review completed."),
+                "score": int(counts.get("score") or 0),
+            }
+            item.setdefault("highlights", []).append(highlight)
+            item["highlight"] = highlight
+        elif event_type == "ai_evaluation_failed" and item["highlight"]["kind"] == "neutral" and not item.get("highlights"):
+            highlight = {
+                "kind": "warning",
+                "label": "Review issue",
+                "title": str(event.get("current_job") or "AI review failed"),
+                "detail": str(event.get("message") or "AI relevance review failed."),
+                "score": 0,
+            }
+            item.setdefault("highlights", []).append(highlight)
+            item["highlight"] = highlight
 
     for source_index in range(1, source_count + 1):
         items_by_index.setdefault(source_index, _waiting_source_item(source_index, source_count))
         items_by_index[source_index]["source_count"] = source_count
 
+    for item in items_by_index.values():
+        item["progress_percent"] = _source_progress_percent(item)
+        if item["highlight"]["kind"] == "neutral":
+            item["highlight"] = _fallback_source_highlight(item)
+        base_highlight = item.get("source_summary_highlight") or item["highlight"]
+        highlights = list(item.get("highlights") or [])
+        if not _has_equivalent_highlight(highlights, base_highlight):
+            highlights.append(base_highlight)
+        item["highlights"] = highlights
+        item["highlight"] = highlights[0]
+
     items = [items_by_index[index] for index in sorted(items_by_index)]
+    completed_count = sum(1 for item in items if item["status"] in {"completed", "warning"})
+    failed_count = sum(1 for item in items if item["status"] == "failed")
+    deferred_count = sum(1 for item in items if item["status"] == "deferred")
+    running_count = sum(1 for item in items if item["status"] == "running")
+    waiting_count = sum(1 for item in items if item["status"] == "waiting")
     summary = {
         "total_sources": source_count,
-        "sources_completed": sum(1 for item in items if item["status"] in {"completed", "warning"}),
-        "sources_failed": sum(1 for item in items if item["status"] == "failed"),
-        "sources_running": sum(1 for item in items if item["status"] == "running"),
+        "sources_completed": completed_count,
+        "sources_failed": failed_count,
+        "sources_deferred": deferred_count,
+        "sources_running": running_count,
+        "sources_waiting": waiting_count,
         "jobs_found_so_far": sum(int(item["jobs_found"] or 0) for item in items),
         "warnings_so_far": sum(int(item["warnings_count"] or 0) for item in items),
         "current_source": next((item["source_name"] for item in items if item["status"] == "running"), ""),
+        "active_source_names": [item["source_name"] for item in items if item["status"] == "running"][:3],
+        "progress_percent": (
+            round(sum(int(item["progress_percent"] or 0) for item in items) / len(items)) if items else 0
+        ),
     }
     return {"items": items, "summary": summary}
 
@@ -486,6 +681,7 @@ def _waiting_source_item(source_index: int, source_count: int) -> dict[str, Any]
         "latest_message": "",
         "started_at": "",
         "finished_at": "",
+        "processed": False,
         "stage": "Waiting",
         "activity_count": 0,
         "recent_activity": [],
@@ -505,7 +701,129 @@ def _waiting_source_item(source_index: int, source_count: int) -> dict[str, Any]
         "detail_total": 0,
         "reviewed_in_detail_count": 0,
         "detail_limit_skipped_count": 0,
+        "progress_percent": 0,
+        "source_summary_highlight": None,
+        "highlights": [],
+        "highlight": {
+            "kind": "neutral",
+            "label": "Waiting",
+            "title": "Waiting for this source",
+            "detail": "This source has not started yet.",
+            "score": 0,
+        },
     }
+
+
+def _apply_source_processed_highlight(item: dict[str, Any]) -> None:
+    if int(item.get("included_roles") or 0) > 0:
+        highlight = {
+            "kind": "strong",
+            "label": "Potentially exciting",
+            "title": f"{item['included_roles']} review pick(s)",
+            "detail": (
+                f"{item['strong_matches']} strong and {item['exploratory_matches']} exploratory match(es) "
+                f"were added to today's review list."
+            ),
+            "score": 0,
+        }
+    elif int(item.get("new_changed") or 0) > 0:
+        highlight = {
+            "kind": "medium",
+            "label": "New activity",
+            "title": f"{item['new_changed']} fresh or updated listing(s)",
+            "detail": "No role crossed the review threshold yet, but this source did bring in fresh listings.",
+            "score": 0,
+        }
+    elif int(item.get("previously_seen_skipped") or 0) > 0:
+        highlight = {
+            "kind": "neutral",
+            "label": "Already seen",
+            "title": "No fresh listings",
+            "detail": f"{item['previously_seen_skipped']} listing(s) were already known from earlier runs.",
+            "score": 0,
+        }
+    elif int(item.get("warnings_count") or 0) > 0:
+        highlight = {
+            "kind": "warning",
+            "label": "Needs attention",
+            "title": f"{item['warnings_count']} warning(s)",
+            "detail": str(item.get("latest_message") or "This source completed with warnings."),
+            "score": 0,
+        }
+    else:
+        return
+    item["highlight"] = highlight
+    item["source_summary_highlight"] = highlight
+
+
+def _fallback_source_highlight(item: dict[str, Any]) -> dict[str, Any]:
+    status = str(item.get("status") or "waiting")
+    if status == "running":
+        return {
+            "kind": "medium",
+            "label": "Now checking",
+            "title": str(item.get("stage") or "Working"),
+            "detail": str(item.get("latest_message") or "This source is currently being checked."),
+            "score": 0,
+        }
+    if status == "failed":
+        return {
+            "kind": "warning",
+            "label": "Stopped",
+            "title": "Source failed",
+            "detail": str(item.get("latest_message") or "This source failed during the run."),
+            "score": 0,
+        }
+    if status in {"completed", "warning"}:
+        if int(item.get("jobs_found") or 0) > 0:
+            return {
+                "kind": "neutral",
+                "label": "Checked",
+                "title": f"{item['jobs_found']} listing(s) seen",
+                "detail": "Nothing was added to today's review list from this source.",
+                "score": 0,
+            }
+        return {
+            "kind": "neutral",
+            "label": "Checked",
+            "title": "No listings found",
+            "detail": "This source finished without finding new listings.",
+            "score": 0,
+        }
+    if status == "deferred":
+        return {
+            "kind": "deferred",
+            "label": "Deferred",
+            "title": "Left for another pass",
+            "detail": str(item.get("latest_message") or "This source was left outside today's review pass."),
+            "score": 0,
+        }
+    return {
+        "kind": "neutral",
+        "label": "Waiting",
+        "title": "Waiting for this source",
+        "detail": "This source has not started yet.",
+        "score": 0,
+    }
+
+
+def _source_progress_percent(item: dict[str, Any]) -> int:
+    status = str(item.get("status") or "waiting")
+    if status in {"completed", "warning", "failed", "deferred"}:
+        return 100
+    if status == "waiting":
+        return 0
+    detail_total = int(item.get("detail_total") or 0)
+    detail_read = int(item.get("detail_read_count") or 0)
+    if detail_total > 0:
+        return max(35, min(92, round(45 + (detail_read / detail_total) * 45)))
+    page_total = int(item.get("page_total") or 0)
+    page_explored = int(item.get("page_explored_count") or 0)
+    if page_total > 0:
+        return max(18, min(82, round((page_explored / page_total) * 75)))
+    if int(item.get("jobs_found") or 0) > 0:
+        return 42
+    return 18
 
 
 def _source_stage(message: str) -> str:
@@ -519,3 +837,41 @@ def _source_stage(message: str) -> str:
     if "scored" in lowered or "classified" in lowered:
         return "Scoring jobs"
     return "Working"
+
+
+def _source_activity_summary(message: str) -> str:
+    lowered = message.lower()
+    if "detail page" in lowered:
+        return "Reading detail pages for fresh listings."
+    if "pagination" in lowered:
+        return "Checking additional listing pages."
+    if "listing page" in lowered or "recipe selected" in lowered:
+        return "Reading listing pages for this source."
+    if "scored" in lowered or "classified" in lowered:
+        return "Scoring fresh listings from this source."
+    return "Working through this source."
+
+
+def _source_processed_pulse(item: dict[str, Any]) -> str:
+    review_picks = int(item.get("included_roles") or 0)
+    fresh = int(item.get("new_changed") or 0)
+    already_seen = int(item.get("previously_seen_skipped") or 0)
+    deferred_detail = int(item.get("detail_limit_skipped_count") or 0)
+    if deferred_detail:
+        return f"Review budget left {deferred_detail} fresh listing(s) for another pass."
+    if review_picks:
+        return f"Added {review_picks} review pick(s) from this source."
+    if fresh:
+        return f"Saw {fresh} fresh or updated listing(s); none moved to the review list."
+    if already_seen:
+        return "No fresh listings; known listings were skipped."
+    return "Checked this source; no review picks today."
+
+
+def _has_equivalent_highlight(highlights: list[dict[str, Any]], candidate: dict[str, Any]) -> bool:
+    return any(
+        highlight.get("label") == candidate.get("label")
+        and highlight.get("title") == candidate.get("title")
+        and highlight.get("detail") == candidate.get("detail")
+        for highlight in highlights
+    )

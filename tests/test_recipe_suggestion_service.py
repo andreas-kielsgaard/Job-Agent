@@ -289,6 +289,40 @@ def test_refinement_accepts_deterministic_whitehall_blueprint_without_llm(projec
     assert result.attempts[0].quality_status == "good"
 
 
+def test_refinement_accepts_deterministic_api_blueprint_from_saved_json_without_html_page(
+    project_root: Path,
+) -> None:
+    artifact = _write_api_blueprint_artifact(project_root)
+    client = FakeRecipeSuggestionClient("{}")
+
+    result = suggest_recipe_with_refinement(artifact, llm_client=client, max_attempts=3)
+
+    assert result.accepted is True
+    assert client.prompts == []
+    assert result.final_result.selected_strategy == "api_based"
+    assert "listing_api:" in result.final_result.suggested_recipe_yaml
+    assert result.attempts[0].extracted_job_count == 2
+    assert result.attempts[0].unique_urls == 2
+
+
+def test_refinement_preserves_working_unique_url_pagination_without_session_inference(project_root: Path) -> None:
+    artifact = _write_whitehall_blueprint_artifact(project_root)
+    client = FakeRecipeSuggestionClient("{}")
+
+    result = suggest_recipe_with_refinement(
+        artifact,
+        source_test_insight=_working_url_pagination_insight(),
+        llm_client=client,
+        max_attempts=3,
+    )
+
+    assert result.accepted is True
+    assert client.prompts == []
+    assert "strategy: url" in result.final_result.suggested_recipe_yaml
+    assert "requires_session: true" not in result.final_result.suggested_recipe_yaml
+    assert not any("switched" in warning for warning in result.final_result.warnings)
+
+
 def test_refinement_switches_failed_url_pagination_blueprint_to_ajax(project_root: Path) -> None:
     artifact = _write_whitehall_blueprint_artifact(project_root)
     report_path = artifact / "selector-report.json"
@@ -714,6 +748,82 @@ def _write_artifact(project_root: Path, page_html: str = "<html><body>large page
     return artifact
 
 
+def _write_api_blueprint_artifact(project_root: Path) -> Path:
+    artifact = project_root / "output" / "recipe-calibration" / "api-example"
+    artifact.mkdir(parents=True, exist_ok=True)
+    (artifact / "summary.md").write_text("# API Summary\n", encoding="utf-8")
+    (artifact / "visible-text.txt").write_text("", encoding="utf-8")
+    (artifact / "candidate-elements.html").write_text("", encoding="utf-8")
+    payload = {
+        "result": {
+            "hits": 2,
+            "results": [
+                {
+                    "title": "SAP ABAP Consultant",
+                    "slug": "sap-abap",
+                    "jobReference": "1",
+                    "location": "Remote",
+                    "jobType": "Contract",
+                    "description": "<p>SAP ABAP contract role with RAP, CDS, and OData delivery context.</p>",
+                },
+                {
+                    "title": "SAP Basis Consultant",
+                    "slug": "sap-basis",
+                    "jobReference": "2",
+                    "location": "Copenhagen",
+                    "jobType": "Contract",
+                    "description": "<p>SAP Basis operations role with S/4HANA upgrade and migration work.</p>",
+                },
+            ],
+        }
+    }
+    (artifact / "api-listing-response-1.json").write_text(json.dumps(payload), encoding="utf-8")
+    recipe = {
+        "source_name": "API Example",
+        "start_url": "https://example.com/en-gb/job-search/",
+        "mode": "static_html",
+        "listing_api": {
+            "method": "POST",
+            "url": "https://example.com/api/search",
+            "body": {"resultSize": 20, "resultFrom": 0, "resultPage": 0},
+            "results_path": "result.results",
+            "total_path": "result.hits",
+            "fields": {
+                "title": "title",
+                "url_template": "https://example.com/en-gb/job/{slug}/{jobReference}/",
+                "location": "location",
+                "workload": "jobType",
+                "description_html": "description",
+            },
+            "pagination": {
+                "strategy": "none",
+                "max_pages": 1,
+            },
+        },
+        "accept": {"url_contains": ["/job/"]},
+        "limits": {"max_cards": 25, "min_title_length": 8, "min_description_length": 0},
+    }
+    (artifact / "selector-report.json").write_text(
+        json.dumps(
+            {
+                "url": "https://example.com/en-gb/job-search/",
+                "capture_mode": "static_html",
+                "candidates": [],
+                "observed_api_candidates": [{"url": "https://example.com/api/search", "record_count": 2}],
+                "recipe_blueprint": {
+                    "status": "draft",
+                    "confidence": "high",
+                    "recipe": recipe,
+                    "warnings": [],
+                    "validation_errors": [],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    return artifact
+
+
 def _write_not_recommended_artifact(project_root: Path) -> Path:
     artifact = project_root / "output" / "recipe-calibration" / "empty-capture"
     artifact.mkdir(parents=True, exist_ok=True)
@@ -757,7 +867,9 @@ def _failed_url_pagination_insight(session_status: str = "") -> dict:
     insight = {
         "insight_title": "Paginated page access failed",
         "pagination_strategy_tested": "url",
-        "pagination_duplicate_ratio": 0.97,
+        "pagination_duplicate_page_count": 1,
+        "pagination_duplicate_ratio": 0.5,
+        "pagination_duplicate_postings": True,
         "failed_capabilities": [
             {
                 "capability": "pagination_strategy",
@@ -769,7 +881,23 @@ def _failed_url_pagination_insight(session_status: str = "") -> dict:
     }
     if session_status:
         insight["source_access_session_status"] = session_status
+        insight["source_access_requires_session"] = True
     return insight
+
+
+def _working_url_pagination_insight() -> dict:
+    return {
+        "insight_title": "Source test passed",
+        "pagination_strategy_tested": "url",
+        "pagination_fetch_count": 2,
+        "pagination_duplicate_page_count": 0,
+        "pagination_duplicate_postings": False,
+        "pagination_working_with_unique_pages": True,
+        "pagination_unique_jobs_from_fetched_pages": 25,
+        "warnings": [
+            "A pagination loop link was ignored after unique pages were fetched; this does not require a session."
+        ],
+    }
 
 
 def _browser_click_required_insight() -> dict:

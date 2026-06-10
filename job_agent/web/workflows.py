@@ -16,6 +16,7 @@ from job_agent.services.recipe_candidate_policy import candidate_is_reviewable
 from job_agent.services.recipe_candidate_service import RecipeCandidateStore
 from job_agent.services.recipe_generation_run_service import RecipeGenerationRunService
 from job_agent.services.recipe_generation_status_service import RecipeGenerationStatusService
+from job_agent.services.setup_guide_service import SetupGuideService
 from job_agent.services.setup_service import SetupService
 from job_agent.web.source_workflow import SourceWorkflowHandler
 from job_agent.web.view_models.dashboard import build_dashboard_view
@@ -39,6 +40,7 @@ class AppWorkflowHandler:
         self.recipe = RecipeWorkflowHandler(self.root, self.source)
         self.executor = ExecutorWorkflowHandler(self.root)
         self.profile = ProfileWorkflowHandler(self.root)
+        self.guide = SetupGuideWorkflowHandler(self.root)
 
     def map(self) -> dict[str, WorkflowArea]:
         return {
@@ -158,13 +160,31 @@ class ExecutorWorkflowHandler:
             raise KeyError(run_id)
         events = self.runs.read_events(run_id, limit=20)
         latest = events[-1] if events else {}
-        return {"run": record.__dict__, "latest_event": latest, "recent_events": events}
+        view = build_run_detail_view(run_id, root=self.root)
+        return {
+            "run": record.__dict__,
+            "latest_event": latest,
+            "recent_events": events,
+            "run_overview": view["run_overview"],
+            "run_progress": view["run_progress"],
+            "source_progress": {
+                "items": view["source_progress"],
+                "summary": view["source_progress_summary"],
+            },
+            "match_highlights": view["match_highlights"],
+            "activity": view["activity"],
+            "packages": view["packages"],
+        }
 
     def run_log_context(self, run_id: str) -> dict[str, Any]:
         record = self.runs.get(run_id)
         if not record:
             raise KeyError(run_id)
-        return {"run": record, "log_text": self.run_log_text(run_id)}
+        return {
+            "title": f"Run Log - {record.started_at[:10] or record.run_id}",
+            "run": record,
+            "log_text": self.run_log_text(run_id),
+        }
 
     def run_log_text(self, run_id: str) -> str:
         record = self.runs.get(run_id)
@@ -218,6 +238,8 @@ class RecipeWorkflowHandler:
         self.source.require_not_archived(source)
         if not source.url:
             raise ValueError("Save a source URL before capturing calibration evidence.")
+        session_status = self.source.source_session_status(source)
+        session_state_path = self.root / session_status.storage_state_path if session_status.usable else None
         return capture_recipe_calibration(
             source.url,
             recipe_path=source.recipe_path or None,
@@ -225,6 +247,8 @@ class RecipeWorkflowHandler:
             root=self.root,
             max_candidates=max(5, min(max_candidates, 50)),
             capture_detail=capture_detail,
+            session_state_path=session_state_path,
+            source_session_scope=session_status.session_scope if session_status.usable else "",
         )
 
     def load_source_run(self, source_id: str, run_id: str) -> dict[str, Any]:
@@ -237,7 +261,9 @@ class RecipeWorkflowHandler:
     def candidate_detail_context(self, candidate_id: str, *, source_id: str = "") -> dict[str, Any]:
         candidate = self.candidates.load_candidate(candidate_id)
         source = self.source.require_source(source_id) if source_id else self.source.source_for_candidate(candidate)
+        title_target = source.name if source else candidate.candidate_id
         return {
+            "title": f"Recipe Candidate - {title_target}",
             "candidate": candidate,
             "source": source,
             "approval_recipe_path": self.approvals.suggested_recipe_path(candidate, source),
@@ -306,8 +332,29 @@ class ProfileWorkflowHandler:
     def save_preferences(self, **kwargs: Any) -> None:
         self.setup.save_preferences(**kwargs)
 
+    def save_run_inclusion(self, minimum_digest_score: int) -> None:
+        self.setup.save_run_inclusion(minimum_digest_score)
+
+    def save_runtime_settings(self, max_parallel_sources: int) -> None:
+        self.setup.save_runtime_settings(max_parallel_sources)
+
     def save_match_engine_settings_from_form(self, form) -> None:
         self.setup.save_match_engine_settings_from_form(form)
+
+    def save_skill_matrix_from_form(self, form) -> None:
+        self.setup.save_skill_matrix_from_form(form)
+
+    def save_case_studies_from_form(self, form) -> None:
+        self.setup.save_case_studies_from_form(form)
+
+    def save_writing_reference(self, canonical_cv: str | None = None, writing_style: str | None = None) -> None:
+        self.setup.save_writing_reference(canonical_cv, writing_style)
+
+    def save_application_examples_from_form(self, form) -> None:
+        self.setup.save_application_examples_from_form(form)
+
+    def save_ai_policy_from_form(self, form) -> None:
+        self.setup.save_ai_policy_from_form(form)
 
     def save_setup_file(self, file_key: str, content: str) -> None:
         self.setup.save_setup_file(file_key, content)
@@ -340,3 +387,21 @@ class ProfileWorkflowHandler:
 
     def clear_active_draft(self, draft_id: str) -> bool:
         return self.drafts.clear_active_draft(draft_id)
+
+
+class SetupGuideWorkflowHandler:
+    def __init__(self, root: Path = ROOT) -> None:
+        self.root = Path(root)
+        self.service = SetupGuideService(self.root)
+
+    def context(self, *, current_path: str = "") -> dict[str, Any]:
+        return self.service.build_context(current_path=current_path)
+
+    def dismiss_guide(self) -> None:
+        self.service.dismiss_guide()
+
+    def dismiss_step(self, step_id: str) -> None:
+        self.service.dismiss_step(step_id)
+
+    def reset(self) -> None:
+        self.service.reset()

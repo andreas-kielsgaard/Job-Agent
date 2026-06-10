@@ -33,7 +33,7 @@ def find_pagination_links(html: str, base_url: str, recipe: JobBoardRecipe) -> l
                 href = match.get("href")
                 if not href:
                     continue
-                url = urljoin(base_url, str(href).strip())
+                url = _pagination_url_from_href(str(href).strip(), base_url)
                 url_key = _pagination_url_key(url)
                 if url_key in seen_urls:
                     continue
@@ -67,7 +67,7 @@ def discover_pagination_links(html: str, base_url: str) -> list[PaginationLink]:
             ).lower()
             if not _looks_like_pagination(label, href, haystack):
                 continue
-            url = urljoin(base_url, href)
+            url = _pagination_url_from_href(href, base_url)
             if url in seen_urls:
                 continue
             seen_urls.add(url)
@@ -216,7 +216,7 @@ def _pagination_sort_key(link: PaginationLink) -> tuple[bool, int, str]:
 
 
 def _page_number_from_url_or_label(url: str, label: str) -> int:
-    match = re.search(r"(?:[?&]pagenr=|/page/)(\d+)", url)
+    match = re.search(r"(?:[?&](?:page|pagenr)=|/page/)(\d+)", url)
     if match:
         return int(match.group(1))
     stripped = label.strip()
@@ -269,7 +269,7 @@ def _strings_containing_links(raw: str) -> list[str]:
 def _looks_like_pagination(label: str, href: str, haystack: str) -> bool:
     if re.fullmatch(r"\d+", label.strip()):
         return True
-    return any(token in haystack for token in ["page-numbers", "pagenr=", "pagination", "paginator", "/page/"])
+    return any(token in haystack for token in ["page-numbers", "pagenr=", "page=", "pagination", "paginator", "/page/"])
 
 
 def _looks_like_next_link(label: str, match: Tag) -> bool:
@@ -286,5 +286,39 @@ def _selected_urls(soup: BeautifulSoup, selector: SelectorValue, base_url: str) 
         for match in soup.select(css_selector):
             href = match.get("href")
             if href:
-                urls.add(urljoin(base_url, str(href).strip()))
+                urls.add(_pagination_url_from_href(str(href).strip(), base_url))
     return urls
+
+
+def _pagination_url_from_href(href: str, base_url: str) -> str:
+    url = urljoin(base_url, href)
+    parsed = urlparse(url)
+    if not parsed.path.lower().rstrip("/").endswith("/undefined") and not href.lower().startswith("undefined?"):
+        return url
+    page_number = _query_page_number(parsed.query)
+    if page_number <= 0:
+        return url
+    return _base_url_with_page(base_url, page_number)
+
+
+def _base_url_with_page(base_url: str, page_number: int) -> str:
+    parsed = urlparse(base_url)
+    items = parse_qsl(parsed.query, keep_blank_values=True)
+    updated: list[tuple[str, str]] = []
+    replaced = False
+    for key, value in items:
+        if key.lower() in {"page", "pagenr"} and not replaced:
+            updated.append((key, str(page_number)))
+            replaced = True
+        else:
+            updated.append((key, value))
+    if not replaced:
+        updated.append(("page", str(page_number)))
+    return urlunparse(parsed._replace(query=urlencode(updated, doseq=True)))
+
+
+def _query_page_number(query: str) -> int:
+    for key, value in parse_qsl(query, keep_blank_values=True):
+        if key.lower() in {"page", "pagenr"} and value.isdigit():
+            return int(value)
+    return 0

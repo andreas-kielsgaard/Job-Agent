@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <title>Folio job application guide avatar</title>
+  <desc>A simplified avatar icon of a cute CV/application folder mascot.</desc>
+
+  <rect width="1024" height="1024" rx="210" fill="#253529"/>
+
+  <path
+    d="M277 366H432C458 366 472 379 486 400L509 433H735C775 433 807 465 807 505V750C807 790 775 822 735 822H289C249 822 217 790 217 750V426C217 393 244 366 277 366Z"
+    fill="#6F674A"
+  />
+  <path
+    d="M301 300H489C520 300 539 316 556 344L590 400H308C257 400 217 441 217 492V386C217 338 253 300 301 300Z"
+    fill="#B96838"
+  />
+
+  <rect x="322" y="430" width="380" height="326" rx="54" fill="#EFE3C8"/>
+
+  <text x="382" y="517" fill="#4A3024" font-size="76" font-family="Arial, Helvetica, sans-serif" font-weight="800" letter-spacing="3">CV</text>
+  <path d="M520 481H636" stroke="#4A3024" stroke-width="16" stroke-linecap="round" opacity="0.55"/>
+
+  <circle cx="428" cy="640" r="34" fill="#253529"/>
+  <circle cx="592" cy="640" r="34" fill="#253529"/>
+  <circle cx="439" cy="628" r="10" fill="#EFE3C8"/>
+  <circle cx="603" cy="628" r="10" fill="#EFE3C8"/>
+
+  <path d="M466 708C492 735 536 735 562 708"
+        stroke="#4A3024" stroke-width="24" stroke-linecap="round"/>
+
+  <path d="M392 574L413 596L454 548" stroke="#B96838" stroke-width="20" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M494 568H620" stroke="#4A3024" stroke-width="14" stroke-linecap="round" opacity="0.34"/>
+</svg>

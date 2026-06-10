@@ -6,9 +6,9 @@ from pathlib import Path
 from typing import Any
 
 from job_agent.config import ROOT
-from job_agent.models import Job, MatchResult, normalize_text
-
 from job_agent.llm import LlmService
+from job_agent.models import Job, MatchResult, normalize_text
+from job_agent.scoring import normalize_ai_review_policy
 
 
 @dataclass
@@ -93,18 +93,19 @@ def should_ai_evaluate_job(
     profile: dict[str, Any],
     highlight_reasons: list[str],
 ) -> bool:
-    if match.category == "excluded" or match.total_score < 35:
+    policy = normalize_ai_review_policy(profile)
+    if match.category == "excluded":
+        return bool(policy["evaluate_excluded_with_triggers"] and match.review_triggers)
+    if match.total_score < int(policy["min_score"]) and not match.review_triggers:
         return False
     threshold = int(profile.get("thresholds", {}).get("ai_evaluation_score", 60) or 60)
-    text = normalize_text(
-        " ".join([job.title, job.description, job.remote, job.location, " ".join(job.required_skills)])
-    )
-    ambiguity_terms = ("fiori", "ui5", "project manager", "coordinator", "language", "fullstack", "functional")
+    low_source_confidence = job.source_confidence in {"low", "unknown"}
     return (
-        match.category in {"strong", "exploratory"}
+        match.category in set(policy["evaluate_categories"])
         or match.total_score >= threshold
-        or bool(highlight_reasons)
-        or any(term in text for term in ambiguity_terms)
+        or (bool(highlight_reasons) and policy["trigger_on_highlights"])
+        or (bool(match.review_triggers) and policy["trigger_on_review_triggers"])
+        or (low_source_confidence and policy["trigger_on_low_source_confidence"])
     )
 
 
@@ -164,14 +165,17 @@ def _profile_context(profile: dict[str, Any]) -> dict[str, Any]:
         "skills": profile.get("skills", {}),
         "experience_level": profile.get("experience_level", {}),
         "experience": profile.get("experience", []),
+        "match_review": profile.get("match_review", {}),
+        "ai_review_policy": profile.get("ai_review_policy", {}),
+        "language_policy": profile.get("language_policy", {}),
+        "highlighting": profile.get("highlighting", {}),
     }
 
 
-DEFAULT_PROMPT = """You are evaluating a SAP freelance/contract role for Andreas Kielsgaard.
+DEFAULT_PROMPT = """You are evaluating a job posting against the supplied candidate profile.
 
-Andreas is a SAP ABAP/RAP consultant with 6+ years of SAP technical delivery experience.
 Use only the supplied profile/CV context. Do not invent experience.
-Be precise about partial matches such as Fiori/UI5 frontend depth, project management ownership, and language constraints.
+Be precise about partial matches, configured review triggers, language constraints, and missing evidence.
 This output is for a run overview, not an application letter. Keep it concise and practical.
 
 Canonical CV:

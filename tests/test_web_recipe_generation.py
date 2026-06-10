@@ -175,7 +175,7 @@ def test_generation_service_passes_auto_rendered_mode_to_calibration(
     artifact = _write_artifact(project_root)
     captured: dict[str, object] = {}
 
-    def fake_capture(url, recipe_path, rendered, root, max_candidates, capture_detail):
+    def fake_capture(url, recipe_path, rendered, root, max_candidates, capture_detail, **kwargs):
         captured.update({"url": url, "recipe_path": recipe_path, "rendered": rendered})
         return SimpleNamespace(
             artifact_dir=artifact,
@@ -202,14 +202,14 @@ def test_generation_service_passes_auto_rendered_mode_to_calibration(
     assert captured["rendered"] is None
 
 
-def test_generation_service_uses_rendered_capture_for_client_side_pagination_insight(
+def test_generation_service_uses_rendered_capture_for_duplicate_pagination_insight(
     monkeypatch: pytest.MonkeyPatch, project_root: Path
 ) -> None:
     source = SourceRegistryService(project_root).add_source(name="Example Jobs", url="https://example.com/jobs")
     artifact = _write_artifact(project_root)
     captured: dict[str, object] = {}
 
-    def fake_capture(url, recipe_path, rendered, root, max_candidates, capture_detail):
+    def fake_capture(url, recipe_path, rendered, root, max_candidates, capture_detail, **kwargs):
         captured.update({"url": url, "recipe_path": recipe_path, "rendered": rendered})
         return SimpleNamespace(
             artifact_dir=artifact,
@@ -231,9 +231,15 @@ def test_generation_service_uses_rendered_capture_for_client_side_pagination_ins
         source_test_insight={
             "insight_title": "Paginated page access failed",
             "pagination_strategy_tested": "url",
-            "pagination_duplicate_ratio": 1.0,
+            "pagination_duplicate_page_count": 1,
+            "pagination_duplicate_ratio": 0.5,
+            "pagination_duplicate_postings": True,
             "failed_capabilities": [
-                {"detail": "Later pages may require a logged-in session or client-side pagination."}
+                {
+                    "capability": "pagination_duplicate_pages",
+                    "status": "fail",
+                    "detail": "Fetched pagination pages repeated postings already seen on earlier pages.",
+                }
             ],
         },
         run_async=False,

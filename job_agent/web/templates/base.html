@@ -3,7 +3,10 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>{{ title or "Job Agent" }}</title>
+    <title>{% if title and title != "Job Agent" %}{{ title }} - Job Agent{% else %}Job Agent{% endif %}</title>
+    <link rel="icon" type="image/svg+xml" href="/static/icons/job-agent-icon-minimal-autumn.svg?v={{ asset_version }}">
+    <link rel="alternate icon" href="/static/icons/job-agent-icon-minimal-autumn.ico?v={{ asset_version }}">
+    <link rel="apple-touch-icon" href="/static/icons/job-agent-icon-minimal-autumn-256.png?v={{ asset_version }}">
     <link rel="stylesheet" href="/static/app.css?v={{ asset_version }}">
     <script>
       function copyText(id) {
@@ -477,6 +480,24 @@
         }).catch(() => {});
       }
 
+      function attachSetupGuideCompanion() {
+        const companion = document.getElementById("setup-guide-companion");
+        if (!companion) return;
+        const selector = companion.dataset.targetSelector || "";
+        if (!selector) return;
+        let target = null;
+        try {
+          target = document.querySelector(selector);
+        } catch {
+          target = null;
+        }
+        if (!target) return;
+        if (target.tagName === "DETAILS") target.open = true;
+        target.classList.add("setup-guide-target");
+        const summary = target.tagName === "DETAILS" ? target.querySelector("summary") : null;
+        if (summary) summary.classList.add("setup-guide-target-summary");
+      }
+
       document.addEventListener("DOMContentLoaded", () => {
         refreshSourceForms();
         document.querySelectorAll('input[name="source_mode"]').forEach((input) => {
@@ -499,19 +520,26 @@
         attachAsyncWorkForms();
         loadLocalWorkStatusItems();
         startWorkStatusDock();
+        attachSetupGuideCompanion();
       });
     </script>
   </head>
   <body>
     <header class="topbar">
       <nav class="nav">
-        <div class="brand">Job Agent</div>
+        <div class="brand">
+          <img class="brand-mark" src="/static/icons/job-agent-icon-minimal-autumn.svg?v={{ asset_version }}" width="28" height="28" alt="" aria-hidden="true">
+          <span>Job Agent</span>
+        </div>
         <a class="nav-button" href="/">Dashboard</a>
         <a class="nav-button" href="/postings/new">Add posting</a>
         <a class="nav-button" href="/sources">Sources</a>
         <a class="nav-button" href="/jobs">Jobs</a>
         <a class="nav-button" href="/runs">Runs</a>
         <a class="nav-button" href="/stats">Stats</a>
+        {% if setup_guide and setup_guide.show_entry_panel %}
+        <a class="nav-button setup-guide-nav" href="/setup-guide">Guide</a>
+        {% endif %}
         <a class="nav-button nav-profile-button {% if profile_unreviewed_draft %}has-alert{% endif %}" href="{{ profile_draft_url if profile_unreviewed_draft else '/setup' }}" {% if profile_unreviewed_draft %}title="CV profile draft ready for review"{% endif %}>Profile</a>
         <details class="nav-advanced">
           <summary>Advanced</summary>
@@ -526,6 +554,33 @@
     <main class="shell">
       {% block content %}{% endblock %}
     </main>
+    {% if setup_guide and setup_guide.show_companion and setup_guide.active_step %}
+    {% set setup_guide_return_to = request.url.path ~ (('?' ~ request.url.query) if request.url.query else '') %}
+    <aside class="setup-guide-companion" id="setup-guide-companion" data-target-selector="{{ setup_guide.active_step.target_selector }}" aria-live="polite">
+      <div class="setup-guide-avatar" aria-hidden="true">
+        <img src="/static/icons/job-agent-folio-character-avatar.svg?v={{ asset_version }}" width="54" height="54" alt="">
+      </div>
+      <div class="setup-guide-bubble">
+        <div class="setup-guide-bubble-top">
+          <strong>{{ setup_guide.active_step.companion_title }}</strong>
+          <span class="badge {{ setup_guide.active_step.badge_class }}">{{ setup_guide.progress_label }}</span>
+        </div>
+        <p>{{ setup_guide.active_step.companion_message }}</p>
+        <div class="setup-guide-actions">
+          <a class="button" href="{{ setup_guide.active_step.href }}">{{ setup_guide.active_step.action_label }}</a>
+          <form method="post" action="/api/setup-guide/steps/{{ setup_guide.active_step.id }}/dismiss" class="inline-form">
+            <input type="hidden" name="return_to" value="{{ setup_guide_return_to }}">
+            <button class="light" type="submit">Skip</button>
+          </form>
+          <form method="post" action="/api/setup-guide/dismiss" class="inline-form">
+            <input type="hidden" name="return_to" value="{{ setup_guide_return_to }}">
+            <button class="light" type="submit">Dismiss</button>
+          </form>
+        </div>
+        <a class="setup-guide-map-link" href="/setup-guide">Open guide</a>
+      </div>
+    </aside>
+    {% endif %}
     <div class="work-status-dock" id="work-status-dock" hidden></div>
     <div class="modal-backdrop" id="ai-edit-modal">
       <div class="modal">

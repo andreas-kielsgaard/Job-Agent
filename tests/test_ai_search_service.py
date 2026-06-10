@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import date
 from pathlib import Path
 
+from job_agent.llm import LlmCompletion
 from job_agent.models import Job, MatchResult
 from job_agent.services.ai_search_service import (
     AiSearchEvaluation,
@@ -10,16 +11,36 @@ from job_agent.services.ai_search_service import (
     parse_ai_search_response,
     should_ai_evaluate_job,
 )
-from job_agent.llm import LlmCompletion
 
 
 def test_should_ai_evaluate_promising_and_skip_excluded() -> None:
     profile = {"thresholds": {"ai_evaluation_score": 60}}
 
-    assert should_ai_evaluate_job(Job(title="SAP ABAP"), MatchResult(80, "strong"), profile, [])
-    assert should_ai_evaluate_job(Job(title="SAP Fullstack Developer"), MatchResult(50, "weak"), profile, [])
-    assert not should_ai_evaluate_job(Job(title="Old SAP Role"), MatchResult(0, "excluded"), profile, ["highlight"])
-    assert not should_ai_evaluate_job(Job(title="Low fit"), MatchResult(20, "weak"), profile, [])
+    assert should_ai_evaluate_job(Job(title="SAP ABAP", source_confidence="manual"), MatchResult(80, "strong"), profile, [])
+    assert should_ai_evaluate_job(
+        Job(title="Adjacent role", source_confidence="manual"),
+        MatchResult(50, "weak", review_triggers=["scope"], review_trigger_labels=["Scope"]),
+        profile,
+        [],
+    )
+    assert not should_ai_evaluate_job(
+        Job(title="SAP Fullstack Developer", source_confidence="manual"), MatchResult(50, "weak"), profile, []
+    )
+    assert not should_ai_evaluate_job(
+        Job(title="Old SAP Role", source_confidence="manual"), MatchResult(0, "excluded"), profile, ["highlight"]
+    )
+    assert not should_ai_evaluate_job(Job(title="Low fit", source_confidence="manual"), MatchResult(20, "weak"), profile, [])
+
+
+def test_ai_evaluation_can_be_configured_for_excluded_review_triggers() -> None:
+    profile = {"ai_review_policy": {"evaluate_excluded_with_triggers": True}}
+
+    assert should_ai_evaluate_job(
+        Job(title="Excluded but nuanced", source_confidence="manual"),
+        MatchResult(0, "excluded", review_triggers=["manual_review"], review_trigger_labels=["Manual review"]),
+        profile,
+        [],
+    )
 
 
 def test_parse_valid_structured_response() -> None:

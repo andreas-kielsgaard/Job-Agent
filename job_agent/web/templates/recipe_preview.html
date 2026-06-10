@@ -290,7 +290,8 @@
     <div class="stat"><span>Input type</span><strong>{{ preview.input_type }}</strong></div>
     <div class="stat"><span>Mode used</span><strong>{{ preview.mode_used }}</strong></div>
     <div class="stat"><span>Jobs extracted</span><strong>{{ preview.extracted_job_count }}</strong></div>
-    <div class="stat"><span>Listing cards observed</span><strong>{{ preview.listing_observed_count or "Not tracked" }}</strong></div>
+    <div class="stat"><span>Records/cards observed</span><strong>{{ preview.records_observed_count or preview.listing_observed_count or "Not tracked" }}</strong></div>
+    <div class="stat"><span>API requests</span><strong>{{ preview.api_request_count }}</strong></div>
     <div class="stat"><span>Useful titles</span><strong>{{ preview.useful_titles }}</strong></div>
     <div class="stat"><span>Generic labels</span><strong>{{ preview.generic_labels }}</strong></div>
     <div class="stat"><span>Unique URLs</span><strong>{{ preview.unique_urls }}</strong></div>

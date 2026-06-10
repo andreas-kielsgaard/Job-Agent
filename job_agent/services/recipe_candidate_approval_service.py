@@ -5,11 +5,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 from job_agent.config import ROOT
 from job_agent.services.recipe_candidate_policy import candidate_is_reviewable
 from job_agent.services.recipe_candidate_service import RecipeCandidate, RecipeCandidateStore
 from job_agent.services.recipe_preview_service import RecipePreviewResult, preview_recipe
 from job_agent.services.recipe_suggestion_service import validate_suggested_recipe_yaml
+from job_agent.services.recipes.mapping import job_board_recipe_from_mapping
 from job_agent.services.source_health_service import SourceHealthRecord, SourceHealthService
 
 
@@ -47,6 +50,10 @@ class RecipeCandidateApprovalService:
         validation_errors = validate_suggested_recipe_yaml(candidate.suggested_recipe_yaml)
         if validation_errors:
             raise ValueError("Candidate recipe YAML is not schema-valid: " + "; ".join(validation_errors))
+        candidate_recipe = job_board_recipe_from_mapping(
+            yaml.safe_load(candidate.suggested_recipe_yaml) or {},
+            label="candidate_recipe",
+        )
 
         resolved_recipe_path = self._resolve_recipe_path(recipe_path)
         if resolved_recipe_path.exists() and not overwrite:
@@ -54,8 +61,16 @@ class RecipeCandidateApprovalService:
 
         artifact_dir = self._resolve_artifact_dir(candidate.artifact_dir)
         page_path = artifact_dir / "page.html"
-        if not page_path.exists():
-            raise ValueError(f"Candidate artifact is missing page.html: {_display_path(page_path, self.root)}")
+        api_fixture_path = _api_fixture_path(artifact_dir)
+        if candidate_recipe.listing_api.url and not api_fixture_path:
+            raise ValueError(
+                "API-backed candidate artifact is missing a saved API listing response: "
+                f"{_display_path(artifact_dir / 'api-listing-response-1.json', self.root)}"
+            )
+        if not candidate_recipe.listing_api.url and not page_path.exists():
+            raise ValueError(
+                f"Candidate artifact is missing page.html: {_display_path(page_path, self.root)}"
+            )
         preview_base_url = base_url.strip() or candidate.start_url.strip()
         if not preview_base_url:
             raise ValueError("Approval preview requires a base URL from candidate.start_url or source URL.")
@@ -64,12 +79,13 @@ class RecipeCandidateApprovalService:
         resolved_recipe_path.write_text(candidate.suggested_recipe_yaml.strip() + "\n", encoding="utf-8")
 
         recipe_path_display = _display_path(resolved_recipe_path, self.root)
-        page_path_display = _display_path(page_path, self.root)
+        preview_path = api_fixture_path if candidate_recipe.listing_api.url and api_fixture_path else page_path
+        page_path_display = _display_path(preview_path, self.root)
         preview = preview_recipe(
             recipe_path_display,
             page_path_display,
             base_url=preview_base_url,
-            static=True,
+            static=preview_path.suffix.lower() != ".json",
             root=self.root,
         )
         health_record = SourceHealthService(self.root).save_preview(source_id, preview) if source_id.strip() else None
@@ -130,6 +146,13 @@ def _display_path(path: Path, root: Path) -> str:
         return path.relative_to(root).as_posix()
     except ValueError:
         return str(path)
+
+
+def _api_fixture_path(artifact_dir: Path) -> Path | None:
+    candidates = sorted(artifact_dir.glob("api-listing-response-*.json"))
+    if not candidates:
+        candidates = sorted(artifact_dir.glob("**/api-listing-response-*.json"))
+    return candidates[0] if candidates else None
 
 
 def _slug(value: str) -> str:

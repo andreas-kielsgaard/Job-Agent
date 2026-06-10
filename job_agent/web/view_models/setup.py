@@ -20,11 +20,14 @@ def build_setup_view(root: Path = ROOT) -> dict:
     cv_profile_draft = CvProfileDraftService(root).active_draft()
     env = dotenv_values(root / ".env")
     return {
+        "title": "Setup",
         "env": env,
         "files": setup.setup_files(),
         "profile": setup.load_profile_for_setup(),
         "profile_contract": build_profile_contract(root, cv_reference),
+        "profile_editor": setup.profile_editor_model(),
         "match_engine": setup.match_engine_form_model(),
+        "ai_policy": setup.ai_policy_form_model(),
         "configured_claude_model": normalize_model(str(env.get("CLAUDE_MODEL") or DEFAULT_CLAUDE_MODEL)),
         "model_options": model_options(),
         "template_variables": TEMPLATE_VARIABLES,

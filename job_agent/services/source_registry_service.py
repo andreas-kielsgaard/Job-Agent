@@ -169,6 +169,27 @@ class SourceRegistryService:
             entry.health = health.get(entry.id, SourceHealthRecord(source_id=entry.id))
         return entries
 
+    def list_saved_sources(
+        self,
+        *,
+        include_health: bool = True,
+        include_stats: bool = False,
+    ) -> list[SourceRegistryEntry]:
+        """Return persisted registry/default sources without recipe-file discovery."""
+        self.ensure_registry()
+        data = read_yaml(self.path, {"sources": []})
+        raw_sources = data.get("sources", []) if isinstance(data, dict) else []
+        entries = [self._entry_from_mapping(item) for item in self._saved_source_mappings(raw_sources)]
+        if include_stats:
+            stats = self._stats_by_source(entries)
+            for entry in entries:
+                entry.stats = stats.get(entry.id, SourceStats())
+        if include_health:
+            health = SourceHealthService(self.root).load_all()
+            for entry in entries:
+                entry.health = health.get(entry.id, SourceHealthRecord(source_id=entry.id))
+        return entries
+
     def get_source(self, source_id: str) -> SourceRegistryEntry | None:
         return next((source for source in self.list_sources() if source.id == source_id), None)
 
@@ -379,6 +400,21 @@ class SourceRegistryService:
         )
 
     def _merged_source_mappings(self, raw_sources: list[Any]) -> list[dict[str, Any]]:
+        mappings, seen_ids = self._saved_source_mappings_with_seen_ids(raw_sources)
+
+        for item in _recipe_source_mappings(self.root, seen_ids):
+            source_id = _mapping_source_id(item)
+            if source_id in seen_ids:
+                continue
+            seen_ids.add(source_id)
+            mappings.append(item)
+        return mappings
+
+    def _saved_source_mappings(self, raw_sources: list[Any]) -> list[dict[str, Any]]:
+        mappings, _seen_ids = self._saved_source_mappings_with_seen_ids(raw_sources)
+        return mappings
+
+    def _saved_source_mappings_with_seen_ids(self, raw_sources: list[Any]) -> tuple[list[dict[str, Any]], set[str]]:
         mappings: list[dict[str, Any]] = []
         seen_ids: set[str] = set()
 
@@ -397,14 +433,7 @@ class SourceRegistryService:
                 continue
             seen_ids.add(source_id)
             mappings.append(item)
-
-        for item in _recipe_source_mappings(self.root, seen_ids):
-            source_id = _mapping_source_id(item)
-            if source_id in seen_ids:
-                continue
-            seen_ids.add(source_id)
-            mappings.append(item)
-        return mappings
+        return mappings, seen_ids
 
     def _infer_recipe_state(self, recipe_path: str, tags: list[str], status: str) -> str:
         if not recipe_path:

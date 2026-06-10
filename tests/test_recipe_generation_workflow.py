@@ -2,15 +2,24 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
 from job_agent.cli import recipe_generation_status
 from job_agent.services.recipe_candidate_approval_service import RecipeCandidateApprovalService
 from job_agent.services.recipe_candidate_service import RecipeCandidateStore
+from job_agent.services.recipe_generation_run_service import RecipeGenerationRunService
 from job_agent.services.recipe_generation_status_service import RecipeGenerationStatusService
-from job_agent.services.recipe_suggestion_service import RecipeSuggestionLlmClient, suggest_recipe_with_refinement
+from job_agent.services.recipe_suggestion_service import (
+    RecipeRefinementAttempt,
+    RecipeRefinementResult,
+    RecipeSuggestionLlmClient,
+    RecipeSuggestionResult,
+    suggest_recipe_with_refinement,
+)
 from job_agent.services.source_health_service import SourceHealthService
+from job_agent.services.source_session_service import SourceSessionService
 
 VALID_RECIPE_YAML = """source_name: Eursap Jobs
 start_url: https://eursap.eu/jobs
@@ -155,6 +164,68 @@ def test_recipe_generation_status_cli_prints_workflow_state(capsys, project_root
     assert "Source health: good" in output
     assert "Daily-run enabled: False" in output
     assert "does not mutate anything" in output
+
+
+def test_recipe_generation_live_capture_uses_connected_source_session(
+    monkeypatch, project_root: Path
+) -> None:
+    artifact = _write_artifact(project_root)
+    state_path = project_root / "sources" / "sessions" / "eursap.storage-state.json"
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state_path.write_text('{"cookies": []}', encoding="utf-8")
+    SourceSessionService(project_root).record_storage_state(
+        "eursap-jobs",
+        session_scope="eursap.eu",
+        storage_state_path="sources/sessions/eursap.storage-state.json",
+    )
+    captured: dict[str, object] = {}
+
+    def fake_capture(*args, **kwargs):
+        captured["session_state_path"] = kwargs.get("session_state_path")
+        captured["source_session_scope"] = kwargs.get("source_session_scope")
+        return SimpleNamespace(
+            artifact_dir=artifact,
+            warnings=[],
+            candidate_count=1,
+            recipe_extracted_count=1,
+            detail_sample_url="",
+        )
+
+    def fake_refinement(*args, **kwargs):
+        result = RecipeSuggestionResult(
+            source_name="Eursap Jobs",
+            start_url="https://eursap.eu/jobs",
+            artifact_dir=artifact,
+            suggested_recipe_yaml=VALID_RECIPE_YAML,
+            schema_valid=True,
+            selected_strategy="selector_based",
+            confidence="high",
+        )
+        attempt = RecipeRefinementAttempt(
+            attempt_number=1,
+            suggested_recipe_yaml=VALID_RECIPE_YAML,
+            schema_valid=True,
+            validation_errors=[],
+            quality_status="good",
+            quality_warnings=[],
+            extracted_job_count=1,
+            useful_titles=1,
+            unique_urls=1,
+        )
+        return RecipeRefinementResult(final_result=result, attempts=[attempt], accepted=True)
+
+    monkeypatch.setattr("job_agent.services.recipe_generation_run_service.capture_recipe_calibration", fake_capture)
+    monkeypatch.setattr("job_agent.services.recipe_generation_run_service.suggest_recipe_with_refinement", fake_refinement)
+
+    run = RecipeGenerationRunService(project_root).start_from_source_capture(
+        "eursap-jobs",
+        run_async=False,
+    )
+
+    assert captured["session_state_path"] == state_path
+    assert captured["source_session_scope"] == "eursap.eu"
+    assert run["source_session_used"] is True
+    assert run["source_session_scope"] == "eursap.eu"
 
 
 def _write_artifact(project_root: Path) -> Path:

@@ -139,10 +139,12 @@
     const parts = [
       `Candidate selector regions: ${observations.top_candidate_count || 0}`,
       `Pagination links observed: ${observations.pagination_link_count || 0}`,
+      `API candidates observed: ${observations.api_candidate_count || 0}`,
       `Application entries observed: ${observations.application_entry_count || 0}`,
       `Detail sample: ${observations.detail_sample_captured ? "captured" : "not captured"}`,
+      observations.source_session_used ? `Source session: ${observations.source_session_scope || "used"}` : "",
       `Recipe blueprint: ${observations.blueprint_present ? "available" : "not available"}`
-    ];
+    ].filter(Boolean);
     document.getElementById("result-observations").innerHTML = `
       <h3>Calibration Evidence Used</h3>
       <div class="badge-row">${parts.map(item => `<span class="badge">${escapeHtml(item)}</span>`).join("")}</div>

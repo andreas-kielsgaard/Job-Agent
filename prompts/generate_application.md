@@ -1,7 +1,7 @@
-Write a concise application for this SAP freelance or contract role.
+Write a concise application for this job posting.
 
 Rules:
-- Use direct consultant tone.
+- Use the supplied writing style and candidate profile.
 - Do not use "passionate", "excited", "dynamic", or "perfect fit".
 - Do not exaggerate skills.
 - Explicitly mention partial matches when relevant.
@@ -20,6 +20,9 @@ Top selected skills:
 
 Selected experience:
 {selected_experience}
+
+Human-edited example applications:
+{application_examples}
 
 Job:
 Title: {title}

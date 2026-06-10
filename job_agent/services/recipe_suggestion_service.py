@@ -16,6 +16,8 @@ from job_agent.services.extraction_quality import job_url_quality
 from job_agent.services.job_board_recipe_service import (
     check_recipe_against_html,
     extract_job_detail_from_html,
+    extract_jobs_with_recipe_from_api_payload,
+    quality_from_recipe_result,
 )
 from job_agent.services.recipe_calibration_service import classify_recipe_field_label, label_unsupported_reason
 from job_agent.services.recipes.mapping import _selectors, job_board_recipe_from_mapping
@@ -40,7 +42,7 @@ EXPECTED_ARTIFACT_FILES = [
     "page.html",
 ]
 CONFIDENCE_VALUES = {"low", "medium", "high"}
-STRATEGIES = {"selector_based", "pattern_based", "selector_and_pattern", "not_recommended"}
+STRATEGIES = {"selector_based", "pattern_based", "selector_and_pattern", "api_based", "not_recommended"}
 
 
 class RecipeSuggestionLlmClient(Protocol):
@@ -231,23 +233,9 @@ def evaluate_suggestion_against_artifact(result: RecipeSuggestionResult) -> Reci
             revision_reason="Schema validation failed.",
         )
 
-    page_path = result.artifact_dir / "page.html"
-    if not page_path.exists():
-        return RecipeRefinementAttempt(
-            attempt_number=0,
-            suggested_recipe_yaml=result.suggested_recipe_yaml,
-            schema_valid=True,
-            validation_errors=[],
-            quality_status="poor",
-            quality_warnings=["Missing local page.html; cannot validate extraction quality."],
-            revision_reason="Local page.html is missing.",
-        )
-
     try:
         data = yaml.safe_load(result.suggested_recipe_yaml) or {}
         recipe = job_board_recipe_from_mapping(data, label="suggested_recipe_yaml")
-        html = page_path.read_text(encoding="utf-8", errors="replace")
-        quality = check_recipe_against_html(html, result.start_url or recipe.start_url, recipe, follow_detail=False)
     except (OSError, ValueError, yaml.YAMLError) as exc:
         return RecipeRefinementAttempt(
             attempt_number=0,
@@ -258,6 +246,52 @@ def evaluate_suggestion_against_artifact(result: RecipeSuggestionResult) -> Reci
             quality_warnings=[f"Local recipe quality check failed: {exc}"],
             revision_reason="Local extraction check failed.",
         )
+
+    page_path = result.artifact_dir / "page.html"
+    api_fixture_path = _api_fixture_path(result.artifact_dir)
+    if recipe.listing_api.url and api_fixture_path:
+        try:
+            payload = json.loads(api_fixture_path.read_text(encoding="utf-8", errors="replace"))
+            extraction = extract_jobs_with_recipe_from_api_payload(
+                payload,
+                base_url=result.start_url or recipe.start_url,
+                recipe=recipe,
+            )
+            quality = quality_from_recipe_result(extraction, recipe)
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            return RecipeRefinementAttempt(
+                attempt_number=0,
+                suggested_recipe_yaml=result.suggested_recipe_yaml,
+                schema_valid=True,
+                validation_errors=[],
+                quality_status="poor",
+                quality_warnings=[f"Local API recipe quality check failed: {exc}"],
+                revision_reason="Local API extraction check failed.",
+            )
+    else:
+        if not page_path.exists():
+            return RecipeRefinementAttempt(
+                attempt_number=0,
+                suggested_recipe_yaml=result.suggested_recipe_yaml,
+                schema_valid=True,
+                validation_errors=[],
+                quality_status="poor",
+                quality_warnings=["Missing local page.html; cannot validate extraction quality."],
+                revision_reason="Local page.html is missing.",
+            )
+        try:
+            html = page_path.read_text(encoding="utf-8", errors="replace")
+            quality = check_recipe_against_html(html, result.start_url or recipe.start_url, recipe, follow_detail=False)
+        except (OSError, ValueError) as exc:
+            return RecipeRefinementAttempt(
+                attempt_number=0,
+                suggested_recipe_yaml=result.suggested_recipe_yaml,
+                schema_valid=True,
+                validation_errors=[],
+                quality_status="poor",
+                quality_warnings=[f"Local recipe quality check failed: {exc}"],
+                revision_reason="Local extraction check failed.",
+            )
 
     warnings.extend(quality.warnings)
     quality_status = "good"
@@ -285,7 +319,9 @@ def evaluate_suggestion_against_artifact(result: RecipeSuggestionResult) -> Reci
         revision_reason = "Recipe extracted only generic titles."
     elif quality.average_description_length < 40 and not detail_path.exists():
         quality_status = "warning"
-        warnings.append("Average description length is low; verify the card selector captures enough text.")
+        warnings.append(
+            "Average description length is low; verify the API field mapping or card selector captures enough text."
+        )
 
     semantic_warnings = _semantic_recipe_warnings(recipe, result.artifact_dir)
     if semantic_warnings:
@@ -350,6 +386,9 @@ def load_recipe_suggestion_evidence(
             referenced.append(name)
         else:
             warnings.append(f"Missing artifact file: {name}")
+    api_fixture = _api_fixture_path(artifact_dir)
+    if api_fixture:
+        referenced.append(str(api_fixture.relative_to(artifact_dir).as_posix()))
 
     summary = _read_text(artifact_dir / "summary.md", 3500)
     selector_report = _read_json(artifact_dir / "selector-report.json")
@@ -378,6 +417,9 @@ def load_recipe_suggestion_evidence(
         "observed_ajax_pagination_templates": selector_report.get("observed_ajax_pagination_templates", [])[:10]
         if isinstance(selector_report, dict)
         else [],
+        "observed_api_candidates": selector_report.get("observed_api_candidates", [])[:5]
+        if isinstance(selector_report, dict)
+        else [],
         "observed_interactive_pagination_controls": selector_report.get(
             "observed_interactive_pagination_controls", []
         )[:10]
@@ -386,6 +428,12 @@ def load_recipe_suggestion_evidence(
         "observed_application_entries": selector_report.get("observed_application_entries", [])[:10]
         if isinstance(selector_report, dict)
         else [],
+        "source_session_used": bool(selector_report.get("source_session_used"))
+        if isinstance(selector_report, dict)
+        else False,
+        "source_session_scope": str(selector_report.get("source_session_scope") or "")
+        if isinstance(selector_report, dict)
+        else "",
         "detail_sample_url": str(selector_report.get("detail_sample_url") or "")
         if isinstance(selector_report, dict)
         else "",
@@ -422,22 +470,29 @@ def build_recipe_suggestion_prompt(evidence: RecipeSuggestionEvidence) -> str:
         "Return only strict JSON with keys: suggested_recipe_yaml, explanation, confidence, "
         "assumptions, warnings, selected_strategy.\n"
         "The YAML may use only this schema: source_name, start_url, mode, access, listing, pagination, accept, "
-        "reject, patterns, limits, detail. Do not include Python code, browser scripts, arbitrary adapters, "
-        "credentials, cookie values, hidden endpoint assumptions, or network/API discovery. If local evidence "
+        "listing_api, detail_api, reject, patterns, limits, detail. Use listing_api/detail_api only when the "
+        "local evidence includes observed_api_candidates or a deterministic recipe_blueprint with API access. "
+        "Do not include Python code, browser scripts, arbitrary adapters, credentials, cookie values, hidden "
+        "endpoint assumptions, or new network/API discovery. API recipes must use only the exact public "
+        "page-declared request shape captured in evidence and must not add auth or cookies. If local evidence "
         "shows that pagination or listings require signing in, set access.requires_session true with a short "
         "setup_hint.\n"
         "A deterministic recipe_blueprint may be included. Prefer preserving selectors from that blueprint when "
         "the local evidence supports them; revise only when the evidence contradicts it.\n"
         "If source_test_insight is present, it is the latest live source-test diagnosis. Address it directly; "
-        "for example, do not preserve URL pagination when the test proved URL pagination returns duplicate pages, "
-        "and use browser_click when the live test says interactive pagination controls require browser-click "
-        "pagination.\n"
+        "preserve the tested strategy when pagination_working_with_unique_pages is true, do not preserve URL "
+        "pagination when pagination_duplicate_postings is true or a failed capability proves duplicate pages, "
+        "and use browser_click only when the live test says interactive pagination controls require browser-click "
+        "pagination. Set access.requires_session only for explicit source-access evidence such as a login gate, "
+        "source_access_failed, source_access_requires_session, or a connected source session that made pagination "
+        "work; do not infer a session requirement from speculative warning text.\n"
         "Use table headers and detail label/value observations to map fields semantically. Do not map `Category` "
         "to workload, `Application deadline` or `Closing date` to posted_date, or `End date` to start_date. "
         "If the schema lacks a matching report field, omit that selector and mention the unsupported field.\n"
         "Set pagination.strategy to url for normal href page links, ajax only when the local evidence exposes a "
         "page URL template that can be fetched directly, and browser_click when visible next/page controls require "
-        "clicking rather than href navigation. Include pagination selectors or templates that match that strategy. "
+        "clicking rather than href navigation. For listing_api, use listing_api.pagination rather than HTML "
+        "pagination. Include pagination selectors, templates, or API pagination fields that match that strategy. "
         "Use detail.follow only when a detail sample URL or detail sample text justifies job-detail enrichment.\n"
         "Prefer selectors and regex patterns visible in the local evidence. If automation is not recommended, "
         "choose selected_strategy not_recommended and explain why.\n\n"
@@ -464,13 +519,15 @@ def build_recipe_refinement_prompt(evidence: RecipeSuggestionEvidence, attempt: 
         "Return only strict JSON with keys: suggested_recipe_yaml, explanation, confidence, "
         "assumptions, warnings, selected_strategy.\n"
         "The YAML may use only this schema: source_name, start_url, mode, access, listing, pagination, accept, "
-        "reject, patterns, limits, detail. Do not include Python code, browser scripts, arbitrary adapters, "
-        "credentials, cookie values, hidden endpoint assumptions, or network/API discovery. If local evidence "
-        "shows that pagination or listings require signing in, set access.requires_session true with a short "
-        "setup_hint.\n"
-        "If source_test_insight is present, fix that live failure first and do not keep a pagination strategy "
-        "that the source test already proved returns duplicate or inaccessible pages. If the live test says "
-        "interactive controls require browser-click pagination, switch to browser_click.\n"
+        "listing_api, detail_api, reject, patterns, limits, detail. Use listing_api/detail_api only from captured "
+        "observed_api_candidates or an API recipe_blueprint. Do not include Python code, browser scripts, arbitrary "
+        "adapters, credentials, cookie values, hidden endpoint assumptions, or new network/API discovery. API "
+        "requests must preserve the exact public page-declared request shape captured in evidence.\n"
+        "If source_test_insight is present, fix live failures first. Preserve the tested strategy when "
+        "pagination_working_with_unique_pages is true; do not keep a pagination strategy that failed with "
+        "pagination_duplicate_postings or inaccessible pages. If the live test says interactive controls require "
+        "browser-click pagination, switch to browser_click. Set access.requires_session only from explicit "
+        "source-access evidence, not from speculative warning text.\n"
         "Use visible labels as ground truth: Category is not workload, Application deadline/Closing date is not "
         "posted_date, and End date is not start_date. Omit unsupported fields instead of forcing them into a "
         "nearby report field.\n"
@@ -502,10 +559,15 @@ def _deterministic_suggestion_result(evidence: RecipeSuggestionEvidence) -> Reci
     if validation_errors:
         warnings.extend(validation_errors)
     listing = recipe_data.get("listing") or {}
+    listing_api = recipe_data.get("listing_api") or {}
     detail = recipe_data.get("detail") or {}
     pagination = recipe_data.get("pagination") or {}
     explanation_parts = [
-        f"Deterministic draft selected listing cards with `{listing.get('card_selector', '')}`.",
+        (
+            f"Deterministic draft selected API records from `{listing_api.get('url', '')}`."
+            if listing_api
+            else f"Deterministic draft selected listing cards with `{listing.get('card_selector', '')}`."
+        ),
     ]
     if detail.get("follow"):
         explanation_parts.append(
@@ -528,7 +590,7 @@ def _deterministic_suggestion_result(evidence: RecipeSuggestionEvidence) -> Reci
         ],
         warnings=warnings,
         evidence_summary=evidence.evidence_summary,
-        selected_strategy="selector_based",
+        selected_strategy="api_based" if listing_api else "selector_based",
         referenced_artifact_files=evidence.referenced_artifact_files,
         validation_errors=validation_errors,
         schema_valid=not validation_errors,
@@ -674,6 +736,8 @@ def _semantic_recipe_warnings(recipe, artifact_dir: Path) -> list[str]:
 
 
 def _listing_label_warnings(recipe, html: str) -> list[str]:
+    if recipe.listing_api.url or not recipe.listing.card_selector:
+        return []
     soup = BeautifulSoup(html, "html.parser")
     cards = soup.select(recipe.listing.card_selector)
     if not cards or cards[0].name != "tr":
@@ -817,7 +881,11 @@ def _evidence_summary(url: str, mode: str, candidates: list[dict], visible_text:
 
 def _recipe_schema_summary() -> dict:
     return {
-        "required": ["source_name", "listing.card_selector", "listing.title_selector", "listing.link_selector"],
+        "required": [
+            "source_name",
+            "either listing selectors (listing.card_selector, listing.title_selector, listing.link_selector) "
+            "or listing_api with url, results_path, fields.title, and fields.url/url_template",
+        ],
         "modes": ["static_html", "rendered_html"],
         "listing_fields": [
             "card_selector",
@@ -853,6 +921,43 @@ def _recipe_schema_summary() -> dict:
             "max_pages",
             "request_delay_seconds",
         ],
+        "listing_api_fields": {
+            "request": ["method", "url", "headers", "params", "body", "results_path", "total_path"],
+            "fields": [
+                "title",
+                "url",
+                "url_template",
+                "application_url",
+                "company",
+                "recruiter",
+                "end_client",
+                "location",
+                "remote",
+                "rate",
+                "workload",
+                "contract_duration",
+                "posted_date",
+                "start_date",
+                "deadline",
+                "languages",
+                "description",
+                "description_html",
+                "raw_text",
+                "job_id",
+            ],
+            "pagination": [
+                "strategy",
+                "page_param",
+                "page_start",
+                "offset_param",
+                "offset_start",
+                "page_size_param",
+                "page_size",
+                "max_pages",
+                "request_delay_seconds",
+            ],
+        },
+        "detail_api_fields": "same request and field mapping shape as listing_api; results_path is optional for detail.",
         "access_fields": ["requires_session", "session_scope", "setup_hint"],
         "detail_fields": [
             "follow",
@@ -905,6 +1010,13 @@ def _read_json(path: Path) -> dict:
     except json.JSONDecodeError:
         return {}
     return data if isinstance(data, dict) else {}
+
+
+def _api_fixture_path(artifact_dir: Path) -> Path | None:
+    candidates = sorted(artifact_dir.glob("api-listing-response-*.json"))
+    if not candidates:
+        candidates = sorted(artifact_dir.glob("**/api-listing-response-*.json"))
+    return candidates[0] if candidates else None
 
 
 def _list_value(value) -> list[str]:

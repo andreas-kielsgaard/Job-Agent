@@ -1,0 +1,59 @@
+source_name: Experis
+start_url: https://www.experis.pl/en/search?page=1&searchKeyword=SAP
+mode: rendered_html
+listing:
+  card_selector: div.card-body
+  title_selector: h2 a
+  link_selector: h2 a
+  location_selector: .location
+  workload_selector: .type
+  posted_date_selector: .date
+  description_selector: .job-description
+accept:
+  url_contains:
+  - /jobb/
+reject:
+  title_exact:
+  - Apply
+  - Apply now
+  - More info
+  - View Job
+  - Services
+  - Job Search
+  title_contains:
+  - Upload SAP Job
+  - Improve my CV
+  url_contains:
+  - /services
+  - /about
+  - /contact
+  - /candidates
+  - /clients
+  - /category
+  - /blog
+  - '#'
+patterns:
+  job_id_regex: (?:Job ID|Ref):\s*(?P<job_id>[A-Za-z0-9_/-]+)
+  remote_regex: \b(?P<remote>Remote|Hybrid|Hybrid-remote|Office based|On-site|\d+%\s*remote)\b
+  work_type_regex: \b(?P<work_type>Contract|Freelance|Permanent)\b
+  start_date_regex: '(?:Start(?: date)?\s*:?\s*)(?P<start_date>asap|\d{1,2}\s*/\s*\d{4}|\d{1,2}[./]\d{1,2}[./]\d{4}|[^*\n\r]+?)(?=\s+Duration\b|\s+\d+\s*%\s*workload\b|\s+End
+    date:|$)'
+  language_regex: (?:Languages?:\s*|Language skills:\s*|Fluent in\s+)(?P<language>[A-Z][A-Za-z]+(?:\s*\([^)]*\))?)
+limits:
+  max_cards: 25
+  min_title_length: 8
+  min_description_length: 0
+pagination:
+  strategy: url
+  page_link_selector: a.page-link[href*="page="]
+  next_selector: a.page-link[href*="page="][aria-label*="Next"]
+  max_pages: 9
+  request_delay_seconds: 1.0
+detail:
+  follow: true
+  max_detail_pages: 5
+  request_delay_seconds: 1.0
+  use_json_ld: true
+  title_selector:
+  - main h1
+  - h1

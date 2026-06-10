@@ -69,7 +69,6 @@ def save_preferences(
     onsite_roles: str = Form(""),
     preferred_regions: str = Form(""),
     interests: str = Form(""),
-    minimum_digest_score: int = Form(45),
 ) -> RedirectResponse:
     workflow_handler().profile.save_preferences(
         available_from=available_from,
@@ -78,15 +77,59 @@ def save_preferences(
         onsite_roles=onsite_roles,
         preferred_regions=preferred_regions,
         interests=interests,
-        minimum_digest_score=minimum_digest_score,
     )
     return RedirectResponse(url="/setup#preferences", status_code=303)
+
+
+@router.post("/setup/run-inclusion")
+def save_run_inclusion(minimum_digest_score: int = Form(45)) -> RedirectResponse:
+    workflow_handler().profile.save_run_inclusion(minimum_digest_score)
+    return RedirectResponse(url="/setup#match-engine", status_code=303)
+
+
+@router.post("/setup/runtime")
+def save_runtime_settings(max_parallel_sources: int = Form(10)) -> RedirectResponse:
+    workflow_handler().profile.save_runtime_settings(max_parallel_sources)
+    return RedirectResponse(url="/setup#match-engine", status_code=303)
 
 
 @router.post("/setup/match-engine")
 async def save_match_engine(request: Request) -> RedirectResponse:
     workflow_handler().profile.save_match_engine_settings_from_form(await request.form())
     return RedirectResponse(url="/setup#match-engine", status_code=303)
+
+
+@router.post("/setup/skills")
+async def save_skills(request: Request) -> RedirectResponse:
+    workflow_handler().profile.save_skill_matrix_from_form(await request.form())
+    return RedirectResponse(url="/setup#skill-matrix", status_code=303)
+
+
+@router.post("/setup/case-studies")
+async def save_case_studies(request: Request) -> RedirectResponse:
+    workflow_handler().profile.save_case_studies_from_form(await request.form())
+    return RedirectResponse(url="/setup#case-studies", status_code=303)
+
+
+@router.post("/setup/writing-reference")
+def save_writing_reference(
+    canonical_cv: str | None = Form(None),
+    writing_style: str | None = Form(None),
+) -> RedirectResponse:
+    workflow_handler().profile.save_writing_reference(canonical_cv=canonical_cv, writing_style=writing_style)
+    return RedirectResponse(url="/setup#writing-reference", status_code=303)
+
+
+@router.post("/setup/application-examples")
+async def save_application_examples(request: Request) -> RedirectResponse:
+    workflow_handler().profile.save_application_examples_from_form(await request.form())
+    return RedirectResponse(url="/setup#writing-reference", status_code=303)
+
+
+@router.post("/setup/ai-policy")
+async def save_ai_policy(request: Request) -> RedirectResponse:
+    workflow_handler().profile.save_ai_policy_from_form(await request.form())
+    return RedirectResponse(url="/setup#ai-writing", status_code=303)
 
 
 @router.post("/setup/cv-reference", response_model=None)

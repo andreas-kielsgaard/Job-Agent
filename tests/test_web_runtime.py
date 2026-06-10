@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from job_agent.io.yaml_store import read_yaml
+from job_agent.run_store import RunEvent, RunOptions, RunStore
 from job_agent.web.runtime import SourceSessionCaptureTask, WebRuntime, utc_now
 
 
@@ -44,6 +45,53 @@ def test_source_session_capture_task_saves_session_and_reports_active_work(
     assert active["status"] == "completed"
     assert active["progress_percent"] == 100
     assert active["href"] == "/sources/sample-source/session"
+
+
+def test_active_daily_run_uses_single_aggregate_work_widget(project_root: Path) -> None:
+    runtime = WebRuntime(project_root)
+    store = RunStore(project_root)
+    record = store.create_run(RunOptions())
+    store.update(record.run_id, status="running")
+    store.append_event(
+        RunEvent(
+            record.run_id,
+            "source_started",
+            "Checking source 1/2: First",
+            phase="source_ingestion",
+            current_source="First",
+            counts={"source_index": 1, "source_count": 2},
+        )
+    )
+    store.append_event(
+        RunEvent(
+            record.run_id,
+            "source_completed",
+            "Completed source 1/2: First - 3 jobs found, 0 warnings",
+            phase="source_ingestion",
+            current_source="First",
+            counts={"source_index": 1, "source_count": 2, "jobs_found": 3},
+        )
+    )
+    store.append_event(
+        RunEvent(
+            record.run_id,
+            "source_started",
+            "Checking source 2/2: Second",
+            phase="source_ingestion",
+            current_source="Second",
+            counts={"source_index": 2, "source_count": 2},
+        )
+    )
+
+    items = runtime.active_work_payload()["sources"]
+
+    assert len(items) == 1
+    assert items[0]["kind"] == "run"
+    assert items[0]["task_id"] == f"run-{record.run_id}"
+    assert items[0]["title"] == "Daily run"
+    assert items[0]["stage"] == "1/2 sources finished"
+    assert "1 running in parallel" in items[0]["message"]
+    assert items[0]["href"] == f"/runs/{record.run_id}"
 
 
 def test_source_session_capture_reports_launching_before_capture_window_is_ready(

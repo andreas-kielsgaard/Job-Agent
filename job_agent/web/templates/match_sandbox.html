@@ -76,6 +76,7 @@
     <strong>Exclusion:</strong> <span>{{ match_preview.exclusion_reason }}</span>
   </p>
   <p><strong>Recommended angle:</strong> <span id="sandbox-angle">{{ match_preview.recommended_angle }}</span></p>
+  <p><strong>Deterministic confidence:</strong> <span id="sandbox-confidence">{{ match_preview.deterministic_confidence }}</span></p>
 
   <table>
     <thead><tr><th>Component</th><th>Score</th></tr></thead>
@@ -107,6 +108,14 @@
       <h3>Concerns</h3>
       <ul id="sandbox-concerns">
         {% for item in match_preview.concerns %}
+        <li>{{ item }}</li>
+        {% endfor %}
+      </ul>
+    </div>
+    <div>
+      <h3>Review Triggers</h3>
+      <ul id="sandbox-review-triggers">
+        {% for item in match_preview.review_trigger_labels %}
         <li>{{ item }}</li>
         {% endfor %}
       </ul>
@@ -147,6 +156,7 @@
     score.textContent = `${data.score}% ${data.category}`;
     document.getElementById("sandbox-raw-score").textContent = data.raw_score;
     document.getElementById("sandbox-angle").textContent = data.recommended_angle || "";
+    document.getElementById("sandbox-confidence").textContent = data.deterministic_confidence || "medium";
 
     const exclusion = document.getElementById("sandbox-exclusion");
     exclusion.classList.toggle("hidden", !data.exclusion_reason);
@@ -158,6 +168,7 @@
     document.getElementById("sandbox-matched").innerHTML = sandboxList(data.matched_keywords);
     document.getElementById("sandbox-reasons").innerHTML = sandboxList(data.reasons);
     document.getElementById("sandbox-concerns").innerHTML = sandboxList(data.concerns);
+    document.getElementById("sandbox-review-triggers").innerHTML = sandboxList(data.review_trigger_labels);
     document.getElementById("sandbox-missing").innerHTML = sandboxList(data.missing_information);
   }
 

@@ -11,7 +11,7 @@ router = APIRouter()
 
 @router.get("/postings/new", response_class=HTMLResponse)
 def new_posting(request: Request) -> HTMLResponse:
-    return templates.TemplateResponse(request, "posting_new.html", {"request": request})
+    return templates.TemplateResponse(request, "posting_new.html", {"request": request, "title": "Add Posting"})
 
 
 @router.post("/postings/new")

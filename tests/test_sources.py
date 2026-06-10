@@ -8,13 +8,15 @@ import requests
 
 from job_agent.digest import write_placeholder_job_package
 from job_agent.io.json_store import read_json
-from job_agent.models import Job, MatchResult
+from job_agent.models import Job, MatchResult, SourceRunResult
 from job_agent.sources import (
     GenericHtmlAdapter,
     LocalYamlAdapter,
     RecipeHtmlAdapter,
     SourceAdapter,
+    SourceFetchOptions,
     UnsupportedSourceAdapter,
+    _source_worker_limit,
     iter_source_results,
 )
 
@@ -322,6 +324,51 @@ def test_iter_source_results_yields_one_result_per_enabled_source_in_order(proje
     assert [result.source_index for result in results] == [1, 2]
     assert all(result.source_count == 2 for result in results)
     assert [len(result.result.jobs) for result in results] == [1, 1]
+
+
+def test_source_worker_limit_defaults_to_ten_and_preserves_configurable_limit() -> None:
+    assert _source_worker_limit(12, SourceFetchOptions()) == 10
+    assert _source_worker_limit(4, SourceFetchOptions()) == 4
+    assert _source_worker_limit(12, SourceFetchOptions(max_parallel_sources=3)) == 3
+    assert _source_worker_limit(12, SourceFetchOptions(max_parallel_sources=None)) == 10
+
+
+def test_parallel_source_window_starts_replacement_without_submitting_entire_backlog(
+    monkeypatch: pytest.MonkeyPatch, project_root: Path
+) -> None:
+    (project_root / "sources" / "recruiting-sites.yaml").write_text(
+        "sources:\n"
+        "  - name: First\n"
+        "    type: fake\n"
+        "  - name: Second\n"
+        "    type: fake\n"
+        "  - name: Third\n"
+        "    type: fake\n"
+        "  - name: Fourth\n"
+        "    type: fake\n",
+        encoding="utf-8",
+    )
+    starts = []
+
+    class FastAdapter(SourceAdapter):
+        def fetch(self, progress_callback=None, options=None):
+            starts.append(self.source["name"])
+            return SourceRunResult()
+
+    monkeypatch.setattr("job_agent.sources.adapter_for_source", lambda source, root: FastAdapter(source, root))
+
+    results = iter_source_results(
+        project_root,
+        fetch_options=SourceFetchOptions(max_parallel_sources=2),
+    )
+    try:
+        first_result = next(results)
+    finally:
+        results.close()
+
+    assert first_result.source_name in {"First", "Second"}
+    assert "Third" in starts
+    assert "Fourth" not in starts
 
 
 def test_iter_source_results_emits_warning_without_crashing(project_root: Path) -> None:

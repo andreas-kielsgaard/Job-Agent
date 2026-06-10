@@ -55,9 +55,9 @@ def test_pagination_session_failure_adds_setup_step_and_blocks_indexing() -> Non
         "Learn source",
         "Test safely",
         "Review found contents",
-        "Index job listings",
+        "Listing index",
         "Include in daily run",
-        "Initial complete ingestion",
+        "Initial ingestion",
     ]
     test_step = next(step for step in steps if step["title"] == "Test safely")
     assert test_step["state"] == "active"
@@ -67,7 +67,7 @@ def test_pagination_session_failure_adds_setup_step_and_blocks_indexing() -> Non
         "label": "Connect session",
         "href": "/sources/freelancermap-sap/session",
     }
-    index_step = next(step for step in steps if step["title"] == "Index job listings")
+    index_step = next(step for step in steps if step["title"] == "Listing index")
     assert index_step["state"] == "blocked"
     assert index_step["action"] is None
 
@@ -79,7 +79,7 @@ def test_pagination_session_failure_adds_setup_step_and_blocks_indexing() -> Non
         recipe_preview_url="/sources/freelancermap-sap/recipe-preview",
         index_status={"complete": True, "summary": "23 listings indexed."},
     )
-    detail_step = next(step for step in indexed_steps if step["title"] == "Initial complete ingestion")
+    detail_step = next(step for step in indexed_steps if step["title"] == "Initial ingestion")
     assert detail_step["state"] == "blocked"
     assert detail_step["action"] is None
 
@@ -202,7 +202,7 @@ def test_indexing_waits_for_safe_source_test_even_without_pagination_issue() -> 
         recipe_preview_url="/sources/sample-source/recipe-preview",
     )
 
-    index_step = next(step for step in steps if step["title"] == "Index job listings")
+    index_step = next(step for step in steps if step["title"] == "Listing index")
     assert index_step["state"] == "blocked"
     assert index_step["action"] is None
 

@@ -53,6 +53,7 @@ def compatibility_form(
         "compatibility.html",
         {
             "request": request,
+            "title": f"Compatibility - {selected_source.name}" if selected_source else "Compatibility",
             "report": None,
             "sources": sources,
             "recipe_options": recipes,
@@ -154,6 +155,7 @@ def run_compatibility_check(
         "compatibility.html",
         {
             "request": request,
+            "title": f"Compatibility - {selected_source.name}" if selected_source else "Compatibility",
             "report": report,
             "url": url,
             "render": render,

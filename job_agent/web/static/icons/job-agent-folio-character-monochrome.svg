@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <title>Folio job application guide monochrome</title>
+  <desc>Single-color CV/application folder mascot mark.</desc>
+
+  <path
+    d="M270 350H424C449 350 463 363 477 383L500 416H720C759 416 792 449 792 488V732C792 771 759 804 720 804H304C265 804 232 771 232 732V388C232 367 249 350 270 350Z"
+    fill="#253529"
+  />
+  <path
+    d="M290 302H487C516 302 534 316 550 342L584 398H302C262 398 232 429 232 469V372C232 333 251 302 290 302Z"
+    fill="#253529"
+  />
+  <rect x="326" y="404" width="372" height="332" rx="50" fill="#EFE3C8"/>
+  <circle cx="431" cy="626" r="25" fill="#253529"/>
+  <circle cx="586" cy="626" r="25" fill="#253529"/>
+  <path d="M468 677C491 700 532 700 555 677"
+        stroke="#253529" stroke-width="20" stroke-linecap="round"/>
+  <path d="M392 535L414 558L457 507" stroke="#253529" stroke-width="20" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

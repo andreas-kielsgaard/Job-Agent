@@ -8,6 +8,7 @@ TEMPLATE_VARIABLES = {
     "location_policy": "Relocation and preferred-location fields from profile/preferences.yaml.",
     "top_skills": "Exactly five selected skills for the role.",
     "selected_experience": "The selected relevant experience entries.",
-    "keyword_line": "Additional SAP keywords selected for this role.",
+    "application_examples": "Relevant human-edited application examples selected for the role.",
+    "keyword_line": "Additional keywords selected for this role.",
     "application_text": "Only available in form-answers template.",
 }

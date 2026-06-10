@@ -456,8 +456,9 @@ def test_source(source_id: str, force_disabled: bool = False, save_readiness: bo
     from pathlib import Path
 
     from .config import ROOT
-    from .services.source_test_service import SourceTestService
     from .services.source_execution_readiness_service import SourceExecutionReadinessService
+    from .services.source_listing_index_service import SourceListingIndexService
+    from .services.source_test_service import SourceTestService
 
     project_root = Path(root) if root else ROOT
     service = SourceTestService(project_root) if root else SourceTestService()
@@ -477,6 +478,10 @@ def test_source(source_id: str, force_disabled: bool = False, save_readiness: bo
     _safe_print(f"Warnings: {result.warning_count}")
     for warning in result.warnings:
         _safe_print(f"Warning: {warning}")
+    if result.log_dir:
+        _safe_print(f"Source test material log: {result.log_dir}")
+        if result.log_manifest_path:
+            _safe_print(f"Source test material manifest: {result.log_manifest_path}")
     for index, job in enumerate(result.jobs[:10], start=1):
         languages = ", ".join(job.languages) or "Not listed"
         notes = "; ".join(job.extraction_notes) or "none"
@@ -496,11 +501,14 @@ def test_source(source_id: str, force_disabled: bool = False, save_readiness: bo
         if job.description_preview:
             _safe_print(f"   Description: {job.description_preview}")
     _safe_print("")
-    _safe_print("No packages, seen state, materials, digests, or run records were written.")
+    _safe_print("No packages, seen state, application materials, digests, or run records were written.")
     if save_readiness:
         readiness = SourceExecutionReadinessService(project_root).save_from_source_test(result)
         _safe_print(f"Readiness saved: {readiness.readiness_status}")
         _safe_print(f"Readiness summary: {readiness.readiness_summary}")
+        if readiness.readiness_status == "ready":
+            listing_index = SourceListingIndexService(project_root).record_source_test_index(result)
+            _safe_print(f"Listing index refreshed: {listing_index.job_count} listings")
 
 
 test_source.__test__ = False

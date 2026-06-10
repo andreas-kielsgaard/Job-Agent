@@ -30,6 +30,7 @@ def build_jobs_view(filters: dict[str, Any] | None = None, root: Path = ROOT) ->
     run_options = _run_options(root, jobs, all_jobs)
     normalized_filters = _normalized_filters(filters)
     return {
+        "title": "Jobs",
         "jobs": jobs,
         "filters": {
             "app_statuses": normalized_filters["app_status_includes"],
@@ -69,13 +70,14 @@ def build_job_detail_view(job_id: str, run_id: str = "", root: Path = ROOT) -> d
     files = service.read_package_files(package)
     status = ApplicationStatusStore(root).get(job_id)
     return {
+        "title": f"Job - {package.get('title') or package.get('stable_id') or 'Detail'}",
         "package": package,
         "files": files,
         "status": status,
         "statuses": sorted(APPLICATION_STATUSES),
         "render_md": markdown_to_html,
         "cv_reference": CvReferenceService(root).get_cv_reference(),
-        "review_bundle": ReviewBundleService().build(package, files, status),
+        "review_bundle": ReviewBundleService(root).build(package, files, status),
     }
 
 

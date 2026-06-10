@@ -8,8 +8,8 @@ from typing import Any
 from .config import ROOT
 from .io.json_store import read_json, write_json
 
-APP_CONTEXT = """This is a local-first SAP freelance job preparation application.
-It discovers SAP freelance/contract roles, scores them against a private profile,
+APP_CONTEXT = """This is a local-first job preparation application.
+It discovers configured job postings, scores them against a private profile,
 and prepares recruiter-facing materials for human review. It must not submit
 applications, create accounts, log in, upload files, or send emails automatically.
 Keep generated text accurate, practical, and suitable for manual review."""
@@ -20,6 +20,7 @@ FIELD_CONTEXTS = {
     "profile.experience": "We are editing structured work experience. Experience keywords are used to select the most relevant projects for tailored CVs.",
     "profile.canonical_cv": "We are editing the CV narrative used as evidence for AI-assisted writing. Keep it factual and machine-readable; structured YAML remains the app behavior source of truth.",
     "profile.writing_style": "We are editing the general writing style used when generating application texts. Prefer clear rules over vague preference statements.",
+    "profile.application_examples": "We are editing human-approved example application texts. Preserve the user's voice and keep examples tied to real job context where possible.",
     "sources": "We are editing job source configuration. Keep YAML valid and avoid enabling unreliable sources without noting limitations.",
     "template.cv": "We are editing a Jinja Markdown template for the at-a-glance CV. Preserve template variables and recruiter-facing tone.",
     "template.application": "We are editing a Jinja Markdown template for deterministic application text. Preserve template variables.",
@@ -62,6 +63,9 @@ class PromptContextProvider:
             "canonical_cv": ContextBlock("canonical_cv", "Canonical CV", self._read("profile/canonical-cv.md")),
             "skills": ContextBlock("skills", "Skills YAML", self._read("profile/skills.yaml")),
             "experience": ContextBlock("experience", "Experience YAML", self._read("profile/experience.yaml")),
+            "application_examples": ContextBlock(
+                "application_examples", "Example applications", self._read("profile/application-examples.yaml")
+            ),
             "writing_style": ContextBlock("writing_style", "Writing style", self._read("profile/writing-style.md")),
             "sources": ContextBlock("sources", "Sources YAML", self._read("sources/recruiting-sites.yaml")),
         }
@@ -88,6 +92,7 @@ class PromptContextProvider:
                 "canonical_cv",
                 "skills",
                 "experience",
+                "application_examples",
                 "writing_style",
                 "job_package",
                 "job_json",
@@ -96,11 +101,19 @@ class PromptContextProvider:
         if field_id in {"profile.skills", "profile.experience"}:
             return ["app_context", "personal_info", "canonical_cv", "skills", "experience"]
         if field_id == "profile.writing_style":
-            return ["app_context", "canonical_cv", "writing_style"]
+            return ["app_context", "canonical_cv", "writing_style", "application_examples"]
         if field_id == "profile.canonical_cv":
             return ["app_context", "personal_info", "canonical_cv", "experience", "skills"]
         if field_id.startswith("template.") or field_id.startswith("prompt."):
-            return ["app_context", "personal_info", "canonical_cv", "skills", "experience", "writing_style"]
+            return [
+                "app_context",
+                "personal_info",
+                "canonical_cv",
+                "skills",
+                "experience",
+                "application_examples",
+                "writing_style",
+            ]
         return ["app_context", "personal_info", "canonical_cv"]
 
     def build_prompt(

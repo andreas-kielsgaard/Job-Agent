@@ -51,6 +51,23 @@ class SourceListingIndexStore:
 
     def summary_for_source(self, source_id: str, source_name: str = "") -> SourceListingIndexSummary:
         source_data = self._sources().get(source_id, {})
+        return self._summary_from_source_data(source_id, source_data, source_name=source_name)
+
+    def summaries_by_source(self) -> dict[str, SourceListingIndexSummary]:
+        sources = self._sources()
+        return {
+            str(source_id): self._summary_from_source_data(str(source_id), data)
+            for source_id, data in sources.items()
+            if isinstance(data, dict)
+        }
+
+    def _summary_from_source_data(
+        self,
+        source_id: str,
+        source_data: dict[str, Any],
+        *,
+        source_name: str = "",
+    ) -> SourceListingIndexSummary:
         listings = [
             SourceListingIndexRecord(**item)
             for item in source_data.get("listings", [])
@@ -128,7 +145,7 @@ class SourceListingIndexStore:
 
     def list_all(self) -> list[SourceListingIndexSummary]:
         return [
-            self.summary_for_source(str(source_id), str(data.get("source_name") or source_id))
+            self._summary_from_source_data(str(source_id), data, source_name=str(data.get("source_name") or source_id))
             for source_id, data in self._sources().items()
             if isinstance(data, dict)
         ]

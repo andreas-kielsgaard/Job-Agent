@@ -42,6 +42,46 @@ def test_app_creation_health_and_basic_routes_use_temp_root(client: TestClient, 
     assert "checked" not in material_checkbox.group(0)
 
 
+def test_browser_tab_titles_describe_current_page(client: TestClient) -> None:
+    cases = [
+        ("/", "Dashboard"),
+        ("/jobs", "Jobs"),
+        ("/runs?view=test", "Test Runs"),
+        ("/setup", "Setup"),
+        ("/sources", "Sources"),
+        ("/sources/new", "Add Source"),
+        ("/sources/eursap-jobs", "Source - Eursap Jobs"),
+        ("/sources/eursap-jobs/session", "Source Session - Eursap Jobs"),
+        ("/sources/eursap-jobs/test-run", "Source Test - Eursap Jobs"),
+        ("/recipe-preview?source_mode=configured&selected_source_id=eursap-jobs", "Recipe Preview - Eursap Jobs"),
+        ("/compatibility?source_mode=configured&selected_source_id=eursap-jobs", "Compatibility - Eursap Jobs"),
+        ("/postings/new", "Add Posting"),
+    ]
+    for path, title in cases:
+        response = client.get(path)
+
+        assert response.status_code == 200
+        assert f"<title>{title} - Job Agent</title>" in response.text
+
+
+def test_app_icons_are_linked_and_served(client: TestClient) -> None:
+    response = client.get("/")
+
+    assert response.status_code == 200
+    assert 'rel="icon" type="image/svg+xml" href="/static/icons/job-agent-icon-minimal-autumn.svg' in response.text
+    assert 'rel="alternate icon" href="/static/icons/job-agent-icon-minimal-autumn.ico' in response.text
+    assert 'rel="apple-touch-icon" href="/static/icons/job-agent-icon-minimal-autumn-256.png' in response.text
+    assert 'class="brand-mark"' in response.text
+    assert "/static/icons/job-agent-icon-minimal-autumn.svg" in response.text
+
+    for path in [
+        "/static/icons/job-agent-icon-minimal-autumn.svg",
+        "/static/icons/job-agent-icon-minimal-autumn.ico",
+        "/static/icons/job-agent-icon-minimal-autumn-256.png",
+    ]:
+        assert client.get(path).status_code == 200
+
+
 def test_missing_resources_and_invalid_bulk_actions_return_errors(client: TestClient) -> None:
     assert client.get("/runs/nonexistent").status_code == 404
     assert client.get("/jobs/nonexistent").status_code == 404
@@ -110,6 +150,93 @@ def test_setup_routes_write_to_temp_root_and_validate_inputs(client: TestClient,
     )
     assert match_response.status_code == 303
     assert "remote_policy: required" in (project_root / "profile" / "preferences.yaml").read_text(encoding="utf-8")
+
+    run_inclusion = client.post(
+        "/setup/run-inclusion",
+        data={"minimum_digest_score": "55"},
+        follow_redirects=False,
+    )
+    assert run_inclusion.status_code == 303
+    assert "minimum_digest_score: 55" in (project_root / "profile" / "preferences.yaml").read_text(encoding="utf-8")
+    preferences_before_skills = (project_root / "profile" / "preferences.yaml").read_text(encoding="utf-8")
+
+    skills_response = client.post(
+        "/setup/skills",
+        data={
+            "skill_name": ["SAP ABAP"],
+            "module_lane": ["strong"],
+            "module_name": ["QM"],
+            "role_bucket": ["high_match"],
+            "role_name": ["SAP Developer"],
+            "caveat_key": ["fiori"],
+            "caveat_text": ["Backend Fiori caveat."],
+        },
+        follow_redirects=False,
+    )
+    assert skills_response.status_code == 303
+    assert "SAP Developer" in (project_root / "profile" / "skills.yaml").read_text(encoding="utf-8")
+    assert (project_root / "profile" / "preferences.yaml").read_text(encoding="utf-8") == preferences_before_skills
+
+    cases_response = client.post(
+        "/setup/case-studies",
+        data={
+            "case_company": ["LEGO"],
+            "case_role": ["Developer"],
+            "case_highlights": ["Built service"],
+            "case_keywords": ["ABAP"],
+            "case_linked_skills": ["SAP ABAP"],
+            "case_linked_modules": ["QM"],
+            "case_linked_roles": ["SAP Developer"],
+        },
+        follow_redirects=False,
+    )
+    assert cases_response.status_code == 303
+    assert "linked_skills" in (project_root / "profile" / "experience.yaml").read_text(encoding="utf-8")
+
+    examples_response = client.post(
+        "/setup/application-examples",
+        data={
+            "example_id": [""],
+            "example_label": ["ABAP note"],
+            "example_application_text": ["Human edited text"],
+            "example_job_title": ["ABAP Consultant"],
+            "example_company": ["Recruiter"],
+            "example_url": ["https://example.com"],
+            "example_linked_skills": ["SAP ABAP"],
+            "example_linked_modules": ["QM"],
+            "example_linked_roles": ["SAP Developer"],
+            "example_notes": ["Good tone"],
+        },
+        follow_redirects=False,
+    )
+    assert examples_response.status_code == 303
+    assert "Human edited text" in (project_root / "profile" / "application-examples.yaml").read_text(encoding="utf-8")
+
+    policy_response = client.post(
+        "/setup/ai-policy",
+        data={
+            "ai_min_score": "40",
+            "evaluate_category": ["strong", "exploratory"],
+            "trigger_on_review_triggers": "on",
+            "acceptable_languages": "English",
+            "fluent_languages": "Danish",
+            "language_penalty": "-20",
+            "core_match_groups": "ABAP",
+            "min_core_matches": "2",
+            "high_rate_threshold": "900",
+        },
+        follow_redirects=False,
+    )
+    assert policy_response.status_code == 303
+    assert "ai_review_policy" in (project_root / "profile" / "preferences.yaml").read_text(encoding="utf-8")
+
+    writing_response = client.post(
+        "/setup/writing-reference",
+        data={"writing_style": "Concise human-edited tone."},
+        follow_redirects=False,
+    )
+    assert writing_response.status_code == 303
+    assert "Concise human-edited tone" in (project_root / "profile" / "writing-style.md").read_text(encoding="utf-8")
 
 
 def test_unsupported_cv_upload_suffix_returns_400(client: TestClient) -> None:
@@ -731,14 +858,14 @@ def test_source_overview_and_detail_routes_render(client: TestClient) -> None:
     assert "Safe source test" in detail.text
     assert "Daily run" in detail.text
     assert "View all jobs from this source" in detail.text
-    assert "Index job listings" in detail.text
-    assert "Initial complete ingestion" in detail.text
+    assert "Listing index" in detail.text
+    assert "Initial ingestion" in detail.text
     setup_section = detail.text.split('<div class="panel" id="reading-plan"', 1)[0]
     safe_section = detail.text.split('<div class="panel" id="safe-test"', 1)[1]
-    assert "Index job listings" in setup_section
-    assert "Initial complete ingestion" in setup_section
-    assert "Index job listings" not in safe_section
-    assert "Investigate all jobs on source" not in safe_section
+    assert "Listing index" in setup_section
+    assert "Initial ingestion" in setup_section
+    assert "Listing index" not in safe_section
+    assert "Ingest all indexed jobs" not in safe_section
     assert "Source settings" in detail.text
     assert "Save source settings" in detail.text
     assert "Capture sample only" in detail.text
@@ -956,7 +1083,7 @@ def test_source_detail_capture_calibration_action_is_bounded(
         detail_sample_url = ""
         warnings = []
 
-    def fake_capture(url, recipe_path, rendered, root, max_candidates, capture_detail):
+    def fake_capture(url, recipe_path, rendered, root, max_candidates, capture_detail, **kwargs):
         captured.update(
             {
                 "url": url,
@@ -1388,7 +1515,7 @@ def test_source_test_run_view_and_api_save_readiness(monkeypatch: pytest.MonkeyP
     stream_response = client.post("/sources/eursap-jobs/test-run/stream")
 
     assert view.status_code == 200
-    assert "Test Source Without Saving Jobs" in view.text
+    assert "Test Source Safely" in view.text
     assert "<summary>Live run log</summary>" in view.text
     assert "source-test-insight" in view.text
     assert "work-status-card" in view.text
@@ -1712,7 +1839,7 @@ def test_source_detail_index_and_investigate_actions_redirect(
     investigate_response = client.post("/sources/eursap-jobs/investigate-all", follow_redirects=False)
 
     assert index_response.status_code == 303
-    assert "Indexing+started+for+Eursap+Jobs" in index_response.headers["location"]
+    assert "Listing+index+refresh+started+for+Eursap+Jobs" in index_response.headers["location"]
     assert launched_index == {"source_id": "eursap-jobs", "source_name": "Eursap Jobs"}
     assert investigate_response.status_code == 303
     assert investigate_response.headers["location"] == "/runs/run-1"

@@ -15,7 +15,7 @@ from job_agent.config import ROOT
 from job_agent.run_service import run_daily_agent
 from job_agent.run_store import RunOptions, RunRecord, RunStore
 from job_agent.services.source_listing_index_service import SourceListingIndexService
-from job_agent.web.view_models.runs import build_source_progress
+from job_agent.web.work_widgets import WorkStatusWidgetHandler
 
 
 @dataclass
@@ -171,15 +171,14 @@ class WebRuntime:
 
     def active_work_payload(self) -> dict[str, Any]:
         profile_tasks = self._active_profile_tasks()
-        return {
-            "sources": [
-                *self._active_run_sources(),
-                *self._active_index_sources(),
-                *self._active_session_sources(),
-                *profile_tasks,
-                *self._active_persisted_profile_drafts(profile_tasks),
-            ]
+        snapshot = {
+            "active_run": self.active_run(),
+            "index_tasks": self._active_index_sources(),
+            "session_tasks": self._active_session_sources(),
+            "profile_tasks": profile_tasks,
+            "persisted_profile_tasks": self._active_persisted_profile_drafts(profile_tasks),
         }
+        return WorkStatusWidgetHandler(self.root).active_work_payload(snapshot)
 
     def launch_source_session_capture(
         self,
@@ -616,35 +615,6 @@ class WebRuntime:
             CvProfileDraftService(self.root).save_task(asdict(task))
         except Exception:
             return
-
-    def _active_run_sources(self) -> list[dict[str, Any]]:
-        active_run = self.active_run()
-        if not active_run:
-            return []
-        store = RunStore(self.root)
-        progress = build_source_progress(store.read_events(active_run.run_id))
-        sources = []
-        for source in progress["items"]:
-            if source["status"] != "running":
-                continue
-            sources.append(
-                {
-                    "kind": "run",
-                    "task_id": f"{active_run.run_id}-{source['source_index']}",
-                    "run_id": active_run.run_id,
-                    "source_id": "",
-                    "source_name": source["source_name"],
-                    "title": source["source_name"],
-                    "status": source["status"],
-                    "page_explored_count": source["page_explored_count"],
-                    "page_total": source["page_total"],
-                    "jobs_found": source["jobs_found"],
-                    "detail_read_count": source["detail_read_count"],
-                    "detail_total": source["detail_total"],
-                    "message": source["latest_message"],
-                }
-            )
-        return sources
 
     def _latest_daily_run_today(self, store: RunStore) -> RunRecord | None:
         today = str(date.today())

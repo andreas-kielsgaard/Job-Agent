@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -8,6 +9,7 @@ from job_agent.services.extraction_assessment import listing_count_explanations
 from job_agent.services.extraction_quality import MIN_USEFUL_DESCRIPTION_CHARS
 from job_agent.services.job_board_recipe_service import (
     extract_job_detail_from_html,
+    extract_jobs_with_recipe_from_api_payload,
     extract_jobs_with_recipe_from_html,
     extract_jobs_with_recipe_from_url,
     quality_from_recipe_result,
@@ -70,6 +72,10 @@ class RecipePreviewResult:
     generic_labels: int
     unique_urls: int
     average_description_length: int
+    access_strategy: str = ""
+    api_request_count: int = 0
+    records_observed_count: int = 0
+    json_records_extracted_count: int = 0
     jobs: list[PreviewJob] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     field_coverage: list[FieldCoverage] = field(default_factory=list)
@@ -136,7 +142,7 @@ def explain_recipe(recipe_path: str | Path, root: Path | None = None) -> RecipeE
         recipe = load_job_board_recipe(resolved_recipe_path)
     except (OSError, ValueError):
         return None
-    listing_fields = [
+    listing_fields = _api_listing_explanation_fields(recipe) if recipe.listing_api.url else [
         RecipeExplanationItem("Job card", _selector_detail(recipe.listing.card_selector)),
         RecipeExplanationItem("Title", _selector_detail(recipe.listing.title_selector)),
         RecipeExplanationItem("Detail URL", _selector_detail(recipe.listing.link_selector)),
@@ -148,6 +154,14 @@ def explain_recipe(recipe_path: str | Path, root: Path | None = None) -> RecipeE
         RecipeExplanationItem("Start date", _selector_detail(recipe.listing.start_date_selector)),
         RecipeExplanationItem("Description", _selector_detail(recipe.listing.description_selector)),
     ]
+    pagination_configured = (
+        recipe.listing_api.url and recipe.listing_api.pagination.strategy != "none"
+    ) or bool(recipe.pagination.page_link_selector or recipe.pagination.next_selector)
+    pagination_max_pages = (
+        recipe.listing_api.pagination.max_pages
+        if recipe.listing_api.url and recipe.listing_api.pagination.strategy != "none"
+        else recipe.pagination.max_pages
+    )
     navigation_fields = [
         RecipeExplanationItem(
             "Detail pages",
@@ -161,6 +175,10 @@ def explain_recipe(recipe_path: str | Path, root: Path | None = None) -> RecipeE
         RecipeExplanationItem("Detail title", _selector_detail(recipe.detail.title_selector)),
         RecipeExplanationItem("Detail description", _selector_detail(recipe.detail.description_selector)),
         RecipeExplanationItem("Detail structured data", "Uses JobPosting JSON-LD." if recipe.detail.use_json_ld else "Not configured."),
+        RecipeExplanationItem(
+            "Detail API",
+            f"{recipe.detail_api.method} {recipe.detail_api.url}" if recipe.detail_api.url else "Not configured.",
+        ),
         RecipeExplanationItem(
             "Pagination links",
             (
@@ -176,13 +194,13 @@ def explain_recipe(recipe_path: str | Path, root: Path | None = None) -> RecipeE
         source_name=recipe.source_name,
         status=_recipe_status(resolved_recipe_path, recipe.source_name),
         start_url=recipe.start_url,
-        mode_label="Rendered page" if recipe.mode == "rendered_html" else "Static HTML",
+        mode_label="API JSON" if recipe.listing_api.url else "Rendered page" if recipe.mode == "rendered_html" else "Static HTML",
         max_cards=recipe.limits.max_cards,
         detail_follow=recipe.detail.follow,
         detail_max_pages=recipe.detail.max_detail_pages,
         detail_delay=recipe.detail.request_delay_seconds,
-        pagination_configured=bool(recipe.pagination.page_link_selector or recipe.pagination.next_selector),
-        pagination_max_pages=recipe.pagination.max_pages,
+        pagination_configured=pagination_configured,
+        pagination_max_pages=pagination_max_pages,
         listing_fields=[item for item in listing_fields if item.detail != "Not configured."],
         navigation_fields=navigation_fields,
         filter_notes=_filter_notes(recipe),
@@ -227,6 +245,10 @@ def preview_recipe(
         input_value=str(input_value),
         base_url=extraction.base_url,
         mode_used=extraction.mode_used,
+        access_strategy=extraction.access_strategy,
+        api_request_count=extraction.api_request_count,
+        records_observed_count=extraction.records_observed_count,
+        json_records_extracted_count=extraction.json_records_extracted_count,
         extracted_job_count=quality.candidate_count,
         useful_titles=quality.useful_title_count,
         generic_labels=quality.generic_title_count,
@@ -235,9 +257,17 @@ def preview_recipe(
         jobs=[_preview_job(job) for job in extraction.jobs],
         warnings=warnings,
         field_coverage=field_coverage,
-        pagination_configured=bool(recipe.pagination.page_link_selector or recipe.pagination.next_selector),
+        pagination_configured=bool(
+            recipe.pagination.page_link_selector
+            or recipe.pagination.next_selector
+            or (recipe.listing_api.url and recipe.listing_api.pagination.strategy != "none")
+        ),
         pagination_link_count=len(extraction.pagination_links),
-        pagination_max_pages=recipe.pagination.max_pages,
+        pagination_max_pages=(
+            recipe.listing_api.pagination.max_pages
+            if recipe.listing_api.url and recipe.listing_api.pagination.strategy != "none"
+            else recipe.pagination.max_pages
+        ),
         pagination_links=extraction.pagination_links,
         pagination_fetch_count=extraction.pagination_fetch_count,
         listing_observed_count=extraction.listing_observed_count,
@@ -295,11 +325,20 @@ def _run_preview_extraction(
 
     path = _resolve_path(value, root)
     if not path.exists():
-        raise ValueError(f"HTML fixture not found: {path}")
+        raise ValueError(f"Fixture not found: {path}")
 
     warnings = []
     if recipe.mode == "rendered_html":
         warnings.append("Local fixture HTML ignores recipe mode: rendered_html.")
+    if path.suffix.lower() == ".json":
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        return extract_jobs_with_recipe_from_api_payload(
+            payload,
+            base_url=resolved_base_url,
+            recipe=recipe,
+            mode_used="local_api_fixture",
+            warnings=warnings,
+        )
     html = path.read_text(encoding="utf-8")
     return extract_jobs_with_recipe_from_html(
         html,
@@ -376,7 +415,7 @@ def _field_present(job: Job, field: str) -> bool:
 def _request_notes(recipe, input_type: str, has_detail_sample: bool) -> list[str]:
     notes: list[str] = []
     if input_type == "public URL":
-        notes.append("Preview is a proof run: it fetches the provided listing URL and only enough follow-up pages to prove configured navigation.")
+        notes.append("Preview is a proof run: it fetches the configured listing data and only enough follow-up requests to prove configured navigation.")
         if recipe.detail.follow:
             notes.append(
                 "Detail proof is bounded to 1 listing URL"
@@ -385,7 +424,7 @@ def _request_notes(recipe, input_type: str, has_detail_sample: bool) -> list[str
         else:
             notes.append("Recipe detail.follow is false, so URL preview will not fetch job detail pages.")
     else:
-        notes.append("Local HTML preview made no network requests.")
+        notes.append("Local fixture preview made no network requests.")
     if recipe.pagination.page_link_selector or recipe.pagination.next_selector:
         notes.append(
             "Pagination proof follows at most 1 additional page; actual source runs may follow configured pagination "
@@ -433,7 +472,7 @@ def _run_steps(
                 phase="Limits and filters",
                 status="completed",
                 detail=(
-                    f"Read at most {recipe.limits.max_cards} cards per listing page, required title length "
+                    f"Read at most {recipe.limits.max_cards} records/cards per listing source, required title length "
                     f"{recipe.limits.min_title_length}, and applied configured accept/reject filters."
                 ),
             ),
@@ -488,9 +527,30 @@ def _selector_detail(value: object) -> str:
     return ", ".join(selectors) if selectors else "Not configured."
 
 
+def _api_listing_explanation_fields(recipe) -> list[RecipeExplanationItem]:
+    fields = recipe.listing_api.fields
+    field_paths = [
+        ("API request", f"{recipe.listing_api.method} {recipe.listing_api.url}"),
+        ("API records", recipe.listing_api.results_path),
+        ("Title", fields.title),
+        ("Detail URL", fields.url or fields.url_template),
+        ("Company", fields.company),
+        ("Location", fields.location),
+        ("Remote", fields.remote),
+        ("Rate", fields.rate),
+        ("Workload", fields.workload),
+        ("Posted date", fields.posted_date),
+        ("Start date", fields.start_date),
+        ("Languages", fields.languages),
+        ("Description", fields.description or fields.description_html),
+    ]
+    return [RecipeExplanationItem(label, path or "Not configured.") for label, path in field_paths]
+
+
 def _filter_notes(recipe) -> list[str]:
+    unit = "API records" if recipe.listing_api.url else "listing cards"
     notes = [
-        f"Reads at most {recipe.limits.max_cards} listing cards from the provided page.",
+        f"Reads at most {recipe.limits.max_cards} {unit} from the provided source.",
         f"Requires titles to be at least {recipe.limits.min_title_length} characters.",
     ]
     if recipe.limits.min_description_length:
@@ -513,6 +573,8 @@ def _filter_notes(recipe) -> list[str]:
 def _input_type(value: str) -> str:
     if value.startswith(("http://", "https://")):
         return "public URL"
+    if value.replace("\\", "/").lower().endswith(".json"):
+        return "local JSON fixture"
     normalized = value.replace("\\", "/").lower()
     if "output/recipe-calibration/" in normalized:
         return "local artifact"

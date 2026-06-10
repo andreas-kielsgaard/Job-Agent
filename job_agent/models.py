@@ -147,6 +147,9 @@ class MatchResult:
     recommended_angle: str = ""
     exclusion_reason: str = ""
     matched_keywords: list[str] = field(default_factory=list)
+    review_triggers: list[str] = field(default_factory=list)
+    review_trigger_labels: list[str] = field(default_factory=list)
+    deterministic_confidence: str = "medium"
 
     @property
     def score(self) -> int:

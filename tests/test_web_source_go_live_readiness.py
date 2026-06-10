@@ -21,7 +21,7 @@ def test_source_detail_shows_go_live_readiness_panel(client: TestClient) -> None
 
     assert response.status_code == 200
     assert "Safe Source Test" in response.text
-    assert "This verifies the full source flow without saving jobs" in response.text
+    assert "This verifies the full source flow without saving job packages" in response.text
 
 
 def test_web_source_test_route_saves_readiness(
@@ -45,10 +45,15 @@ def test_web_source_test_route_saves_readiness(
     response = client.post("/sources/eursap-jobs/test-run")
 
     readiness = SourceExecutionReadinessService(project_root).load("eursap-jobs")
+    index = SourceListingIndexStore(project_root).summary_for_source("eursap-jobs")
     assert response.status_code == 200
     assert response.json()["readiness_status"] == "ready"
+    assert response.json()["listing_index"]["job_count"] == 1
     assert readiness.readiness_status == "ready"
     assert readiness.dry_run_job_count == 1
+    assert index.indexed_count == 1
+    assert index.listings[0].title == "SAP Basis Consultant"
+    assert not (project_root / "jobs" / "seen_jobs.json").exists()
 
 
 def test_web_enable_when_ready_refuses_blocked_then_enables_ready_source(
@@ -68,7 +73,7 @@ def test_web_enable_when_ready_refuses_blocked_then_enables_ready_source(
     not_indexed = client.post("/sources/eursap-jobs/enable-when-ready", follow_redirects=False)
 
     assert not_indexed.status_code == 303
-    assert "Index+job+listings" in not_indexed.headers["location"]
+    assert "Refresh+the+listing+index" in not_indexed.headers["location"]
 
     SourceListingIndexStore(project_root).record_index(
         source_id="eursap-jobs",

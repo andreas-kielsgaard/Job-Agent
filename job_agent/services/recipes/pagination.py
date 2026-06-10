@@ -31,6 +31,7 @@ def fetch_pagination_job_pages(
     pagination_links: list[PaginationLink],
     recipe: JobBoardRecipe,
     *,
+    start_url: str = "",
     use_rendered: bool,
     timeout_seconds: int,
     max_pages: int | None,
@@ -39,6 +40,7 @@ def fetch_pagination_job_pages(
     use_recipe_card_limit: bool,
     fetch_html_for_mode: FetchHtmlForMode,
     session_state_path: str | Path | None = None,
+    material_log: Any | None = None,
     progress_callback: RecipeProgressCallback | None = None,
     step_collector: list[RecipeRunStep] | None = None,
 ) -> tuple[list[str], list[Job], list[str], list[ListingExtractionStats]]:
@@ -51,9 +53,13 @@ def fetch_pagination_job_pages(
     seen_urls = {job.url for job in jobs if job.url}
     fetched_urls: list[str] = []
     page_stats: list[ListingExtractionStats] = []
-    urls_to_fetch = _pagination_urls_to_fetch(pagination_links, max_pages=max_pages)
+    visited_page_keys = {_pagination_url_key(start_url)} if start_url else set()
+    urls_to_fetch = [
+        url
+        for url in _pagination_urls_to_fetch(pagination_links, max_pages=max_pages)
+        if _pagination_url_key(url) not in visited_page_keys
+    ]
     queued_keys = {_pagination_url_key(url) for url in urls_to_fetch}
-    fetched_page_keys: set[str] = set()
     page_total = 1 + len(urls_to_fetch)
 
     index = 0
@@ -63,9 +69,9 @@ def fetch_pagination_job_pages(
         page_url = urls_to_fetch.pop(0)
         page_key = _pagination_url_key(page_url)
         queued_keys.discard(page_key)
-        if page_key in fetched_page_keys:
+        if page_key in visited_page_keys:
             continue
-        fetched_page_keys.add(page_key)
+        visited_page_keys.add(page_key)
         if job_limit is not None and len(jobs) >= job_limit:
             break
         if index and recipe.pagination.request_delay_seconds:
@@ -109,7 +115,43 @@ def fetch_pagination_job_pages(
             )
             continue
         warnings.extend(fetch_warnings)
+        final_key = _pagination_url_key(final_url)
+        if final_key in visited_page_keys and final_key != page_key:
+            _record_material_html(
+                material_log,
+                kind="pagination",
+                url=page_url,
+                final_url=final_url,
+                html=html,
+                mode="rendered_html" if use_rendered else "static_html",
+                warnings=fetch_warnings,
+                note="Skipped because the final URL resolved to a listing page already read.",
+            )
+            _record_recipe_step(
+                step_collector,
+                progress_callback,
+                RecipeRunStep(
+                    phase="Pagination page skipped",
+                    status="skipped",
+                    detail=f"Skipped {final_url}; it resolves to a listing page already read.",
+                    capability="pagination",
+                    page_explored_count=1 + len(fetched_urls),
+                    page_total=page_total,
+                    jobs_found=len(jobs),
+                ),
+            )
+            continue
+        visited_page_keys.add(final_key)
         fetched_urls.append(final_url)
+        _record_material_html(
+            material_log,
+            kind="pagination",
+            url=page_url,
+            final_url=final_url,
+            html=html,
+            mode="rendered_html" if use_rendered else "static_html",
+            warnings=fetch_warnings,
+        )
         page_jobs, stats = extract_jobs_with_recipe_with_stats(
             html,
             base_url=final_url,
@@ -127,15 +169,15 @@ def fetch_pagination_job_pages(
                 stats.limit_skipped_count += max(0, len(page_jobs) - (len(jobs) - before_count))
                 break
         stats.extracted_jobs = len(jobs) - before_count
-        if page_jobs and stats.extracted_jobs == 0 and stats.duplicate_count >= len(page_jobs):
+        if page_jobs and stats.duplicate_count and stats.extracted_jobs == 0:
             warnings.append(
-                f"Pagination page {final_url} returned only listings already seen on earlier pages. "
-                "The source may require a logged-in session or client-side pagination for later result pages."
+                f"Pagination page {final_url} returned {stats.duplicate_count} duplicate listing(s) "
+                "already seen on earlier pages and added no new jobs."
             )
         page_stats.append(stats)
         for next_url in _pagination_urls_to_fetch(find_pagination_links(html, final_url, recipe), max_pages=None):
             next_key = _pagination_url_key(next_url)
-            if next_key in fetched_page_keys or next_key in queued_keys:
+            if next_key in visited_page_keys or next_key in queued_keys:
                 continue
             if additional_page_limit is not None and len(fetched_urls) + len(urls_to_fetch) >= additional_page_limit:
                 break
@@ -171,6 +213,7 @@ def fetch_ajax_pagination_job_pages(
     use_recipe_card_limit: bool,
     fetch_html_for_mode: FetchHtmlForMode,
     session_state_path: str | Path | None = None,
+    material_log: Any | None = None,
     progress_callback: RecipeProgressCallback | None = None,
     step_collector: list[RecipeRunStep] | None = None,
 ) -> tuple[list[str], list[Job], list[str], list[ListingExtractionStats]]:
@@ -229,6 +272,15 @@ def fetch_ajax_pagination_job_pages(
             continue
         warnings.extend(fetch_warnings)
         fetched_urls.append(final_url)
+        _record_material_html(
+            material_log,
+            kind="ajax_pagination",
+            url=page_url,
+            final_url=final_url,
+            html=html,
+            mode="rendered_html" if use_rendered else "static_html",
+            warnings=fetch_warnings,
+        )
         payload_html = ajax_response_html(html)
         page_jobs, stats = extract_jobs_with_recipe_with_stats(
             payload_html,
@@ -238,10 +290,10 @@ def fetch_ajax_pagination_job_pages(
         )
         before_count = len(jobs)
         merge_pagination_jobs(page_jobs, stats, jobs, seen_urls, job_limit)
-        if page_jobs and stats.extracted_jobs == 0 and stats.duplicate_count >= len(page_jobs):
+        if page_jobs and stats.duplicate_count and stats.extracted_jobs == 0:
             warnings.append(
-                f"AJAX pagination page {final_url} returned only listings already seen on earlier pages. "
-                "The source may require a connected session or a different AJAX pagination recipe."
+                f"AJAX pagination page {final_url} returned {stats.duplicate_count} duplicate listing(s) "
+                "already seen on earlier pages and added no new jobs."
             )
         page_stats.append(stats)
         _record_recipe_step(
@@ -270,6 +322,7 @@ def fetch_browser_click_pagination_job_pages(
     job_limit: int | None,
     use_recipe_card_limit: bool,
     session_state_path: str | Path | None = None,
+    material_log: Any | None = None,
     progress_callback: RecipeProgressCallback | None = None,
     step_collector: list[RecipeRunStep] | None = None,
 ) -> tuple[list[str], list[Job], list[str], list[ListingExtractionStats]]:
@@ -307,6 +360,14 @@ def fetch_browser_click_pagination_job_pages(
                     page_options["storage_state"] = str(session_state_path)
                 page = browser.new_page(**page_options)
                 page.goto(start_url, wait_until="domcontentloaded", timeout=timeout_ms)
+                _record_material_html(
+                    material_log,
+                    kind="browser_pagination_start",
+                    url=start_url,
+                    final_url=page.url,
+                    html=page.content(),
+                    mode="rendered_html",
+                )
                 for index in range(additional_page_limit):
                     if job_limit is not None and len(jobs) >= job_limit:
                         break
@@ -355,6 +416,15 @@ def fetch_browser_click_pagination_job_pages(
                         break
                     final_url = page.url
                     fetched_urls.append(final_url)
+                    _record_material_html(
+                        material_log,
+                        kind="browser_pagination",
+                        url=start_url,
+                        final_url=final_url,
+                        html=html,
+                        mode="rendered_html",
+                        note=f"After click {index + 1} using {click_selector}.",
+                    )
                     page_jobs, stats = extract_jobs_with_recipe_with_stats(
                         html,
                         base_url=final_url,
@@ -368,9 +438,10 @@ def fetch_browser_click_pagination_job_pages(
                             "Browser-click pagination did not change the listing page. "
                             "The click selector or session state may be wrong."
                         )
-                    if page_jobs and stats.extracted_jobs == 0 and stats.duplicate_count >= len(page_jobs):
+                    if page_jobs and stats.duplicate_count and stats.extracted_jobs == 0:
                         warnings.append(
-                            f"Browser-click pagination page {final_url} returned only listings already seen on earlier pages."
+                            f"Browser-click pagination page {final_url} returned {stats.duplicate_count} duplicate "
+                            "listing(s) already seen on earlier pages and added no new jobs."
                         )
                     page_stats.append(stats)
                     _record_recipe_step(
@@ -523,3 +594,11 @@ def _record_recipe_step(
 def _emit_recipe_step(progress_callback: RecipeProgressCallback | None, step: RecipeRunStep) -> None:
     if progress_callback:
         progress_callback(step)
+
+
+def _record_material_html(material_log: Any, **kwargs: Any) -> None:
+    if not material_log:
+        return
+    recorder = getattr(material_log, "record_html", None)
+    if callable(recorder):
+        recorder(**kwargs)

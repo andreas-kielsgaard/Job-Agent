@@ -4,14 +4,15 @@ from pathlib import Path
 
 from job_agent.config import load_profile
 from job_agent.generator import generate_materials, maybe_generate_application_with_llm, select_experience
-from job_agent.models import Job, MatchResult
 from job_agent.llm import LlmCompletion
+from job_agent.models import Job, MatchResult
+from job_agent.scoring import score_job
 
 
 def test_fiori_role_includes_fiori_caveat(template_project: Path) -> None:
     profile = load_profile(template_project)
     job = Job(title="SAP Fiori Backend Developer", description="Fiori UI5 with ABAP Gateway backend")
-    match = MatchResult(total_score=65, category="exploratory")
+    match = score_job(job, profile)
 
     package = generate_materials(job, match, profile, use_llm=False, root=template_project)
 
@@ -21,7 +22,7 @@ def test_fiori_role_includes_fiori_caveat(template_project: Path) -> None:
 def test_project_manager_role_includes_pm_caveat(template_project: Path) -> None:
     profile = load_profile(template_project)
     job = Job(title="SAP Project Manager", description="Project manager with SAP delivery coordination")
-    match = MatchResult(total_score=62, category="exploratory")
+    match = score_job(job, profile)
 
     package = generate_materials(job, match, profile, use_llm=False, root=template_project)
 
@@ -52,6 +53,69 @@ def test_selected_experience_prefers_keyword_relevance(template_project: Path) -
     selected = select_experience(Job(title="SAP QM OData ABAP", description="OData QM ABAP"), profile)
 
     assert selected[0]["company"] == "LEGO"
+
+
+def test_selected_experience_uses_linked_profile_terms(template_project: Path) -> None:
+    profile = load_profile(template_project)
+    profile["experience"].append(
+        {
+            "company": "Linked",
+            "role": "Relevant",
+            "highlights": ["Linked evidence."],
+            "keywords": [],
+            "linked_skills": ["RAP"],
+            "linked_modules": [],
+            "linked_roles": [],
+        }
+    )
+    selected = select_experience(Job(title="RAP Developer", description="RAP implementation"), profile)
+
+    assert selected[0]["company"] == "Linked"
+
+
+def test_application_generation_includes_relevant_human_examples(monkeypatch, template_project: Path) -> None:
+    (template_project / "prompts" / "generate_application.md").write_text(
+        "Examples:\n{application_examples}\n\nJob: {title}\n{description}",
+        encoding="utf-8",
+    )
+    (template_project / "profile" / "application-examples.yaml").write_text(
+        "application_examples:\n"
+        "  - id: example-1\n"
+        "    label: ABAP note\n"
+        "    application_text: Human edited ABAP application phrasing.\n"
+        "    linked_skills:\n"
+        "      - ABAP\n",
+        encoding="utf-8",
+    )
+    profile = load_profile(template_project)
+    prompts = []
+
+    class FakeLlmService:
+        def __init__(self, root: Path) -> None:
+            self.root = root
+
+        def model_name(self) -> str:
+            return "fake-model"
+
+        def is_configured(self) -> bool:
+            return True
+
+        def complete(self, prompt: str, **kwargs) -> LlmCompletion:
+            prompts.append(prompt)
+            return LlmCompletion(text="LLM application text", model="fake-model")
+
+    monkeypatch.setattr("job_agent.generator.LlmService", FakeLlmService)
+
+    package = generate_materials(
+        Job(title="SAP ABAP Consultant", description="ABAP delivery"),
+        MatchResult(total_score=80, category="strong", matched_keywords=["ABAP"]),
+        profile,
+        use_llm=True,
+        root=template_project,
+    )
+
+    assert package.application == "LLM application text\n"
+    assert "Human edited ABAP application phrasing." in prompts[0]
 
 
 def test_application_generation_uses_llm_service(monkeypatch, template_project: Path) -> None:

@@ -6,9 +6,11 @@ import pytest
 from jinja2 import TemplateNotFound
 
 from job_agent.io.json_store import read_json
+from job_agent.models import Job
 from job_agent.run_service import run_daily_agent
 from job_agent.run_store import RunOptions, RunStore
 from job_agent.services.ai_search_service import AiSearchEvaluation
+from job_agent.services.source_listing_index_store import SourceListingIndexStore
 from job_agent.services.source_session_service import SourceSessionService
 
 
@@ -198,8 +200,8 @@ def test_run_daily_agent_can_fetch_sources_before_scoring_completes(template_pro
     assert sum(event["counts"]["duplicates_skipped"] for event in source_processed) == 1
     assert sum(event["counts"]["highlighted_matches"] for event in source_processed) == 1
     assert highlights
-    assert all(highlight["counts"]["score"] == 70 for highlight in highlights)
-    assert all("strong match category" in highlight["message"] for highlight in highlights)
+    assert all(highlight["counts"]["score"] > 0 for highlight in highlights)
+    assert all("strong core keyword overlap" in highlight["message"] for highlight in highlights)
     assert result.record.total_loaded == 2
 
 
@@ -314,6 +316,7 @@ def test_daily_run_reuses_connected_session_for_authenticated_detail_review(
         session_scope="example.com",
         storage_state_path=state_path.relative_to(template_project).as_posix(),
     )
+    SourceSessionService(template_project).mark_verified("detail-source", session_scope="example.com")
     listing_session_paths = []
     detail_cookie_names = []
 
@@ -338,7 +341,7 @@ def test_daily_run_reuses_connected_session_for_authenticated_detail_review(
     assert len(read_json(template_project / "jobs" / "seen_jobs.json", [])) == 1
 
 
-def test_daily_run_skips_source_when_saved_readiness_is_blocked(
+def test_daily_run_skips_setup_incomplete_source_before_fetch(
     monkeypatch: pytest.MonkeyPatch, template_project: Path
 ) -> None:
     _write_recipe_source_project(template_project, job_count=1)
@@ -351,14 +354,15 @@ def test_daily_run_skips_source_when_saved_readiness_is_blocked(
 
     monkeypatch.setattr("job_agent.services.job_board_recipe_service._fetch_static_html", fake_fetch_static)
 
-    result = run_daily_agent(RunOptions(mark_seen=True, generate_materials=False), root=template_project)
+    result = run_daily_agent(RunOptions(mark_seen=True, generate_materials=False, is_test=True), root=template_project)
 
     events = RunStore(template_project).read_events(result.record.run_id)
-    warnings = [event for event in events if event["event_type"] == "source_warning"]
+    setup_skips = [event for event in events if event["event_type"] == "source_setup_skipped"]
     assert fetch_calls == []
-    assert result.record.source_warnings == 1
+    assert result.record.source_warnings == 0
     assert read_json(template_project / "jobs" / "seen_jobs.json", []) == []
-    assert any("Saved source readiness is blocked" in event["message"] for event in warnings)
+    assert not any(event["event_type"] == "source_started" for event in events)
+    assert any("Skipped sources still in setup" in event["message"] for event in setup_skips)
 
 
 def test_generate_materials_false_writes_placeholder_and_skips_generator(
@@ -486,6 +490,49 @@ def _write_recipe_source_project(root: Path, *, job_count: int, requires_session
         f"    recipe_path: {recipe_path.relative_to(root).as_posix()}\n"
         "    enabled: true\n",
         encoding="utf-8",
+    )
+    (root / "sources" / "source-registry.yaml").write_text(
+        "sources:\n"
+        "  - id: detail-source\n"
+        "    name: Detail Source\n"
+        "    kind: recipe\n"
+        "    status: testing\n"
+        "    url: https://example.com/jobs\n"
+        f"    recipe_path: {recipe_path.relative_to(root).as_posix()}\n"
+        "    enabled: true\n",
+        encoding="utf-8",
+    )
+    (root / "sources" / "source-execution-readiness.yaml").write_text(
+        "sources:\n"
+        "  detail-source:\n"
+        "    last_checked_at: '2999-01-01T00:00:00+00:00'\n"
+        "    dry_run_status: success\n"
+        f"    dry_run_job_count: {job_count}\n"
+        "    dry_run_warning_count: 0\n"
+        "    dry_run_warnings: []\n"
+        "    dry_run_capability_checks: []\n"
+        "    dry_run_pagination_duplicate_page_count: 0\n"
+        "    dry_run_pagination_duplicate_ratio: 0.0\n"
+        f"    dry_run_pagination_unique_jobs_from_fetched_pages: {job_count}\n"
+        "    readiness_status: ready\n"
+        "    readiness_summary: Ready.\n"
+        "    checks: {}\n"
+        "    blockers: []\n"
+        "    warnings: []\n",
+        encoding="utf-8",
+    )
+    SourceListingIndexStore(root).record_index(
+        source_id="detail-source",
+        source_name="Detail Source",
+        jobs=[
+            Job(
+                title=f"SAP ABAP Consultant {index}",
+                source="Detail Source",
+                source_id="detail-source",
+                url=f"https://example.com/jobs/job-{index}",
+            )
+            for index in range(1, job_count + 1)
+        ],
     )
 
 

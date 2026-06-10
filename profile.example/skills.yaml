@@ -1,40 +1,18 @@
 experience_level:
-  sap_experience: "X+ years"
-  freelance_status: "Freelance consultant"
+  years_experience: ""
+  current_status: ""
 
 skills:
-  strongest:
-    - SAP ABAP
-    - ABAP OO
-    - RAP
-    - CDS Views
-    - OData / SAP Gateway
-    - Debugging
+  strongest: []
   modules:
-    strong:
-      - QM
-      - WM
-      - MM
-    experienced:
-      - SD
-      - PP
-    adjacent:
-      - Fiori
-      - SAPUI5
-      - BTP
-  caveats:
-    fiori: "Describe your actual Fiori/UI5 depth honestly."
-    project_management: "Describe your actual project management or coordination depth honestly."
+    strong: []
+    experienced: []
+    adjacent: []
+  caveats: {}
 
 target_roles:
-  high_match:
-    - SAP ABAP Developer
-    - SAP ABAP Consultant
-    - SAP RAP Developer
-    - SAP Gateway / OData Developer
-  exploratory_match:
-    - Junior SAP Project Manager
-    - SAP Technical Lead
-  lower_match:
-    - Pure frontend Fiori/UI5 role
-    - Pure functional role without development
+  high_match: []
+  exploratory_match: []
+  lower_match: []
+
+target_role_aliases: {}

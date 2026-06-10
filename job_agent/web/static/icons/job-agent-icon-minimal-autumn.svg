@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <title>Job Agent icon</title>
+  <desc>Minimal flat forest and autumn colored icon for a generic job agent app.</desc>
+
+  <rect width="1024" height="1024" rx="210" fill="#253529"/>
+
+  <path
+    d="M390 405V363C390 317 424 288 476 288H548C600 288 634 317 634 363V405"
+    stroke="#EFE3C8"
+    stroke-width="56"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+
+  <rect x="250" y="392" width="524" height="352" rx="76" fill="#EFE3C8"/>
+
+  <path d="M250 505H774" stroke="#4A3024" stroke-opacity="0.20" stroke-width="28"/>
+
+  <rect x="466" y="477" width="92" height="70" rx="22" fill="#253529"/>
+
+  <path
+    d="M382 616L466 690L642 526"
+    stroke="#B96838"
+    stroke-width="64"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+</svg>

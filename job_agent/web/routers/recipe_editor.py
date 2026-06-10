@@ -27,6 +27,7 @@ def recipe_editor(
         "recipe_editor.html",
         {
             "request": request,
+            "title": "Recipe Editor",
             "state": state,
             "recipe_options": recipe_options(root),
             "saved": saved,

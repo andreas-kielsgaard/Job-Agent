@@ -11,6 +11,7 @@ from job_agent.services.execution_source_service import ExecutionSourceService
 from job_agent.services.recipe_preview_service import RecipePreviewResult
 from job_agent.services.source_execution_readiness_service import SourceExecutionReadinessService
 from job_agent.services.source_health_service import SourceHealthService
+from job_agent.services.source_listing_index_store import SourceListingIndexStore
 from job_agent.services.source_registry_service import SourceRegistryService
 from job_agent.services.source_session_service import SourceSessionService
 from job_agent.services.source_test_service import SourceTestJobPreview, SourceTestResult
@@ -413,7 +414,10 @@ def test_cli_source_test_save_readiness_prints_saved_summary(monkeypatch, capsys
 
     output = capsys.readouterr().out
     assert "Readiness saved: ready" in output
-    assert "No packages, seen state, materials, digests, or run records were written." in output
+    assert "Listing index refreshed: 1 listings" in output
+    assert "No packages, seen state, application materials, digests, or run records were written." in output
+    assert SourceListingIndexStore(project_root).summary_for_source("eursap-jobs").indexed_count == 1
+    assert not (project_root / "jobs" / "seen_jobs.json").exists()
 
 
 def test_cli_go_live_status_and_enable_when_ready(capsys, project_root: Path) -> None:

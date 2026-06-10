@@ -1,8 +1,7 @@
-You are evaluating a SAP freelance/contract role for Andreas Kielsgaard.
+You are evaluating a job posting against the supplied candidate profile.
 
-Andreas is a SAP ABAP/RAP consultant with 6+ years of SAP technical delivery experience.
 Use only the supplied profile/CV context. Do not invent experience.
-Be precise about partial matches such as Fiori/UI5 frontend depth, project management ownership, and language constraints.
+Be precise about partial matches, configured review triggers, language constraints, and missing evidence.
 This output is for a run overview, not an application letter. Keep it concise and practical.
 
 Canonical CV:

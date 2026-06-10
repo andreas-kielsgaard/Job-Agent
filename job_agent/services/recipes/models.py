@@ -1,19 +1,22 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Any
 
 from job_agent.models import Job
 
 SelectorValue = str | list[str]
 VALID_MODES = {"static_html", "rendered_html"}
 VALID_PAGINATION_STRATEGIES = {"url", "ajax", "browser_click"}
+VALID_API_METHODS = {"GET", "POST"}
+VALID_API_PAGINATION_STRATEGIES = {"none", "page", "offset"}
 
 
 @dataclass
 class ListingRecipe:
-    card_selector: str
-    title_selector: SelectorValue
-    link_selector: SelectorValue
+    card_selector: str = ""
+    title_selector: SelectorValue = ""
+    link_selector: SelectorValue = ""
     company_selector: SelectorValue = ""
     location_selector: SelectorValue = ""
     remote_selector: SelectorValue = ""
@@ -50,6 +53,56 @@ class PaginationRecipe:
     ajax_url_template: str = ""
     max_pages: int = 1
     request_delay_seconds: float = 1.0
+
+
+@dataclass
+class ApiFieldMapping:
+    title: str = ""
+    url: str = ""
+    url_template: str = ""
+    application_url: str = ""
+    company: str = ""
+    recruiter: str = ""
+    end_client: str = ""
+    location: str = ""
+    remote: str = ""
+    rate: str = ""
+    workload: str = ""
+    contract_duration: str = ""
+    posted_date: str = ""
+    start_date: str = ""
+    deadline: str = ""
+    languages: str = ""
+    description: str = ""
+    description_html: str = ""
+    raw_text: str = ""
+    job_id: str = ""
+
+
+@dataclass
+class ApiPaginationRecipe:
+    strategy: str = "none"
+    page_param: str = ""
+    page_start: int = 1
+    offset_param: str = ""
+    offset_start: int = 0
+    page_size_param: str = ""
+    page_size: int = 0
+    max_pages: int = 1
+    request_delay_seconds: float = 1.0
+
+
+@dataclass
+class ApiRequestRecipe:
+    method: str = "GET"
+    url: str = ""
+    headers: dict[str, str] = field(default_factory=dict)
+    params: dict[str, Any] = field(default_factory=dict)
+    body: dict[str, Any] = field(default_factory=dict)
+    results_path: str = ""
+    total_path: str = ""
+    fields: ApiFieldMapping = field(default_factory=ApiFieldMapping)
+    pagination: ApiPaginationRecipe = field(default_factory=ApiPaginationRecipe)
 
 
 @dataclass
@@ -128,12 +181,14 @@ class RecipeCapabilityCheck:
     def label(self) -> str:
         labels = {
             "listing_cards": "Listing cards",
+            "api_listing": "API listing",
             "listing_total_access": "Listing total access",
             "job_urls": "Job URLs",
             "pagination_detection": "Pagination detection",
             "pagination_strategy": "Pagination strategy",
             "pagination_navigation": "Pagination navigation",
             "ajax_pagination": "AJAX pagination",
+            "api_pagination": "API pagination",
             "browser_click_pagination": "Browser-click pagination",
             "pagination_duplicate_pages": "Duplicate pagination pages",
             "source_access": "Source access",
@@ -180,11 +235,13 @@ class PatternsRecipe:
 @dataclass
 class JobBoardRecipe:
     source_name: str
-    listing: ListingRecipe
+    listing: ListingRecipe = field(default_factory=ListingRecipe)
     start_url: str = ""
     mode: str = "static_html"
     access: AccessRecipe = field(default_factory=AccessRecipe)
     accept: AcceptRecipe = field(default_factory=AcceptRecipe)
+    listing_api: ApiRequestRecipe = field(default_factory=ApiRequestRecipe)
+    detail_api: ApiRequestRecipe = field(default_factory=ApiRequestRecipe)
     detail: DetailRecipe = field(default_factory=DetailRecipe)
     pagination: PaginationRecipe = field(default_factory=PaginationRecipe)
     reject: RejectRecipe = field(default_factory=RejectRecipe)
@@ -234,3 +291,7 @@ class RecipeExtractionResult:
     pagination_unique_jobs_from_fetched_pages: int = 0
     pagination_strategy_used: str = ""
     interactive_pagination_control_count: int = 0
+    access_strategy: str = "html"
+    api_request_count: int = 0
+    records_observed_count: int = 0
+    json_records_extracted_count: int = 0

@@ -11,6 +11,7 @@ from job_agent.models import Job
 from job_agent.services.extraction_quality import title_quality
 from job_agent.services.recipes.mapping import _selectors
 from job_agent.services.recipes.models import (
+    ApiFieldMapping,
     JobBoardRecipe,
     ListingExtractionStats,
     PatternsRecipe,
@@ -91,6 +92,231 @@ def extract_jobs_with_recipe_with_stats(
             break
     stats.extracted_jobs = len(jobs)
     return jobs, stats
+
+
+def extract_jobs_from_api_payload_with_stats(
+    payload: Any,
+    base_url: str,
+    recipe: JobBoardRecipe,
+    *,
+    source_name: str = "",
+    use_recipe_card_limit: bool = True,
+) -> tuple[list[Job], ListingExtractionStats, int]:
+    records = json_path(payload, recipe.listing_api.results_path)
+    if not isinstance(records, list):
+        records = []
+    total = json_path(payload, recipe.listing_api.total_path) if recipe.listing_api.total_path else 0
+    total_count = _int_value(total)
+    stats = ListingExtractionStats(
+        page_url=base_url,
+        observed_cards=len(records),
+        limit=recipe.limits.max_cards if use_recipe_card_limit else 0,
+    )
+    jobs = jobs_from_api_records(
+        records,
+        base_url,
+        recipe,
+        source_name=source_name,
+        stats=stats,
+        use_recipe_card_limit=use_recipe_card_limit,
+    )
+    stats.extracted_jobs = len(jobs)
+    return jobs, stats, total_count
+
+
+def jobs_from_api_records(
+    records: list[Any],
+    base_url: str,
+    recipe: JobBoardRecipe,
+    *,
+    source_name: str = "",
+    stats: ListingExtractionStats | None = None,
+    use_recipe_card_limit: bool = True,
+) -> list[Job]:
+    stats = stats or ListingExtractionStats(page_url=base_url, observed_cards=len(records))
+    jobs: list[Job] = []
+    seen_urls: set[str] = set()
+    card_limit = recipe.limits.max_cards if use_recipe_card_limit else 0
+    for index, record in enumerate(records):
+        if not isinstance(record, dict):
+            stats.rejected_count += 1
+            continue
+        job = job_from_api_record(record, base_url, recipe, source_name=source_name)
+        if not job.url:
+            stats.missing_url_count += 1
+            continue
+        if should_reject(job.title, job.url, job.description, recipe):
+            stats.rejected_count += 1
+            continue
+        if job.url in seen_urls:
+            stats.duplicate_count += 1
+            continue
+        seen_urls.add(job.url)
+        jobs.append(job)
+        if card_limit and len(jobs) >= card_limit:
+            stats.limit_skipped_count += max(0, len(records) - index - 1)
+            break
+    return jobs
+
+
+def job_from_api_record(
+    record: dict[str, Any],
+    base_url: str,
+    recipe: JobBoardRecipe,
+    *,
+    source_name: str = "",
+) -> Job:
+    fields = recipe.listing_api.fields
+    title = _api_text(record, fields.title)
+    url = _api_url(record, fields, base_url)
+    description = _api_description(record, fields)
+    raw_text = _api_text(record, fields.raw_text) or description or json.dumps(record, ensure_ascii=False)
+    job_id = _api_text(record, fields.job_id)
+    notes = ["Recipe API extraction; verify details manually."]
+    if job_id:
+        notes.append(f"Recipe extracted job ID: {job_id}")
+    return Job(
+        title=title,
+        company=_api_text(record, fields.company) or "Unknown",
+        recruiter=_api_text(record, fields.recruiter),
+        end_client=_api_text(record, fields.end_client),
+        source=source_name or recipe.source_name,
+        url=url,
+        application_url=_api_text(record, fields.application_url) or url,
+        location=_api_text(record, fields.location) or "Not listed",
+        remote=_api_text(record, fields.remote) or "Not listed",
+        rate=_api_text(record, fields.rate) or "Not listed",
+        contract_duration=_api_text(record, fields.contract_duration) or "Not listed",
+        start_date=_api_text(record, fields.start_date) or "Not listed",
+        posted_date=_api_text(record, fields.posted_date) or "Not listed",
+        deadline=_api_text(record, fields.deadline) or "Not listed",
+        workload=_api_text(record, fields.workload) or "Not listed",
+        languages=_api_list(record, fields.languages),
+        description=html_to_text(description)[:3000],
+        raw_text=html_to_text(raw_text)[:5000],
+        source_confidence="recipe-api",
+        freshness_confidence="recipe" if _api_text(record, fields.posted_date) else "unknown",
+        extraction_notes=notes,
+    )
+
+
+def apply_detail_api_record(job: Job, record: Any, recipe: JobBoardRecipe) -> dict[str, str]:
+    if not isinstance(record, dict):
+        return {}
+    fields = recipe.detail_api.fields
+    found_values = {
+        "title": _api_text(record, fields.title),
+        "description": _api_description(record, fields),
+        "location": _api_text(record, fields.location),
+        "remote": _api_text(record, fields.remote),
+        "rate": _api_text(record, fields.rate),
+        "workload": _api_text(record, fields.workload),
+        "posted_date": _api_text(record, fields.posted_date),
+        "start_date": _api_text(record, fields.start_date),
+        "languages": _api_text(record, fields.languages),
+    }
+    found_values = {field_name: value for field_name, value in found_values.items() if value}
+    if found_values.get("title"):
+        job.title = found_values["title"]
+    if found_values.get("description"):
+        cleaned_description = html_to_text(found_values["description"])
+        job.description = cleaned_description[:3000]
+        job.raw_text = cleaned_description[:5000]
+    for field_name in ["location", "remote", "rate", "workload", "posted_date", "start_date"]:
+        if found_values.get(field_name) and getattr(job, field_name) == "Not listed":
+            setattr(job, field_name, found_values[field_name])
+    if found_values.get("languages") and not job.languages:
+        job.languages = [found_values["languages"]]
+    if found_values and "Detail API fetched by recipe; verify details manually." not in job.extraction_notes:
+        job.extraction_notes.append("Detail API fetched by recipe; verify details manually.")
+    return found_values
+
+
+def json_path(value: Any, path: str) -> Any:
+    path = str(path or "").strip()
+    if not path or path == "$":
+        return value
+    if path.startswith("$."):
+        path = path[2:]
+    elif path.startswith("$"):
+        path = path[1:].lstrip(".")
+    current = value
+    for token in [part for part in path.split(".") if part]:
+        if isinstance(current, dict):
+            current = current.get(token)
+        elif isinstance(current, list) and token.isdigit():
+            index = int(token)
+            current = current[index] if 0 <= index < len(current) else None
+        else:
+            return None
+    return current
+
+
+def render_template_from_record(template: str, record: dict[str, Any]) -> str:
+    def replace(match: re.Match[str]) -> str:
+        value = json_path(record, match.group(1))
+        return "" if value is None else str(value)
+
+    return re.sub(r"\{([^{}]+)\}", replace, template)
+
+
+def render_template_value(value: Any, context: dict[str, Any] | None) -> Any:
+    if context is None:
+        return value
+    if isinstance(value, str):
+        return render_template_from_record(value, context)
+    if isinstance(value, list):
+        return [render_template_value(item, context) for item in value]
+    if isinstance(value, dict):
+        return {key: render_template_value(item, context) for key, item in value.items()}
+    return value
+
+
+def _api_url(record: dict[str, Any], fields: ApiFieldMapping, base_url: str) -> str:
+    if fields.url_template:
+        return urljoin(base_url, render_template_from_record(fields.url_template, record))
+    url = _api_text(record, fields.url)
+    return urljoin(base_url, url) if url else ""
+
+
+def _api_description(record: dict[str, Any], fields: ApiFieldMapping) -> str:
+    return _api_text(record, fields.description_html) or _api_text(record, fields.description)
+
+
+def _api_text(record: dict[str, Any], path: str) -> str:
+    if not path:
+        return ""
+    value = json_path(record, path)
+    return _string_value(value)
+
+
+def _api_list(record: dict[str, Any], path: str) -> list[str]:
+    value = json_path(record, path) if path else []
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    text = _string_value(value)
+    if not text:
+        return []
+    return [item.strip() for item in re.split(r"[,;/]", text) if item.strip()]
+
+
+def _string_value(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "Yes" if value else "No"
+    if isinstance(value, (list, tuple)):
+        return ", ".join(_string_value(item) for item in value if _string_value(item))
+    if isinstance(value, dict):
+        return ""
+    return re.sub(r"\s+", " ", str(value)).strip()
+
+
+def _int_value(value: Any) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
 
 
 def apply_detail_html(job: Job, html: str, recipe: JobBoardRecipe) -> dict[str, str]:

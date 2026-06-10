@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import json
 import shutil
+from collections.abc import Callable
 from dataclasses import asdict
 from datetime import date
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from dotenv import dotenv_values
 
@@ -14,7 +15,14 @@ from job_agent.io.atomic import atomic_write_text
 from job_agent.io.yaml_store import read_yaml, write_yaml
 from job_agent.llm import LlmService
 from job_agent.models import Job
-from job_agent.scoring import match_engine_config_from_profile, normalize_match_engine_config, score_job
+from job_agent.scoring import (
+    match_engine_config_from_profile,
+    normalize_ai_review_policy,
+    normalize_language_policy,
+    normalize_match_engine_config,
+    score_job,
+)
+from job_agent.services.application_examples_service import ApplicationExamplesService
 from job_agent.services.package_index_service import PackageIndexService
 
 AUTO_CONFIG_TARGETS = (
@@ -60,6 +68,7 @@ class SetupService:
             else [],
             "canonical_cv": self.read_text("profile/canonical-cv.md"),
             "writing_style": self.read_text("profile/writing-style.md"),
+            "application_examples": ApplicationExamplesService(self.root).list_examples(),
         }
 
     def setup_files(self) -> dict[str, dict[str, str]]:
@@ -91,6 +100,13 @@ class SetupService:
                 "path": "profile/writing-style.md",
                 "content": self.read_text("profile/writing-style.md"),
                 "help": "Tone and wording guidance for generated text.",
+            },
+            "application_examples": {
+                "label": "Example applications",
+                "field_id": "profile.application_examples",
+                "path": "profile/application-examples.yaml",
+                "content": self.read_text("profile/application-examples.yaml"),
+                "help": "Human-edited application examples used as style and positioning context for AI-assisted drafting.",
             },
             "cv_template": {
                 "label": "At-a-glance CV template",
@@ -205,7 +221,7 @@ class SetupService:
         )
         llm = LlmService(self.root)
         if not llm.is_configured():
-            raise ValueError("Claude is not configured. Add an Anthropic API key in AI Writing first.")
+            raise ValueError("Claude is not configured. Add an Anthropic API key in AI Review & Writing first.")
         _profile_draft_progress(
             progress_callback,
             "Calling Claude",
@@ -326,7 +342,16 @@ class SetupService:
             if "preferences" in targets:
                 patch = data.get("preferences_yaml")
                 if isinstance(patch, dict):
-                    for key in ["availability", "location_policy", "role_preferences", "thresholds"]:
+                    for key in [
+                        "availability",
+                        "location_policy",
+                        "role_preferences",
+                        "thresholds",
+                        "match_review",
+                        "ai_review_policy",
+                        "language_policy",
+                        "highlighting",
+                    ]:
                         if key in patch:
                             preferences[key] = patch[key]
                     applied.append("preferences")
@@ -346,7 +371,7 @@ class SetupService:
         current_profile = load_profile(self.root)
         requested = ", ".join(targets)
         default_match_engine = normalize_match_engine_config({})
-        return f"""You are configuring a local SAP job matching profile from a CV.
+        return f"""You are configuring a local job matching profile from a CV.
 
 Use only evidence present in the CV. Do not invent employers, dates, languages, rates, locations, or certifications.
 Return only valid JSON. Include only keys needed for the requested sections.
@@ -359,11 +384,11 @@ Output schema:
 {{
   "canonical_cv": "Markdown CV narrative evidence when requested.",
   "skills_yaml": {{
-    "experience_level": {{"sap_experience": "...", "freelance_status": "..."}},
+    "experience_level": {{"years_experience": "...", "current_status": "..."}},
     "skills": {{
       "strongest": ["..."],
       "modules": {{"strong": ["..."], "experienced": ["..."], "adjacent": ["..."]}},
-      "caveats": {{"fiori": "...", "project_management": "..."}}
+      "caveats": {{"example_caveat_key": "Honest limitation or positioning note."}}
     }},
     "target_roles": {{"high_match": ["..."], "exploratory_match": ["..."], "lower_match": ["..."]}}
   }},
@@ -372,7 +397,20 @@ Output schema:
     "availability": {{"available_from": "...", "logistics": "..."}},
     "location_policy": {{"current_base": "...", "onsite_roles": "...", "preferred_regions": ["..."]}},
     "role_preferences": {{"preferred_contract_types": ["..."], "avoid_contract_types": ["..."], "interests": ["..."]}},
-    "thresholds": {{"minimum_digest_score": 45}}
+    "thresholds": {{"minimum_digest_score": 45}},
+    "match_review": {{"caveat_rules": [
+      {{"id": "example_review", "label": "Example review trigger", "terms": ["..."], "caveat_key": "example_caveat_key", "ai_review": true}}
+    ]}},
+    "ai_review_policy": {{
+      "min_score": 35,
+      "evaluate_categories": ["strong", "exploratory"],
+      "trigger_on_highlights": true,
+      "trigger_on_review_triggers": true,
+      "trigger_on_low_source_confidence": true,
+      "evaluate_excluded_with_triggers": false
+    }},
+    "language_policy": {{"acceptable": ["..."], "fluent": ["..."], "exclude_if_mandatory_unmatched": true}},
+    "highlighting": {{"core_match_groups": ["..."], "min_core_matches": 3, "high_rate_threshold": 700}}
   }},
   "match_engine": {{
     "remote_policy": "required|strong_preference|slight_preference|neutral",
@@ -381,10 +419,10 @@ Output schema:
     "technical_cap": 55,
     "module_cap": 25,
     "technical_keyword_groups": [
-      {{"label": "ABAP variants", "terms": ["abap", "abap coding", "abap development"], "score": 22, "mode": "bonus|required"}}
+      {{"label": "Primary skill variants", "terms": ["primary skill", "alternate wording"], "score": 22, "mode": "bonus|required"}}
     ],
     "module_keyword_groups": [
-      {{"label": "QM", "terms": ["qm", "quality management"], "score": 7, "mode": "bonus|required"}}
+      {{"label": "Domain or specialization", "terms": ["domain term"], "score": 7, "mode": "bonus|required"}}
     ],
     "contract_keyword_groups": [
       {{"label": "Contract / freelance", "terms": ["contract", "freelance"], "score": 8, "mode": "bonus|required"}}
@@ -414,24 +452,101 @@ CV text:
         return {key: str(form.get(key, defaults[key]) or "") for key in defaults}
 
     def default_sandbox_input(self) -> dict[str, str]:
+        profile = load_profile(self.root)
+        target_roles = profile.get("target_roles", {})
+        high_match_roles = target_roles.get("high_match", []) if isinstance(target_roles, dict) else []
+        title = str((high_match_roles or [profile.get("contact", {}).get("title") or "Sample Role"])[0])
+        skills = profile.get("skills", {}).get("strongest", [])
+        required_skills = "\n".join(str(skill) for skill in skills[:5]) or "Primary skill\nRelated skill"
         return {
-            "title": "SAP ABAP RAP Consultant",
+            "title": title,
             "company": "Example Client",
             "source": "Scoring Sandbox",
             "url": "",
             "application_url": "",
-            "location": "Remote EU",
+            "location": "Remote",
             "remote": "Remote",
-            "rate": "EUR 800/day",
+            "rate": "Not listed",
             "contract_duration": "6 months",
             "start_date": "",
             "posted_date": str(date.today()),
             "deadline": "",
             "workload": "Contract",
             "languages": "English",
-            "required_skills": "ABAP\nRAP\nCDS\nOData\nGateway",
-            "required_modules": "QM",
-            "description": "Contract SAP ABAP role with RAP, CDS, OData, SAP Gateway, and S/4HANA delivery.",
+            "required_skills": required_skills,
+            "required_modules": "",
+            "description": "Sample posting text with the role's most relevant skills, responsibilities, and constraints.",
+        }
+
+    def profile_editor_model(self) -> dict[str, Any]:
+        skills_yaml = self.load_yaml_file("profile/skills.yaml")
+        preferences = self.load_yaml_file("profile/preferences.yaml")
+        experience_yaml = self.load_yaml_file("profile/experience.yaml")
+        skills = skills_yaml.get("skills", {}) if isinstance(skills_yaml.get("skills"), dict) else {}
+        modules = skills.get("modules", {}) if isinstance(skills.get("modules"), dict) else {}
+        match_engine = normalize_match_engine_config(preferences.get("match_engine", {}))
+        technical_by_label = _rules_by_label(match_engine["technical_keyword_groups"])
+        module_by_label = _rules_by_label(match_engine["module_keyword_groups"])
+        caveat_rules = _caveat_rules_by_key(preferences.get("match_review", {}))
+        target_roles = skills_yaml.get("target_roles", {}) if isinstance(skills_yaml.get("target_roles"), dict) else {}
+        role_aliases = (
+            skills_yaml.get("target_role_aliases", {})
+            if isinstance(skills_yaml.get("target_role_aliases"), dict)
+            else {}
+        )
+
+        return {
+            "skills": [
+                _editable_match_item(name, technical_by_label.get(_label_key(name)), default_score=20)
+                for name in _list(skills.get("strongest", []))
+            ],
+            "modules": [
+                {
+                    **_editable_match_item(name, module_by_label.get(_label_key(name)), default_score=7),
+                    "lane": lane,
+                }
+                for lane in ["strong", "experienced", "adjacent"]
+                for name in _list(modules.get(lane, []))
+            ],
+            "target_roles": [
+                {"bucket": bucket, "name": name, "aliases": _list(role_aliases.get(name, []))}
+                for bucket in ["high_match", "exploratory_match", "lower_match"]
+                for name in _list(target_roles.get(bucket, []))
+            ],
+            "caveats": [
+                {
+                    "key": key,
+                    "text": text,
+                    "terms": _list(caveat_rules.get(key, {}).get("terms", [])),
+                    "ai_review": caveat_rules.get(key, {}).get("ai_review", True),
+                }
+                for key, text in _dict(skills.get("caveats", {})).items()
+            ],
+            "case_studies": _list(experience_yaml.get("experience", [])),
+            "application_examples": ApplicationExamplesService(self.root).list_examples(),
+        }
+
+    def ai_policy_form_model(self) -> dict[str, Any]:
+        preferences = self.load_yaml_file("profile/preferences.yaml")
+        policy = normalize_ai_review_policy(preferences)
+        language = normalize_language_policy(preferences)
+        highlighting = preferences.get("highlighting", {}) if isinstance(preferences.get("highlighting"), dict) else {}
+        thresholds = preferences.get("thresholds", {}) if isinstance(preferences.get("thresholds"), dict) else {}
+        return {
+            "ai_review_policy": policy,
+            "language_policy": language,
+            "highlighting": {
+                "core_match_groups": _list(highlighting.get("core_match_groups", [])),
+                "min_core_matches": _int_or_default(highlighting.get("min_core_matches"), 3),
+                "high_rate_threshold": _int_or_default(highlighting.get("high_rate_threshold"), 700),
+            },
+            "minimum_digest_score": _int_or_default(thresholds.get("minimum_digest_score"), 45),
+            "category_options": [
+                {"value": "strong", "label": "Strong"},
+                {"value": "exploratory", "label": "Exploratory"},
+                {"value": "weak", "label": "Weak"},
+                {"value": "excluded", "label": "Excluded"},
+            ],
         }
 
     def sandbox_input_from_package(self, job_id: str, run_id: str = "") -> dict[str, str] | None:
@@ -488,6 +603,9 @@ CV text:
             "recommended_angle": match.recommended_angle,
             "exclusion_reason": match.exclusion_reason,
             "matched_keywords": match.matched_keywords,
+            "review_triggers": match.review_triggers,
+            "review_trigger_labels": match.review_trigger_labels,
+            "deterministic_confidence": match.deterministic_confidence,
             "job": asdict(job),
         }
 
@@ -549,7 +667,7 @@ CV text:
         onsite_roles: str,
         preferred_regions: str,
         interests: str,
-        minimum_digest_score: int,
+        minimum_digest_score: int | None = None,
     ) -> None:
         path = self.root / "profile" / "preferences.yaml"
         data = read_yaml(path, {})
@@ -562,9 +680,235 @@ CV text:
         role_preferences = data.get("role_preferences", {})
         role_preferences["interests"] = lines_to_list(interests)
         data["role_preferences"] = role_preferences
+        if minimum_digest_score is not None:
+            thresholds = data.get("thresholds", {})
+            thresholds["minimum_digest_score"] = minimum_digest_score
+            data["thresholds"] = thresholds
+        write_yaml(path, data)
+
+    def save_run_inclusion(self, minimum_digest_score: int) -> None:
+        path = self.root / "profile" / "preferences.yaml"
+        data = read_yaml(path, {})
         thresholds = data.get("thresholds", {})
         thresholds["minimum_digest_score"] = minimum_digest_score
         data["thresholds"] = thresholds
+        write_yaml(path, data)
+
+    def save_runtime_settings(self, max_parallel_sources: int) -> None:
+        path = self.root / "profile" / "preferences.yaml"
+        data = read_yaml(path, {})
+        runtime = data.get("runtime", {}) if isinstance(data.get("runtime", {}), dict) else {}
+        runtime["max_parallel_sources"] = max(1, int(max_parallel_sources or 10))
+        data["runtime"] = runtime
+        write_yaml(path, data)
+
+    def save_writing_reference(self, canonical_cv: str | None = None, writing_style: str | None = None) -> None:
+        if canonical_cv is not None:
+            atomic_write_text(self.root / "profile" / "canonical-cv.md", canonical_cv.strip() + "\n", encoding="utf-8")
+        if writing_style is not None:
+            atomic_write_text(self.root / "profile" / "writing-style.md", writing_style.strip() + "\n", encoding="utf-8")
+
+    def save_skill_matrix_from_form(self, form: Any) -> None:
+        skills_path = self.root / "profile" / "skills.yaml"
+        preferences_path = self.root / "profile" / "preferences.yaml"
+        skills_yaml = read_yaml(skills_path, {})
+        preferences = read_yaml(preferences_path, {})
+        old_skills = _list(_dict(skills_yaml.get("skills", {})).get("strongest", []))
+        old_modules = [
+            item
+            for lane in ["strong", "experienced", "adjacent"]
+            for item in _list(_dict(_dict(skills_yaml.get("skills", {})).get("modules", {})).get(lane, []))
+        ]
+        old_caveats = set(_dict(_dict(skills_yaml.get("skills", {})).get("caveats", {})).keys())
+
+        skill_rows = _parallel_rows(form, ["skill_name", "skill_terms", "skill_score", "skill_mode"])
+        module_rows = _parallel_rows(
+            form, ["module_lane", "module_name", "module_terms", "module_score", "module_mode"]
+        )
+        role_rows = _parallel_rows(form, ["role_bucket", "role_name", "role_aliases"])
+        caveat_rows = _parallel_rows(form, ["caveat_key", "caveat_text", "caveat_terms", "caveat_ai_review"])
+        has_skill_match_fields = any(_form_has_key(form, key) for key in ["skill_terms", "skill_score", "skill_mode"])
+        has_module_match_fields = any(
+            _form_has_key(form, key) for key in ["module_terms", "module_score", "module_mode"]
+        )
+        has_role_alias_fields = _form_has_key(form, "role_aliases")
+        has_caveat_trigger_fields = any(_form_has_key(form, key) for key in ["caveat_terms", "caveat_ai_review"])
+
+        skills = _dict(skills_yaml.get("skills", {}))
+        skill_names = [row["skill_name"].strip() for row in skill_rows if row["skill_name"].strip()]
+        skills["strongest"] = skill_names
+        modules = {"strong": [], "experienced": [], "adjacent": []}
+        for row in module_rows:
+            name = row["module_name"].strip()
+            lane = row["module_lane"].strip() if row["module_lane"].strip() in modules else "experienced"
+            if name:
+                modules[lane].append(name)
+        skills["modules"] = modules
+        caveats: dict[str, str] = {}
+        for row in caveat_rows:
+            text = row["caveat_text"].strip()
+            key = row["caveat_key"].strip() or _slug(text)
+            if key and text:
+                caveats[key] = text
+        skills["caveats"] = caveats
+        skills_yaml["skills"] = skills
+
+        target_roles = {"high_match": [], "exploratory_match": [], "lower_match": []}
+        existing_aliases = _dict(skills_yaml.get("target_role_aliases", {}))
+        role_aliases: dict[str, list[str]] = {}
+        for row in role_rows:
+            name = row["role_name"].strip()
+            bucket = row["role_bucket"].strip() if row["role_bucket"].strip() in target_roles else "high_match"
+            if name:
+                target_roles[bucket].append(name)
+                aliases = terms_to_list(row["role_aliases"]) if has_role_alias_fields else _list(existing_aliases.get(name))
+                if aliases:
+                    role_aliases[name] = aliases
+        skills_yaml["target_roles"] = target_roles
+        skills_yaml["target_role_aliases"] = role_aliases
+
+        preferences_changed = False
+        if has_skill_match_fields or has_module_match_fields:
+            match_engine = normalize_match_engine_config(preferences.get("match_engine", {}))
+            if has_skill_match_fields:
+                match_engine["technical_keyword_groups"] = _sync_labeled_rules(
+                    match_engine["technical_keyword_groups"],
+                    old_skills,
+                    [
+                        _rule_from_row(row["skill_name"], row["skill_terms"], row["skill_score"], row["skill_mode"], 20)
+                        for row in skill_rows
+                    ],
+                )
+            if has_module_match_fields:
+                match_engine["module_keyword_groups"] = _sync_labeled_rules(
+                    match_engine["module_keyword_groups"],
+                    old_modules,
+                    [
+                        _rule_from_row(row["module_name"], row["module_terms"], row["module_score"], row["module_mode"], 7)
+                        for row in module_rows
+                    ],
+                )
+            preferences["match_engine"] = match_engine
+            preferences_changed = True
+
+        if has_caveat_trigger_fields:
+            preferences["match_review"] = {
+                "caveat_rules": _sync_caveat_rules(
+                    _dict(preferences.get("match_review", {})).get("caveat_rules", []),
+                    old_caveats,
+                    caveat_rows,
+                )
+            }
+            preferences_changed = True
+        else:
+            current_caveats = set(caveats.keys())
+            match_review = _dict(preferences.get("match_review", {}))
+            caveat_rules = _list(match_review.get("caveat_rules", []))
+            filtered_rules = [
+                rule
+                for rule in caveat_rules
+                if not isinstance(rule, dict)
+                or not str(rule.get("caveat_key") or "").strip()
+                or str(rule.get("caveat_key") or "").strip() in current_caveats
+            ]
+            if filtered_rules != caveat_rules:
+                updated_review = dict(match_review)
+                updated_review["caveat_rules"] = filtered_rules
+                preferences["match_review"] = updated_review
+                preferences_changed = True
+
+        write_yaml(skills_path, skills_yaml)
+        if preferences_changed:
+            write_yaml(preferences_path, preferences)
+
+    def save_case_studies_from_form(self, form: Any) -> None:
+        rows = _parallel_rows(
+            form,
+            [
+                "case_company",
+                "case_role",
+                "case_highlights",
+                "case_keywords",
+                "case_linked_skills",
+                "case_linked_modules",
+                "case_linked_roles",
+            ],
+        )
+        entries = []
+        for row in rows:
+            if not any(value.strip() for value in row.values()):
+                continue
+            entries.append(
+                {
+                    "company": row["case_company"].strip() or "Experience entry",
+                    "role": row["case_role"].strip(),
+                    "highlights": lines_to_list(row["case_highlights"]),
+                    "keywords": terms_to_list(row["case_keywords"]),
+                    "linked_skills": terms_to_list(row["case_linked_skills"]),
+                    "linked_modules": terms_to_list(row["case_linked_modules"]),
+                    "linked_roles": terms_to_list(row["case_linked_roles"]),
+                }
+            )
+        write_yaml(self.root / "profile" / "experience.yaml", {"experience": entries})
+
+    def save_application_examples_from_form(self, form: Any) -> None:
+        rows = _parallel_rows(
+            form,
+            [
+                "example_id",
+                "example_label",
+                "example_application_text",
+                "example_job_title",
+                "example_company",
+                "example_url",
+                "example_linked_skills",
+                "example_linked_modules",
+                "example_linked_roles",
+                "example_notes",
+            ],
+        )
+        ApplicationExamplesService(self.root).upsert_from_form_rows(
+            [
+                {
+                    "id": row["example_id"],
+                    "label": row["example_label"],
+                    "application_text": row["example_application_text"],
+                    "linked_job": {
+                        "title": row["example_job_title"],
+                        "company": row["example_company"],
+                        "url": row["example_url"],
+                    },
+                    "linked_skills": terms_to_list(row["example_linked_skills"]),
+                    "linked_modules": terms_to_list(row["example_linked_modules"]),
+                    "linked_roles": terms_to_list(row["example_linked_roles"]),
+                    "notes": row["example_notes"],
+                }
+                for row in rows
+            ]
+        )
+
+    def save_ai_policy_from_form(self, form: Any) -> None:
+        path = self.root / "profile" / "preferences.yaml"
+        data = read_yaml(path, {})
+        data["ai_review_policy"] = {
+            "min_score": _int_or_default(form.get("ai_min_score"), 35),
+            "evaluate_categories": _list(form.getlist("evaluate_category")),
+            "trigger_on_highlights": _truthy(form.get("trigger_on_highlights")),
+            "trigger_on_review_triggers": _truthy(form.get("trigger_on_review_triggers")),
+            "trigger_on_low_source_confidence": _truthy(form.get("trigger_on_low_source_confidence")),
+            "evaluate_excluded_with_triggers": _truthy(form.get("evaluate_excluded_with_triggers")),
+        }
+        data["language_policy"] = {
+            "acceptable": terms_to_list(str(form.get("acceptable_languages", ""))),
+            "fluent": terms_to_list(str(form.get("fluent_languages", ""))),
+            "exclude_if_mandatory_unmatched": _truthy(form.get("exclude_if_mandatory_unmatched")),
+            "penalty": min(0, _int_or_default(form.get("language_penalty"), -25)),
+        }
+        data["highlighting"] = {
+            "core_match_groups": terms_to_list(str(form.get("core_match_groups", ""))),
+            "min_core_matches": _int_or_default(form.get("min_core_matches"), 3),
+            "high_rate_threshold": _int_or_default(form.get("high_rate_threshold"), 700),
+        }
         write_yaml(path, data)
 
     def save_setup_file(self, file_key: str, content: str) -> None:
@@ -634,6 +978,115 @@ def _list_summary(values: Any, label: str) -> str:
     preview = ", ".join(str(item) for item in items[:5])
     suffix = "" if len(items) <= 5 else f" + {len(items) - 5} more"
     return f"{len(items)} {label}: {preview}{suffix}."
+
+
+def _dict(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def _list(value: Any) -> list[Any]:
+    return value if isinstance(value, list) else []
+
+
+def _rules_by_label(rules: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    return {_label_key(rule.get("label")): rule for rule in rules if str(rule.get("label") or "").strip()}
+
+
+def _editable_match_item(label: Any, rule: dict[str, Any] | None, default_score: int) -> dict[str, Any]:
+    rule = rule or {}
+    return {
+        "name": str(label or "").strip(),
+        "terms": _list(rule.get("terms", [])),
+        "score": _int_or_default(rule.get("score"), default_score),
+        "mode": str(rule.get("mode") or "bonus"),
+    }
+
+
+def _caveat_rules_by_key(match_review: Any) -> dict[str, dict[str, Any]]:
+    rules = _dict(match_review).get("caveat_rules", [])
+    return {
+        str(rule.get("caveat_key") or "").strip(): rule
+        for rule in _list(rules)
+        if isinstance(rule, dict) and str(rule.get("caveat_key") or "").strip()
+    }
+
+
+def _parallel_rows(form: Any, keys: list[str]) -> list[dict[str, str]]:
+    values = {key: [str(value) for value in form.getlist(key)] for key in keys}
+    count = max([len(items) for items in values.values()] or [0])
+    return [{key: _at(values[key], index) for key in keys} for index in range(count)]
+
+
+def _form_has_key(form: Any, key: str) -> bool:
+    try:
+        if key in form:
+            return True
+    except TypeError:
+        pass
+    try:
+        return bool(form.getlist(key))
+    except AttributeError:
+        return False
+
+
+def _label_key(value: Any) -> str:
+    return str(value or "").strip().lower()
+
+
+def _sync_labeled_rules(
+    existing_rules: list[dict[str, Any]],
+    old_labels: list[str],
+    submitted_rules: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    old_label_keys = {_label_key(label) for label in old_labels if str(label).strip()}
+    new_rules = [rule for rule in submitted_rules if rule.get("label") and rule.get("terms")]
+    new_label_keys = {_label_key(rule["label"]) for rule in new_rules}
+    preserved = [
+        rule
+        for rule in existing_rules
+        if _label_key(rule.get("label")) not in old_label_keys and _label_key(rule.get("label")) not in new_label_keys
+    ]
+    return new_rules + preserved
+
+
+def _rule_from_row(label: str, terms: str, score: str, mode: str, default_score: int) -> dict[str, Any]:
+    label = label.strip()
+    term_list = terms_to_list(terms) or ([label] if label else [])
+    score_value = _int_or_default(score, default_score)
+    mode_value = mode.strip() if mode.strip() in {"bonus", "required"} else "bonus"
+    return {"label": label, "terms": term_list, "score": score_value, "mode": mode_value}
+
+
+def _sync_caveat_rules(existing_rules: Any, old_caveat_keys: set[str], rows: list[dict[str, str]]) -> list[dict[str, Any]]:
+    existing = [rule for rule in _list(existing_rules) if isinstance(rule, dict)]
+    preserved = [
+        rule
+        for rule in existing
+        if str(rule.get("caveat_key") or "").strip() not in old_caveat_keys
+        and not str(rule.get("id") or "").startswith("caveat_")
+    ]
+    submitted = []
+    for row in rows:
+        key = row["caveat_key"].strip() or _slug(row["caveat_text"])
+        terms = terms_to_list(row["caveat_terms"])
+        if not key or not terms:
+            continue
+        submitted.append(
+            {
+                "id": f"caveat_{key}",
+                "label": key.replace("_", " ").title(),
+                "terms": terms,
+                "caveat_key": key,
+                "ai_review": row["caveat_ai_review"].strip().lower() != "false",
+            }
+        )
+    return preserved + submitted
+
+
+def _slug(value: str) -> str:
+    import re
+
+    return re.sub(r"[^a-z0-9]+", "_", value.lower()).strip("_")[:60] or "caveat"
 
 
 def _truthy(value: Any) -> bool:
@@ -708,5 +1161,6 @@ def _profile_for_prompt(profile: dict[str, Any]) -> dict[str, Any]:
         "skills": profile.get("skills", {}),
         "target_roles": profile.get("target_roles", {}),
         "experience": profile.get("experience", []),
+        "application_examples": profile.get("application_examples", []),
         "match_engine": profile.get("match_engine", {}),
     }

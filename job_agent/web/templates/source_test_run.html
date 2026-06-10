@@ -3,7 +3,7 @@
 <div class="source-detail-header">
   <div>
     <p class="eyebrow">Source test</p>
-    <h1>Test Source Without Saving Jobs</h1>
+    <h1>Test Source Safely</h1>
     <p class="muted">{{ source.name }}</p>
   </div>
   <a class="button light" href="/sources/{{ source.id }}">Back to source</a>
@@ -11,7 +11,7 @@
 
 <div class="panel running-panel">
   <h2 id="test-status-title">Source test</h2>
-  <p class="muted">This runs the configured source the way the daily run would, but does not save job packages, mark jobs as seen, or include the source in the daily run.</p>
+  <p class="muted">This runs the configured source the way the daily run would. It can refresh the listing index when it passes, but it does not save job packages, mark jobs as seen, or include the source in the daily run.</p>
   <p class="muted" id="source-test-running-note">Start a fresh safe source test, or return to the most recent result from this browser session.</p>
   {% if not execution_entry %}
   <p><span class="badge low">No daily-run projection is prepared for this source yet.</span></p>
@@ -24,10 +24,10 @@
   </div>
   <ol class="progress-steps" id="source-test-steps">
     <li class="active">Resolve configured source and selected recipe</li>
-    <li>Fetch the listing page</li>
-    <li>Collect jobs from listing and pagination pages</li>
+    <li>Fetch listing data</li>
+    <li>Collect jobs from listing records/cards and pagination</li>
     <li>Open configured job detail pages with recipe delay</li>
-    <li>Build verification report and save readiness</li>
+    <li>Build verification report, save readiness, and refresh listing index</li>
   </ol>
   <details class="diagnostic-panel compact-log-panel">
     <summary>Live run log</summary>
@@ -44,6 +44,8 @@
     <div class="stat"><span>Readiness</span><strong id="source-test-readiness">Unknown</strong></div>
   </div>
   <p><strong>Summary:</strong> <span id="source-test-summary"></span></p>
+  <p class="muted" id="source-test-log-path"></p>
+  <p class="muted" id="source-test-index-summary"></p>
   <div id="source-test-blockers"></div>
   <div id="source-test-counts"></div>
   <div class="action-row">
@@ -69,6 +71,7 @@
   <div class="grid">
     <div class="stat"><span>Reading plan</span><strong id="source-test-recipe-name">Unknown</strong></div>
     <div class="stat"><span>Mode</span><strong id="source-test-mode">Unknown</strong></div>
+    <div class="stat"><span>API requests</span><strong id="source-test-api-count">0</strong></div>
     <div class="stat"><span>Pagination pages fetched</span><strong id="source-test-pagination-count">0</strong></div>
     <div class="stat"><span>Detail pages opened</span><strong id="source-test-detail-count">0</strong></div>
     <div class="stat"><span>Detail pages with fields</span><strong id="source-test-detail-enriched">0</strong></div>
@@ -96,7 +99,7 @@
     "Applying listing selectors and collecting job URLs.",
     "Following configured pagination with the recipe delay.",
     "Opening job detail pages with the recipe delay.",
-    "Preparing the verification report."
+    "Preparing the verification report and listing index."
   ];
 
   let runTimer = null;
@@ -213,6 +216,13 @@
     document.getElementById("source-test-readiness").innerText = data.readiness_status || "unknown";
     const insight = data.source_test_insight || {};
     document.getElementById("source-test-summary").innerText = primarySourceTestSummary(data, insight);
+    document.getElementById("source-test-log-path").innerText = data.log_dir
+      ? `Material log exported to ${data.log_dir}${data.log_manifest_path ? ` (manifest: ${data.log_manifest_path})` : ""}.`
+      : "";
+    const listingIndex = data.listing_index || {};
+    document.getElementById("source-test-index-summary").innerText = listingIndex.summary
+      ? `Listing index refreshed: ${listingIndex.summary}`
+      : "";
     const blockers = [...(data.readiness_blockers || []), ...(data.readiness_warnings || []), ...(data.warnings || [])];
     document.getElementById("source-test-blockers").innerHTML = blockers.length
       ? `<ul>${blockers.map(item => `<li>${escapeHtml(item)}</li>`).join("")}</ul>`
@@ -253,8 +263,9 @@
 
   function renderCountExplanation(data) {
     const explanations = data.count_explanations || [];
+    const isApi = text(data.access_strategy).toLowerCase() === "api";
     const counts = [
-      `Listing cards observed: ${data.listing_observed_count || 0}`,
+      `${isApi ? "API records observed" : "Listing cards observed"}: ${isApi ? (data.records_observed_count || data.listing_observed_count || 0) : (data.listing_observed_count || 0)}`,
       `Visible total: ${data.visible_total_job_count || 0}`,
       `Jobs retained: ${data.job_count || 0}`,
       `Missing job URL: ${data.listing_missing_url_count || 0}`,
@@ -279,12 +290,14 @@
 
     document.getElementById("source-test-trace-panel").hidden = false;
     document.getElementById("source-test-recipe-name").innerText = data.recipe_source_name || data.recipe_path || "Generic extractor";
-    document.getElementById("source-test-mode").innerText = data.mode_used || "unknown";
+    document.getElementById("source-test-mode").innerText = data.access_strategy ? `${data.access_strategy} (${data.mode_used || "unknown"})` : (data.mode_used || "unknown");
+    document.getElementById("source-test-api-count").innerText = data.api_request_count || 0;
     document.getElementById("source-test-pagination-count").innerText = data.pagination_fetch_count || 0;
     document.getElementById("source-test-detail-count").innerText = data.detail_fetch_count || 0;
     document.getElementById("source-test-detail-enriched").innerText = data.detail_enriched_count || 0;
     document.getElementById("source-test-recipe-summary").innerText = [
       data.recipe_path ? `Using ${data.recipe_path}.` : "",
+      data.access_strategy === "api" ? `API access made ${data.api_request_count || 0} public JSON request(s) and mapped ${data.json_records_extracted_count || data.job_count || 0} record(s).` : "",
       data.pagination_configured ? `Pagination uses ${data.pagination_strategy || "url"} strategy up to ${data.pagination_max_pages || 1} page(s).` : "Pagination is not configured.",
       data.interactive_pagination_control_count ? `${data.interactive_pagination_control_count} interactive pagination control(s) observed.` : "",
       data.source_access_requires_session ? `A connected source session is required${data.source_access_session_scope ? ` for ${data.source_access_session_scope}` : ""}.` : "",
@@ -319,14 +332,14 @@
 
     const paginationUrls = data.pagination_fetch_attempts || [];
     document.getElementById("source-test-pagination").innerHTML = paginationUrls.length
-      ? `<h3>Pagination Pages Fetched</h3><ul>${paginationUrls.map(url => `<li><a href="${escapeHtml(url)}" target="_blank" rel="noreferrer">${escapeHtml(url)}</a></li>`).join("")}</ul>`
-      : `<h3>Pagination Pages Fetched</h3><p class="muted">No additional pagination page was fetched in this run.</p>`;
+      ? `<h3>Pagination Requests Fetched</h3><ul>${paginationUrls.map(url => `<li><a href="${escapeHtml(url)}" target="_blank" rel="noreferrer">${escapeHtml(url)}</a></li>`).join("")}</ul>`
+      : `<h3>Pagination Requests Fetched</h3><p class="muted">No additional pagination request was fetched in this run.</p>`;
 
     const listingPages = data.listing_pages || [];
     const listingPageRows = listingPages.length
-      ? `<div class="source-test-listing-pages"><h3>Listing Pages Read</h3>
+      ? `<div class="source-test-listing-pages"><h3>Listing Data Read</h3>
         <table>
-          <thead><tr><th>Page</th><th>Cards observed</th><th>Jobs retained</th><th>Not retained</th></tr></thead>
+          <thead><tr><th>Location</th><th>Records/cards observed</th><th>Jobs retained</th><th>Not retained</th></tr></thead>
           <tbody>${listingPages.map(page => `
             <tr>
               <td><a href="${escapeHtml(page.page_url)}" target="_blank" rel="noreferrer">${escapeHtml(page.page_url)}</a></td>
@@ -346,9 +359,9 @@
 
     const attempts = data.detail_attempts || [];
     document.getElementById("source-test-detail-attempts").innerHTML = attempts.length
-      ? `<h3>Detail Pages Opened</h3>
+      ? `<h3>Detail Requests Opened</h3>
         <table>
-          <thead><tr><th>Detail URL</th><th>Status</th><th>Fields found</th><th>Missing expected fields</th></tr></thead>
+          <thead><tr><th>Detail target</th><th>Status</th><th>Fields found</th><th>Missing expected fields</th></tr></thead>
           <tbody>${attempts.map(attempt => `
             <tr>
               <td><a href="${escapeHtml(attempt.url)}" target="_blank" rel="noreferrer">${escapeHtml(attempt.url)}</a><br><span class="muted">${escapeHtml(attempt.detail)}</span></td>
@@ -358,7 +371,7 @@
             </tr>
           `).join("")}</tbody>
         </table>`
-      : `<h3>Detail Pages Opened</h3><p class="muted">No job detail page was opened in this run.</p>`;
+      : `<h3>Detail Requests Opened</h3><p class="muted">No job detail request was opened in this run.</p>`;
 
     const checks = data.field_checks || [];
     document.getElementById("source-test-field-checks").innerHTML = checks.length
@@ -382,7 +395,7 @@
     if (!data.jobs || !data.jobs.length) return;
     document.getElementById("source-test-jobs-panel").hidden = false;
     document.getElementById("source-test-jobs-note").innerText =
-      `Showing all ${data.jobs.length} job(s) returned by this source test. They were not saved to your job list.`;
+      `Showing all ${data.jobs.length} job(s) returned by this source test. They were not saved as job packages.`;
     document.getElementById("source-test-job-rows").innerHTML = data.jobs.map(job => {
       const fullDescription = job.description || "";
       const preview = job.description_preview || fullDescription;
@@ -418,7 +431,7 @@
       updateSourceTestWorkStatus({
         status: "running",
         stage: "Starting source test",
-        message: `Testing ${sourceTestName} without saving jobs.`,
+        message: `Testing ${sourceTestName} without saving job packages.`,
         progress_percent: 8
       });
       setStep(0, "active");
@@ -428,7 +441,7 @@
       const passed = sourceTestPassed(data);
       finishSteps(passed);
       title.innerText = passed ? "Source test completed" : "Source test needs review";
-      stopRunTimer(passed ? "Run completed. The trace below shows the recipe steps, pagination fetches, and detail-page attempts." : "Run finished with issues. Review the trace, insight, and warnings below.");
+      stopRunTimer(passed ? "Run completed. The trace below shows the recipe steps, pagination fetches, detail-page attempts, and listing index result." : "Run finished with issues. Review the trace, insight, and warnings below.");
       saveSourceTestResult(data);
       renderFindings(data);
       clearSourceTestWorkStatus();
@@ -504,7 +517,7 @@
   function showReadyToRun() {
     document.getElementById("test-status-title").innerText = "Ready to test source";
     document.getElementById("source-test-running-note").innerText =
-      "Run the selected reading plan end to end without saving jobs. Previous source-test results are not rerun unless you start a new test.";
+      "Run the selected reading plan end to end without saving job packages. Previous source-test results are not rerun unless you start a new test.";
     document.getElementById("source-test-start-actions").hidden = false;
     setStep(0, "active");
   }

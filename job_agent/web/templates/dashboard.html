@@ -1,5 +1,20 @@
 {% extends "base.html" %}
 {% block content %}
+{% if setup_guide and setup_guide.show_entry_panel %}
+<div class="panel setup-entry-panel">
+  <img class="setup-guide-character" src="/static/icons/job-agent-folio-character-transparent.svg?v={{ asset_version }}" width="96" height="96" alt="" aria-hidden="true">
+  <div>
+    <p class="eyebrow">First run setup</p>
+    <h2>Get to your first scored job run</h2>
+    <p class="muted">The guide tracks the essentials: Claude, CV evidence, profile review, sources, and the first run.</p>
+  </div>
+  <div class="setup-entry-actions">
+    <span class="badge medium">{{ setup_guide.progress_label }}</span>
+    <a class="button" href="/setup-guide">Open setup guide</a>
+  </div>
+</div>
+{% endif %}
+
 <div class="panel hero-status {% if dashboard_stats.active_run %}running{% elif dashboard_stats.latest_is_today %}today{% endif %}">
   <h1>Overview</h1>
   {% if dashboard_stats.active_run %}

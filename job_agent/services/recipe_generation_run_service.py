@@ -22,7 +22,9 @@ from job_agent.services.recipe_suggestion_service import (
     suggest_recipe_from_artifact,
     suggest_recipe_with_refinement,
 )
+from job_agent.services.recipes.mapping import load_job_board_recipe
 from job_agent.services.source_registry_service import SourceRegistryService
+from job_agent.services.source_session_service import SourceSessionService
 
 _EXECUTOR = ThreadPoolExecutor(max_workers=1)
 _RUN_ID_PATTERN = re.compile(r"[A-Za-z0-9_.-]+")
@@ -116,11 +118,26 @@ class RecipeGenerationRunService:
             if not source:
                 raise ValueError(f"Source not found: {run['source_id']}")
             if run.get("capture_source"):
+                session_status = _usable_source_session(self.root, source)
+                session_state_path = self.root / session_status.storage_state_path if session_status else None
+                self._update_run(
+                    run_id,
+                    source_session_used=bool(session_status),
+                    source_session_scope=session_status.session_scope if session_status else "",
+                )
+                session_note = (
+                    f" using a connected source session for {session_status.session_scope or source.name}"
+                    if session_status
+                    else ""
+                )
                 self._append_step(
                     run_id,
                     "Resolve source and capture",
                     "running",
-                    (f"Opening {source.name} at {source.url} with {_capture_mode_label(run.get('capture_rendered'))}."),
+                    (
+                        f"Opening {source.name} at {source.url} with "
+                        f"{_capture_mode_label(run.get('capture_rendered'))}{session_note}."
+                    ),
                 )
                 capture = capture_recipe_calibration(
                     source.url,
@@ -129,6 +146,8 @@ class RecipeGenerationRunService:
                     root=self.root,
                     max_candidates=int(run.get("max_candidates") or 30),
                     capture_detail=bool(run.get("capture_detail")),
+                    session_state_path=session_state_path,
+                    source_session_scope=session_status.session_scope if session_status else "",
                 )
                 artifact_path = capture.artifact_dir
                 relative_artifact = _display_path(artifact_path, self.root)
@@ -337,6 +356,8 @@ class RecipeGenerationRunService:
             "evidence_summary": "",
             "evidence_observations": {},
             "source_test_insight": {},
+            "source_session_used": False,
+            "source_session_scope": "",
         }
         run.update(extra)
         return run
@@ -484,14 +505,18 @@ def _evidence_observations(payload: dict[str, Any]) -> dict[str, Any]:
     candidates = payload.get("top_candidates") if isinstance(payload, dict) else []
     pagination = payload.get("observed_pagination_links") if isinstance(payload, dict) else []
     ajax_pagination = payload.get("observed_ajax_pagination_templates") if isinstance(payload, dict) else []
+    api_candidates = payload.get("observed_api_candidates") if isinstance(payload, dict) else []
     applications = payload.get("observed_application_entries") if isinstance(payload, dict) else []
     blueprint = payload.get("recipe_blueprint") if isinstance(payload, dict) else {}
     return {
         "top_candidate_count": len(candidates) if isinstance(candidates, list) else 0,
         "pagination_link_count": len(pagination) if isinstance(pagination, list) else 0,
         "ajax_pagination_template_count": len(ajax_pagination) if isinstance(ajax_pagination, list) else 0,
+        "api_candidate_count": len(api_candidates) if isinstance(api_candidates, list) else 0,
         "application_entry_count": len(applications) if isinstance(applications, list) else 0,
         "detail_sample_captured": bool(payload.get("detail_sample_captured")) if isinstance(payload, dict) else False,
+        "source_session_used": bool(payload.get("source_session_used")) if isinstance(payload, dict) else False,
+        "source_session_scope": str(payload.get("source_session_scope") or "") if isinstance(payload, dict) else "",
         "blueprint_present": bool(blueprint) if isinstance(blueprint, dict) else False,
     }
 
@@ -501,10 +526,14 @@ def _observation_summary(observations: dict[str, Any]) -> str:
         f"{observations.get('top_candidate_count', 0)} candidate selector region(s)",
         f"{observations.get('pagination_link_count', 0)} pagination link(s)",
         f"{observations.get('ajax_pagination_template_count', 0)} AJAX pagination template(s)",
+        f"{observations.get('api_candidate_count', 0)} page-declared API candidate(s)",
         "detail sample captured" if observations.get("detail_sample_captured") else "no detail sample captured",
     ]
     if observations.get("blueprint_present"):
         parts.append("deterministic recipe blueprint available")
+    if observations.get("source_session_used"):
+        scope = str(observations.get("source_session_scope") or "source")
+        parts.append(f"connected session used for {scope}")
     return "Observed " + ", ".join(parts) + "."
 
 
@@ -547,33 +576,58 @@ def _capture_mode_label(value: Any) -> str:
 def _source_test_insight_prefers_rendered_capture(insight: dict[str, Any]) -> bool:
     if not isinstance(insight, dict) or not insight:
         return False
-    text_parts = [
-        str(insight.get("insight_title") or ""),
-        str(insight.get("summary") or ""),
-        str(insight.get("recommendation") or ""),
-    ]
-    for warning in insight.get("warnings", []) if isinstance(insight.get("warnings"), list) else []:
-        text_parts.append(str(warning))
-    for item in insight.get("failed_capabilities", []) if isinstance(insight.get("failed_capabilities"), list) else []:
-        if isinstance(item, dict):
-            text_parts.append(str(item.get("detail") or ""))
-            text_parts.append(str(item.get("capability") or ""))
-    haystack = " ".join(text_parts).lower()
-    strategy = str(insight.get("pagination_strategy_tested") or "").strip().lower()
-    duplicate_ratio = _float_value(insight.get("pagination_duplicate_ratio"))
-    return (
-        "client-side pagination" in haystack
-        or "browser-click" in haystack
-        or "interactive browser pagination" in haystack
-        or (strategy == "url" and duplicate_ratio >= 0.8)
+    if bool(insight.get("pagination_working_with_unique_pages")):
+        return False
+    if bool(insight.get("pagination_duplicate_postings")):
+        return True
+    failed = insight.get("failed_capabilities")
+    if isinstance(failed, list):
+        for item in failed:
+            if not isinstance(item, dict) or str(item.get("status") or "") != "fail":
+                continue
+            capability = str(item.get("capability") or "").strip()
+            detail = str(item.get("detail") or "").lower()
+            if capability == "browser_click_pagination" and "browser-click pagination" in detail:
+                return True
+            if capability == "pagination_strategy" and "does not declare browser-click pagination" in detail:
+                return True
+            if "interactive browser pagination" in detail:
+                return True
+    interactive_count = _positive_int(insight.get("interactive_pagination_control_count"), 0)
+    if not interactive_count:
+        return False
+    haystack = " ".join(
+        [
+            str(insight.get("insight_title") or ""),
+            str(insight.get("summary") or ""),
+            str(insight.get("recommendation") or ""),
+        ]
+    ).lower()
+    return "browser-click pagination" in haystack and (
+        "does not use browser-click pagination" in haystack
+        or "does not declare browser-click pagination" in haystack
+        or "interactive pagination controls were observed" in haystack
     )
 
 
-def _float_value(value: Any) -> float:
+def _usable_source_session(root: Path, source) -> Any | None:
+    session_scope = ""
+    if getattr(source, "recipe_path", ""):
+        try:
+            recipe = load_job_board_recipe(root / source.recipe_path)
+            session_scope = recipe.access.session_scope
+        except (OSError, ValueError):
+            session_scope = ""
+    status = SourceSessionService(root).status_for_source(source.id, session_scope=session_scope)
+    return status if status.usable else None
+
+
+def _positive_int(value: Any, default: int = 0) -> int:
     try:
-        return float(value or 0.0)
+        number = int(value)
     except (TypeError, ValueError):
-        return 0.0
+        return default
+    return number if number > 0 else default
 
 
 def _display_path(path: Path, root: Path) -> str:

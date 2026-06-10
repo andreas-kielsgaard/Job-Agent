@@ -13,8 +13,12 @@ from job_agent.services.recipe_generation_status_service import RecipeGeneration
 from job_agent.services.recipe_preview_service import explain_recipe
 from job_agent.services.recipes.mapping import load_job_board_recipe
 from job_agent.services.single_source_run_service import SingleSourceRunService
-from job_agent.services.source_execution_readiness_service import SourceExecutionReadinessService
-from job_agent.services.source_listing_index_store import SourceListingIndexStore
+from job_agent.services.source_execution_readiness_service import (
+    SourceExecutionReadiness,
+    SourceExecutionReadinessService,
+)
+from job_agent.services.source_listing_index_service import SourceListingIndexService
+from job_agent.services.source_listing_index_store import SourceListingIndexStore, SourceListingIndexSummary
 from job_agent.services.source_registry_service import SourceRegistryService
 from job_agent.services.source_session_service import SourceSessionService
 from job_agent.services.source_test_service import SourceTestService
@@ -61,6 +65,7 @@ class SourceWorkflowState:
 
     def template_context(self) -> dict[str, Any]:
         return {
+            "title": f"Source - {self.source.name}",
             "source": self.source,
             "recipe_preview_url": self.recipe_preview_url,
             "execution_entry": self.execution_entry,
@@ -90,6 +95,7 @@ class SourceTestExecution:
     force_disabled: bool
     result: Any
     readiness: Any
+    listing_index: Any
     session_status: Any
     payload: dict[str, Any]
 
@@ -109,19 +115,35 @@ class SourceWorkflowHandler:
         self.source_tests = SourceTestService(self.root)
 
     def overview_context(self, *, message: str = "", warning: str = "") -> dict[str, Any]:
-        all_sources = self.registry.list_sources()
+        all_sources = self.registry.list_saved_sources(include_stats=True)
         sources = [source for source in all_sources if source.status != "archived"]
         archived_sources = [source for source in all_sources if source.status == "archived"]
-        execution_by_source = {
-            str(source.get("source_id") or ""): source
-            for source in self.execution.list_sources()
-            if isinstance(source, dict)
-        }
-        source_cards = [self.card_for_source(source, execution_by_source.get(source.id)) for source in sources]
+        execution_by_source = self.saved_execution_by_source(all_sources)
+        readiness_by_source = self.readiness.load_all()
+        index_by_source = self.index_store.summaries_by_source()
+        seen_records = self.jobs.list_seen_records()
+        source_cards = [
+            self.overview_card_for_source(
+                source,
+                execution_by_source.get(source.id),
+                readiness_by_source.get(source.id, SourceExecutionReadiness(source_id=source.id)),
+                index_by_source.get(source.id, SourceListingIndexSummary(source_id=source.id, source_name=source.name)),
+                seen_records,
+            )
+            for source in sources
+        ]
         archived_source_cards = [
-            self.card_for_source(source, execution_by_source.get(source.id)) for source in archived_sources
+            self.overview_card_for_source(
+                source,
+                execution_by_source.get(source.id),
+                readiness_by_source.get(source.id, SourceExecutionReadiness(source_id=source.id)),
+                index_by_source.get(source.id, SourceListingIndexSummary(source_id=source.id, source_name=source.name)),
+                seen_records,
+            )
+            for source in archived_sources
         ]
         return {
+            "title": "Sources",
             "sources": sources,
             "archived_sources": archived_sources,
             "source_cards": source_cards,
@@ -135,6 +157,61 @@ class SourceWorkflowHandler:
             "implemented_source_count": sum(1 for card in source_cards if card["lifecycle"]["state"] == "implemented"),
             "indexed_source_count": sum(1 for card in source_cards if card["index"]["complete"]),
             "detail_complete_source_count": sum(1 for card in source_cards if card["detail"]["complete"]),
+        }
+
+    def saved_execution_by_source(self, sources: list[Any]) -> dict[str, dict[str, Any]]:
+        config_sources = self.execution.load_config().get("sources", [])
+        result = {
+            str(source.get("source_id") or ""): source
+            for source in config_sources
+            if isinstance(source, dict) and str(source.get("source_id") or "").strip()
+        }
+        for source in sources:
+            if source.id in result or not source.enabled or not source.recipe_path:
+                continue
+            result[source.id] = {
+                "name": source.name,
+                "source_id": source.id,
+                "type": "recipe_html",
+                "url": source.url,
+                "recipe_path": source.recipe_path,
+                "enabled": True,
+            }
+        return result
+
+    def overview_card_for_source(
+        self,
+        source,
+        execution_entry,
+        readiness,
+        index_summary,
+        seen_records,
+    ) -> dict[str, Any]:
+        index = self.index_status(index_summary)
+        detail = self.detail_status_from_seen_records(source, index_summary, seen_records)
+        status = build_source_page_status(
+            source,
+            execution_entry,
+            readiness,
+            recipe_preview_url=self.recipe_preview_url(source),
+            index_status=index,
+        )
+        readiness_current = readiness.readiness_status == "ready" or source.kind in {"manual", "local_yaml"}
+        index_current = bool(index.get("complete")) or source.kind in {"manual", "local_yaml"}
+        implemented = bool(execution_entry and execution_entry.get("enabled", True) and readiness_current and index_current)
+        lifecycle = {
+            "state": "implemented" if implemented else "setup",
+            "label": "Implemented" if implemented else "In setup",
+            "badge_class": "high" if implemented else "medium",
+        }
+        return {
+            "source": source,
+            "execution": execution_entry,
+            "lifecycle": lifecycle,
+            "index": index,
+            "detail": detail,
+            "session": None,
+            "status": status,
         }
 
     def require_source(self, source_id: str):
@@ -306,6 +383,7 @@ class SourceWorkflowHandler:
     def source_session_context(self, source_id: str, *, message: str = "", warning: str = "") -> dict[str, Any]:
         source = self.require_source(source_id)
         return {
+            "title": f"Source Session - {source.name}",
             "source": source,
             "source_session": self.source_session_status(source),
             "default_storage_state_path": f"sources/sessions/{source.id}.storage-state.json",
@@ -352,6 +430,7 @@ class SourceWorkflowHandler:
         self.ensure_disabled_execution_entry(source)
         execution_entry = self.execution.find_by_source_id(source.id)
         return {
+            "title": f"Source Test - {source.name}",
             "source": source,
             "execution_entry": execution_entry,
             "force_disabled": bool(execution_entry and not bool(execution_entry.get("enabled", True))),
@@ -381,18 +460,25 @@ class SourceWorkflowHandler:
             if update_session
             else self.source_session_status(source)
         )
+        listing_index = self.refresh_listing_index_from_source_test(result, readiness) if save_readiness else None
         return SourceTestExecution(
             source=source,
             execution_entry=context["execution_entry"],
             force_disabled=bool(context["force_disabled"]),
             result=result,
             readiness=readiness,
+            listing_index=listing_index,
             session_status=session_status,
-            payload=self.source_test_payload(source, result, readiness),
+            payload=self.source_test_payload(source, result, readiness, listing_index=listing_index),
         )
 
     def verify_source_session(self, source_id: str) -> SourceTestExecution:
         return self.run_source_test(source_id)
+
+    def refresh_listing_index_from_source_test(self, result, readiness):
+        if getattr(readiness, "readiness_status", "") != "ready":
+            return None
+        return SourceListingIndexService(self.root).record_source_test_index(result)
 
     def update_source_session_verification(self, source, result):
         session_status = self.source_session_status(source)
@@ -454,7 +540,7 @@ class SourceWorkflowHandler:
         self.require_not_archived(source)
         index_summary = self.index_store.summary_for_source(source.id, source.name)
         if not index_summary.is_indexed:
-            raise RuntimeError("Index job listings before including this source in the daily run.")
+            raise RuntimeError("Refresh the listing index before including this source in the daily run.")
         return self.readiness.enable_when_ready(source.id)
 
     def create_or_update_execution_source(self, source_id: str):
@@ -494,7 +580,7 @@ class SourceWorkflowHandler:
         source, _readiness = self.ensure_ready_for_listing_work(source_id, purpose="detail")
         index_summary = self.index_store.summary_for_source(source.id, source.name)
         if not index_summary.is_indexed:
-            raise RuntimeError("Index job listings before investigating all jobs on this source.")
+            raise RuntimeError("Refresh the listing index before ingesting all jobs on this source.")
         return runtime.launch_source_detail_run(
             source.id,
             include_disabled_source=True,
@@ -511,7 +597,7 @@ class SourceWorkflowHandler:
             raise RuntimeError("Enable this source before running.")
         return SingleSourceRunService(self.root).run(source.id)
 
-    def source_test_payload(self, source, result, readiness) -> dict[str, Any]:
+    def source_test_payload(self, source, result, readiness, *, listing_index=None) -> dict[str, Any]:
         insight = self.source_test_insight(source, result=result, readiness=readiness)
         return {
             "ok": result.status not in {"not_found", "disabled", "failing"},
@@ -530,6 +616,10 @@ class SourceWorkflowHandler:
             "recipe_source_name": result.recipe_source_name,
             "base_url": result.base_url,
             "mode_used": result.mode_used,
+            "access_strategy": result.access_strategy,
+            "api_request_count": result.api_request_count,
+            "records_observed_count": result.records_observed_count,
+            "json_records_extracted_count": result.json_records_extracted_count,
             "run_steps": result.run_steps,
             "pagination_configured": result.pagination_configured,
             "pagination_strategy": result.pagination_strategy,
@@ -570,12 +660,27 @@ class SourceWorkflowHandler:
             "detail_attempts": result.detail_attempts,
             "field_checks": result.field_checks,
             "capability_checks": result.capability_checks,
+            "log_dir": result.log_dir,
+            "log_manifest_path": result.log_manifest_path,
             "readiness_status": readiness.readiness_status,
             "readiness_summary": readiness.readiness_summary,
             "readiness_blockers": readiness.blockers,
             "readiness_warnings": readiness.warnings,
             "source_url": source.url,
             "source_test_insight": insight,
+            "listing_index": self.source_test_listing_index_mapping(listing_index),
+        }
+
+    def source_test_listing_index_mapping(self, listing_index) -> dict[str, Any]:
+        if not listing_index:
+            return {}
+        return {
+            "status": getattr(listing_index, "status", ""),
+            "job_count": getattr(listing_index, "job_count", 0),
+            "reviewed_in_detail_count": getattr(listing_index, "reviewed_in_detail_count", 0),
+            "waiting_for_detail_count": getattr(listing_index, "waiting_for_detail_count", 0),
+            "no_longer_posted_count": getattr(listing_index, "no_longer_posted_count", 0),
+            "summary": getattr(listing_index, "summary", ""),
         }
 
     def source_test_job_mapping(self, job) -> dict[str, Any]:
@@ -607,6 +712,9 @@ class SourceWorkflowHandler:
         pagination_fetch_count = 0
         unique_from_pages = 0
         interactive_pagination_control_count = 0
+        source_access_requires_session = False
+        source_access_session_used = False
+        source_access_session_scope = ""
         source_access_status = ""
         source_access_login_gate_detected = False
         recipe_changed_after_source_test = False
@@ -625,6 +733,9 @@ class SourceWorkflowHandler:
             interactive_pagination_control_count = int(
                 getattr(result, "interactive_pagination_control_count", 0) or 0
             )
+            source_access_requires_session = bool(getattr(result, "source_access_requires_session", False))
+            source_access_session_used = bool(getattr(result, "source_access_session_used", False))
+            source_access_session_scope = str(getattr(result, "source_access_session_scope", "") or "")
             source_access_status = str(getattr(result, "source_access_session_status", "") or "")
             source_access_login_gate_detected = bool(getattr(result, "source_access_login_gate_detected", False))
         elif readiness is not None:
@@ -640,6 +751,8 @@ class SourceWorkflowHandler:
             visible_total = int(checks.get("visible_total_job_count") or 0)
             pagination_strategy = str(checks.get("pagination_strategy") or "")
             interactive_pagination_control_count = int(checks.get("interactive_pagination_control_count") or 0)
+            source_access_requires_session = bool(checks.get("source_session_required"))
+            source_access_session_scope = str(checks.get("source_session_scope") or "")
             source_access_status = str(checks.get("source_session_status") or "")
             recipe_changed_after_source_test = bool(checks.get("recipe_changed_after_source_test"))
 
@@ -647,7 +760,7 @@ class SourceWorkflowHandler:
         by_capability = {str(check.get("capability") or ""): check for check in capability_checks}
         if not pagination_strategy:
             strategy_detail = str(by_capability.get("pagination_strategy", {}).get("detail") or "").lower()
-            for strategy in ["browser_click", "ajax", "url"]:
+            for strategy in ["api_offset", "api_page", "browser_click", "ajax", "url"]:
                 if f"declares {strategy}" in strategy_detail or f"{strategy} pagination" in strategy_detail:
                     pagination_strategy = strategy
                     break
@@ -671,11 +784,26 @@ class SourceWorkflowHandler:
             job_count=job_count,
             pagination_fetch_count=pagination_fetch_count,
             pagination_duplicate_page_count=pagination_duplicate_page_count,
+            pagination_unique_jobs_from_fetched_pages=unique_from_pages,
         )
         source_access_failure = (
             by_capability.get("source_access")
             if str(by_capability.get("source_access", {}).get("status") or "") == "fail"
             else None
+        )
+        if not source_access_session_used:
+            source_access_detail = str(by_capability.get("source_access", {}).get("detail") or "")
+            source_access_session_used = "connected source session was used" in source_access_detail.lower()
+        pagination_duplicate_failure = (
+            str(by_capability.get("pagination_duplicate_pages", {}).get("status") or "") == "fail"
+        )
+        pagination_duplicate_postings = pagination_duplicate_failure
+        source_access_failed = source_access_failure is not None
+        pagination_working_with_unique_pages = bool(
+            pagination_fetch_count
+            and unique_from_pages > 0
+            and not pagination_duplicate_postings
+            and not pagination_failure
         )
         test_did_not_complete = result_status in {"failing", "not_found"}
         if recipe_changed_after_source_test:
@@ -703,7 +831,7 @@ class SourceWorkflowHandler:
         elif pagination_failure:
             title = "Paginated page access failed"
             summary = (
-                "The source test reached the first listing page, but later listing pages did not produce new postings. "
+                "The source test reached the first listing page, but later listing pages did not verify cleanly. "
                 "The selected reading plan should be rebuilt with a different pagination strategy."
             )
             recommendation = (
@@ -738,7 +866,7 @@ class SourceWorkflowHandler:
         else:
             title = "Source test passed"
             summary = "The selected reading plan verified the source capabilities checked by this test."
-            recommendation = "Review the result, index listings, then include the source in the daily run when ready."
+            recommendation = "Review the result, then include the source in the daily run when ready."
             action = {}
 
         clues = {
@@ -758,11 +886,17 @@ class SourceWorkflowHandler:
             "pagination_duplicate_page_count": pagination_duplicate_page_count,
             "pagination_duplicate_ratio": pagination_duplicate_ratio,
             "pagination_unique_jobs_from_fetched_pages": unique_from_pages,
+            "pagination_duplicate_postings": pagination_duplicate_postings,
+            "pagination_working_with_unique_pages": pagination_working_with_unique_pages,
             "interactive_pagination_control_count": interactive_pagination_control_count,
             "visible_total_job_count": visible_total,
             "jobs_reached": job_count,
             "pagination_warning": pagination_warning,
+            "source_access_requires_session": source_access_requires_session,
+            "source_access_session_used": source_access_session_used,
+            "source_access_session_scope": source_access_session_scope,
             "source_access_session_status": source_access_status,
+            "source_access_failed": source_access_failed,
             "source_access_login_gate_detected": source_access_login_gate_detected,
             "warnings": warnings[:5],
         }
@@ -821,7 +955,9 @@ class SourceWorkflowHandler:
         }
 
     def detail_status(self, source, index_summary) -> dict[str, Any]:
-        seen_records = self.jobs.list_seen_records()
+        return self.detail_status_from_seen_records(source, index_summary, self.jobs.list_seen_records())
+
+    def detail_status_from_seen_records(self, source, index_summary, seen_records) -> dict[str, Any]:
         indexed_keys = {
             listing.listing_key
             for listing in index_summary.listings
@@ -1001,6 +1137,7 @@ def pagination_warning_signal(
     job_count: int,
     pagination_fetch_count: int,
     pagination_duplicate_page_count: int,
+    pagination_unique_jobs_from_fetched_pages: int,
 ) -> str:
     warning_texts = [str(warning or "") for warning in warnings]
     capability_texts = [
@@ -1016,12 +1153,21 @@ def pagination_warning_signal(
         lowered = text.lower()
         if not lowered:
             continue
+        duplicate_warning = "duplicate listing" in lowered or "returned only listings already seen" in lowered
+        duplicate_check_failed = (
+            str(by_capability.get("pagination_duplicate_pages", {}).get("status") or "") == "fail"
+        )
+        if duplicate_warning and not duplicate_check_failed:
+            continue
+        if pagination_duplicate_page_count <= 0 and pagination_unique_jobs_from_fetched_pages > 0:
+            continue
         if "pagination" not in lowered and "listing page" not in lowered:
             continue
         if any(
             marker in lowered
             for marker in [
                 "returned only listings already seen",
+                "duplicate listing",
                 "duplicate listings",
                 "client-side pagination",
                 "later result pages",
@@ -1033,7 +1179,9 @@ def pagination_warning_signal(
     for key, check, text in capability_texts:
         if key == "listing_total_access" and str(check.get("status") or "") != "fail":
             continue
-        if key == "pagination_duplicate_pages" and pagination_duplicate_page_count <= 0:
+        if key == "pagination_duplicate_pages" and (
+            pagination_duplicate_page_count <= 0 or str(check.get("status") or "") != "fail"
+        ):
             continue
         lowered = text.lower()
         if not lowered:
@@ -1044,6 +1192,7 @@ def pagination_warning_signal(
             marker in lowered
             for marker in [
                 "returned only listings already seen",
+                "duplicate listing",
                 "duplicate listings",
                 "client-side pagination",
                 "later result pages",
@@ -1065,7 +1214,7 @@ def pagination_warning_signal(
         return str(listing_total.get("detail") or "The listing total was not fully reached.")
 
     if pagination_duplicate_page_count > 0 and visible_total > 0 and job_count < visible_total:
-        return "A fetched pagination page returned only duplicate listings before the visible total was reached."
+        return "A fetched pagination page repeated listings before the visible total was reached."
 
     return ""
 

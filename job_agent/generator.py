@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from .config import ROOT
+from .llm import LlmService
 from .models import GeneratedPackage, Job, MatchResult
 from .run_store import RunEvent
-from .llm import LlmService
+from .services.application_examples_service import ApplicationExamplesService, format_examples_for_prompt
 
 
 def generate_materials(
@@ -22,7 +24,8 @@ def generate_materials(
 ) -> GeneratedPackage:
     selected_experience = select_experience(job, profile)
     top_skills = select_skills(job, match, profile)
-    role_summary = build_role_summary(job, top_skills)
+    application_examples = ApplicationExamplesService(root).select_relevant(job, match, profile)
+    role_summary = build_role_summary(job, top_skills, profile)
     caveat_text = build_caveat_text(job, match, profile)
     application_opening = build_application_opening(job, match)
     generation_notes: list[str] = []
@@ -36,6 +39,7 @@ def generate_materials(
             selected_experience,
             top_skills,
             generation_notes,
+            application_examples,
             run_id=run_id,
             stable_id=stable_id,
             root=root,
@@ -59,6 +63,7 @@ def generate_materials(
         "role_summary": role_summary,
         "top_skills": top_skills,
         "selected_experience": selected_experience,
+        "application_examples": application_examples,
         "keyword_line": ", ".join(_dedupe(match.matched_keywords + top_skills)),
         "opening": application_opening,
         "caveat_text": caveat_text,
@@ -101,7 +106,7 @@ def select_experience(job: Job, profile: dict) -> list[dict[str, str]]:
     text = f"{job.title} {job.description} {' '.join(job.required_skills)} {' '.join(job.required_modules)}".lower()
     scored = []
     for index, item in enumerate(profile.get("experience", [])):
-        keywords = item.get("keywords", [])
+        keywords = _experience_terms(item)
         score = sum(1 for keyword in keywords if keyword.lower() in text)
         scored.append((score, -index, item))
     selected = [item for _, _, item in sorted(scored, reverse=True)[:2]]
@@ -118,39 +123,46 @@ def select_experience(job: Job, profile: dict) -> list[dict[str, str]]:
     return result
 
 
-def build_role_summary(job: Job, top_skills: list[str]) -> str:
+def build_role_summary(job: Job, top_skills: list[str], profile: dict) -> str:
     onsite = ""
     if any(term in f"{job.remote} {job.location}".lower() for term in ["onsite", "hybrid"]):
         onsite = " Includes availability for hybrid or onsite setup where logistics are workable."
+    profile_title = profile.get("contact", {}).get("title") or "Candidate profile"
+    skill_focus = ", ".join(top_skills[:3]) or "the most relevant verified skills"
     return (
-        f"SAP technical consultant profile aligned with {job.title}, with emphasis on "
-        f"{', '.join(top_skills[:3])}. Background combines hands-on delivery, debugging, integration work, "
-        f"and clear communication around scope and partial matches.{onsite}"
+        f"{profile_title} aligned with {job.title}, with emphasis on {skill_focus}. "
+        f"Background combines relevant delivery experience, practical problem solving, and clear communication "
+        f"around scope and partial matches.{onsite}"
     )
 
 
 def build_application_opening(job: Job, match: MatchResult) -> str:
     return (
         f"I am contacting you regarding the {job.title} role. The strongest overlap is "
-        f"{', '.join(match.matched_keywords[:6]) or 'SAP technical consulting'}, supported by concrete SAP project delivery."
+        f"{', '.join(match.matched_keywords[:6]) or 'the configured profile'}, supported by relevant project delivery."
     )
 
 
 def build_caveat_text(job: Job, match: MatchResult, profile: dict) -> str:
-    caveats = []
-    text = f"{job.title} {job.description}".lower()
-    if "fiori" in text or "ui5" in text:
-        caveats.append(profile.get("skills", {}).get("caveats", {}).get("fiori", "Clarify Fiori/UI5 depth."))
-    if "project manager" in text or "transition manager" in text or "service delivery manager" in text:
-        caveats.append(
-            profile.get("skills", {})
-            .get("caveats", {})
-            .get("project_management", "Clarify project management ownership depth.")
+    caveats = [
+        concern
+        for concern in match.concerns
+        if concern
+        and not concern.startswith(
+            (
+                "Freshness is uncertain",
+                "Rate or salary is not listed",
+                "Permanent employment conflicts",
+                "Remote or hybrid setup",
+                "Missing required match rule",
+                "Extraction confidence is low",
+            )
         )
+    ]
     if match.components.get("language_risk", 0) < 0:
         caveats.append("Language requirements should be confirmed before applying.")
     if caveats:
-        return " ".join(caveats)
+        return " ".join(_dedupe(caveats))
     return "The application keeps the focus on the parts of the role where the background is strongest."
 
 
@@ -159,8 +171,9 @@ def maybe_generate_application_with_llm(
     match: MatchResult,
     profile: dict,
     selected_experience: list[dict[str, str]],
-    top_skills: list[str],
+        top_skills: list[str],
     generation_notes: list[str],
+    application_examples: list[dict[str, Any]] | None = None,
     run_id: str = "",
     stable_id: str = "",
     root: Path = ROOT,
@@ -196,6 +209,7 @@ def maybe_generate_application_with_llm(
             writing_style=profile.get("writing_style", ""),
             top_skills=", ".join(top_skills),
             selected_experience=selected_experience,
+            application_examples=format_examples_for_prompt(application_examples or []),
             title=job.title,
             company=job.company,
             location=job.location,
@@ -243,6 +257,17 @@ def _load_prompt(name: str, root: Path = ROOT) -> str:
     if path.exists():
         return path.read_text(encoding="utf-8")
     return "{canonical_cv}\n\nWrite application for {title}."
+
+
+def _experience_terms(item: dict[str, Any]) -> list[str]:
+    terms: list[str] = []
+    for key in ["keywords", "linked_skills", "linked_modules", "linked_roles"]:
+        value = item.get(key, [])
+        if isinstance(value, list):
+            terms.extend(str(part) for part in value if str(part).strip())
+        elif str(value).strip():
+            terms.append(str(value))
+    return _dedupe([term.strip() for term in terms if term.strip()])
 
 
 def _dedupe(items: list[str]) -> list[str]:

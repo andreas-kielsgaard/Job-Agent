@@ -72,6 +72,17 @@ class SourceExecutionReadinessService:
             return SourceExecutionReadiness(source_id=source_id)
         return _record_from_mapping(source_id, record)
 
+    def load_all(self) -> dict[str, SourceExecutionReadiness]:
+        data = read_yaml(self.path, {"sources": {}})
+        sources = data.get("sources", {}) if isinstance(data, dict) else {}
+        if not isinstance(sources, dict):
+            return {}
+        return {
+            str(source_id): _record_from_mapping(str(source_id), record)
+            for source_id, record in sources.items()
+            if isinstance(record, dict)
+        }
+
     def save_from_source_test(self, result: SourceTestResult) -> SourceExecutionReadiness:
         readiness = self.evaluate(result.source_id, source_test_result=result)
         data = read_yaml(self.path, {"sources": {}})
@@ -270,6 +281,10 @@ class SourceExecutionReadinessService:
 
 
 _SOURCE_TEST_METRIC_KEYS = (
+    "access_strategy",
+    "api_request_count",
+    "records_observed_count",
+    "json_records_extracted_count",
     "pagination_strategy",
     "pagination_fetch_count",
     "pagination_link_count",
@@ -289,6 +304,10 @@ def _record_source_test_metrics(checks: dict[str, Any], result: SourceTestResult
     checks.update(
         {
             "pagination_strategy": result.pagination_strategy,
+            "access_strategy": result.access_strategy,
+            "api_request_count": result.api_request_count,
+            "records_observed_count": result.records_observed_count,
+            "json_records_extracted_count": result.json_records_extracted_count,
             "pagination_fetch_count": result.pagination_fetch_count,
             "pagination_link_count": result.pagination_link_count,
             "pagination_max_pages": result.pagination_max_pages,
@@ -335,6 +354,7 @@ def _source_test_findings(
             "listing_total_access",
             "pagination_strategy",
             "ajax_pagination",
+            "api_pagination",
             "browser_click_pagination",
             "pagination_duplicate_pages",
             "source_access",
@@ -363,6 +383,7 @@ def _source_test_findings(
             "source_access": 0,
             "pagination_strategy": 1,
             "ajax_pagination": 2,
+            "api_pagination": 2,
             "browser_click_pagination": 2,
             "pagination_navigation": 3,
             "pagination_duplicate_pages": 4,
@@ -385,11 +406,6 @@ def _source_test_findings(
             else failure_labels.get(capability, "Pagination verification failed")
         )
         blockers.append(label + (f": {detail}" if detail else "."))
-    elif pagination_duplicate_page_count and pagination_duplicate_ratio >= 0.8:
-        blockers.append(
-            "Pagination verification failed: fetched pagination pages were mostly duplicate listings. "
-            "The source may require a connected session or client-side pagination."
-        )
     if warnings:
         review_warnings.append(f"Source test reported {len(warnings)} warnings.")
     return blockers, review_warnings

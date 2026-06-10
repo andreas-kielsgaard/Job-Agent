@@ -25,6 +25,9 @@ from job_agent.services.recipes.discovery import (
     discover_pagination_links,
 )
 from job_agent.services.recipes.fetching import (
+    fetch_json_api as _fetch_json_api,
+)
+from job_agent.services.recipes.fetching import (
     fetch_rendered_html as _fetch_rendered_html,
 )
 from job_agent.services.recipes.fetching import (
@@ -137,6 +140,8 @@ def capture_recipe_calibration(
     root: Path = ROOT,
     max_candidates: int = 30,
     capture_detail: bool = True,
+    session_state_path: str | Path | None = None,
+    source_session_scope: str = "",
 ) -> RecipeCalibrationResult:
     normalized_url = validate_public_url(url)
     recipe = load_job_board_recipe(Path(recipe_path)) if recipe_path else None
@@ -145,6 +150,7 @@ def capture_recipe_calibration(
         recipe=recipe,
         rendered=rendered,
         timeout_seconds=15,
+        session_state_path=session_state_path,
     )
     capture_mode = "rendered_html" if use_rendered else "static_html"
     soup = BeautifulSoup(html, "html.parser")
@@ -164,6 +170,15 @@ def capture_recipe_calibration(
         use_rendered=use_rendered,
         timeout_seconds=15,
         enabled=capture_detail,
+        session_state_path=session_state_path,
+    )
+    artifact_dir = _artifact_dir(root, final_url)
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    api_observations, api_warnings = discover_api_access_candidates(
+        html,
+        final_url,
+        artifact_dir=artifact_dir,
+        timeout_seconds=15,
     )
     recipe_blueprint = build_recipe_blueprint(
         html,
@@ -172,9 +187,12 @@ def capture_recipe_calibration(
         detail_html=detail_html,
         detail_url=detail_final_url or detail_sample_url,
     )
-
-    artifact_dir = _artifact_dir(root, final_url)
-    artifact_dir.mkdir(parents=True, exist_ok=True)
+    api_blueprint = _api_recipe_blueprint(api_observations[0], final_url) if api_observations else {}
+    if api_blueprint and (
+        recipe_blueprint.get("status") == "not_recommended"
+        or api_blueprint.get("confidence") == "high"
+    ):
+        recipe_blueprint = api_blueprint
     (artifact_dir / "page.html").write_text(html, encoding="utf-8")
     (artifact_dir / "visible-text.txt").write_text(visible_text, encoding="utf-8")
     (artifact_dir / "candidate-elements.html").write_text(_candidate_html(candidates), encoding="utf-8")
@@ -189,8 +207,11 @@ def capture_recipe_calibration(
         "candidates": [asdict(candidate) for candidate in candidates],
         "observed_pagination_links": [asdict(link) for link in pagination_observations],
         "observed_ajax_pagination_templates": ajax_pagination_observations,
+        "observed_api_candidates": api_observations,
         "observed_interactive_pagination_controls": interactive_pagination_observations,
         "observed_application_entries": [asdict(entry) for entry in application_entries],
+        "source_session_used": bool(session_state_path),
+        "source_session_scope": source_session_scope if session_state_path else "",
         "detail_sample_url": detail_final_url or detail_sample_url,
         "detail_sample_captured": bool(detail_html),
         "recipe_blueprint": recipe_blueprint,
@@ -207,11 +228,12 @@ def capture_recipe_calibration(
             candidates,
             audit,
             jobs,
-            fetch_warnings + detail_warnings,
+            fetch_warnings + detail_warnings + api_warnings,
             pagination_observations,
             application_entries,
             detail_final_url or detail_sample_url,
             recipe_blueprint,
+            api_observations,
         ),
         encoding="utf-8",
     )
@@ -225,7 +247,7 @@ def capture_recipe_calibration(
         recipe_extracted_count=len(jobs),
         card_selector_match_count=audit.card_match_count if audit else 0,
         detail_sample_url=detail_final_url or detail_sample_url,
-        warnings=fetch_warnings + detail_warnings + (audit.warnings if audit else []),
+        warnings=fetch_warnings + detail_warnings + api_warnings + (audit.warnings if audit else []),
     )
 
 
@@ -298,30 +320,368 @@ def build_recipe_blueprint(
     return result
 
 
+def discover_api_access_candidates(
+    html: str,
+    base_url: str,
+    *,
+    artifact_dir: Path,
+    timeout_seconds: int = 15,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Find public page-declared API access shapes without guessing hidden endpoints."""
+
+    warnings: list[str] = []
+    evidence_text = html + "\n" + "\n".join(_referenced_public_script_texts(html, base_url, timeout_seconds))
+    candidates: list[dict[str, Any]] = []
+    sthree_candidate, sthree_warnings = _discover_sthree_search_api_candidate(
+        evidence_text,
+        base_url,
+        artifact_dir=artifact_dir,
+        timeout_seconds=timeout_seconds,
+    )
+    warnings.extend(sthree_warnings)
+    if sthree_candidate:
+        candidates.append(sthree_candidate)
+    return candidates, warnings
+
+
+def _discover_sthree_search_api_candidate(
+    evidence_text: str,
+    base_url: str,
+    *,
+    artifact_dir: Path,
+    timeout_seconds: int,
+) -> tuple[dict[str, Any] | None, list[str]]:
+    warnings: list[str] = []
+    lowered = evidence_text.lower()
+    if "apiurl" not in lowered or "brandcode" not in lowered:
+        return None, warnings
+    api_base = _first_script_value(evidence_text, "apiUrl")
+    brand_code = _first_script_value(evidence_text, "brandCode")
+    if not api_base or not brand_code:
+        return None, ["Page appeared to expose an API config, but apiUrl or brandCode could not be read."]
+    language = _first_script_value(evidence_text, "jobLanguage") or _locale_from_url(base_url)
+    endpoint = urljoin(api_base.rstrip("/") + "/", "api/services/v2/app/Search/Search")
+    body = _sthree_search_body(base_url, brand_code=brand_code, language=language)
+    headers = {
+        "Content-Type": "application/json",
+        "Abp.Localization.CultureName": language,
+    }
+    request_payload = {
+        "method": "POST",
+        "url": endpoint,
+        "headers": headers,
+        "body": body,
+    }
+    request_artifact = artifact_dir / "api-listing-request-1.json"
+    request_artifact.write_text(json.dumps(request_payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    try:
+        payload, final_url, fetch_warnings = _fetch_json_api(
+            method="POST",
+            url=endpoint,
+            timeout_seconds=timeout_seconds,
+            headers=headers,
+            body=body,
+        )
+    except ValueError as exc:
+        return None, [f"Page-declared API probe failed for {endpoint}: {exc}"]
+    warnings.extend(fetch_warnings)
+    response_artifact = artifact_dir / "api-listing-response-1.json"
+    response_artifact.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    records = _json_path(payload, "result.results")
+    if not isinstance(records, list):
+        records = []
+    total = _int_value(_json_path(payload, "result.hits"))
+    field_mapping = _sthree_field_mapping(records[0] if records and isinstance(records[0], dict) else {}, base_url)
+    candidate = {
+        "kind": "page_declared_sthree_search_api",
+        "method": "POST",
+        "url": endpoint,
+        "final_url": final_url,
+        "headers": headers,
+        "body": body,
+        "results_path": "result.results",
+        "total_path": "result.hits",
+        "record_count": len(records),
+        "total_count": total,
+        "request_artifact": _artifact_relative_path(request_artifact, artifact_dir),
+        "response_artifact": _artifact_relative_path(response_artifact, artifact_dir),
+        "fields": field_mapping,
+        "pagination": {
+            "strategy": "offset",
+            "offset_param": "resultFrom",
+            "offset_start": int(body.get("resultFrom") or 0),
+            "page_param": "resultPage",
+            "page_start": int(body.get("resultPage") or 0),
+            "page_size_param": "resultSize",
+            "page_size": int(body.get("resultSize") or 20),
+            "max_pages": 5,
+            "request_delay_seconds": 1.0,
+        },
+        "sample_records": [_sample_api_record(record) for record in records[:3] if isinstance(record, dict)],
+        "warnings": [],
+    }
+    if not records:
+        candidate["warnings"].append("The page-declared API returned no records for the captured request.")
+    if total and len(records) and total > len(records):
+        candidate["warnings"].append(
+            f"The API reported {total} total record(s); pagination is required for full coverage."
+        )
+    return candidate, warnings
+
+
+def _api_recipe_blueprint(candidate: dict[str, Any], base_url: str) -> dict[str, Any]:
+    fields = {key: value for key, value in (candidate.get("fields") or {}).items() if value}
+    listing_api = {
+        "method": candidate.get("method") or "GET",
+        "url": candidate.get("url") or "",
+        "headers": candidate.get("headers") or {},
+        "body": candidate.get("body") or {},
+        "results_path": candidate.get("results_path") or "",
+        "total_path": candidate.get("total_path") or "",
+        "fields": fields,
+        "pagination": candidate.get("pagination") or {},
+    }
+    total = int(candidate.get("total_count") or 0)
+    observed = int(candidate.get("record_count") or 0)
+    recipe: dict[str, Any] = {
+        "source_name": "Recipe source",
+        "start_url": base_url,
+        "mode": "static_html",
+        "listing_api": listing_api,
+        "reject": _default_reject_rules(),
+        "patterns": _default_patterns(),
+        "limits": {
+            "max_cards": max(25, min(total or observed or 25, 100)),
+            "min_title_length": 8,
+            "min_description_length": 0,
+        },
+    }
+    validation_errors: list[str] = []
+    try:
+        job_board_recipe_from_mapping(recipe, label="api_recipe_blueprint")
+    except ValueError as exc:
+        validation_errors.append(str(exc))
+    return {
+        "status": "draft" if not validation_errors else "not_recommended",
+        "confidence": "high" if observed >= 3 and not validation_errors else "medium",
+        "recipe": recipe if not validation_errors else {},
+        "api_listing_evidence": candidate,
+        "validation_errors": validation_errors,
+        "warnings": validation_errors + list(candidate.get("warnings") or []),
+    }
+
+
+def _referenced_public_script_texts(html: str, base_url: str, timeout_seconds: int) -> list[str]:
+    soup = BeautifulSoup(html, "html.parser")
+    base_host = urlparse(base_url).netloc.lower()
+    texts: list[str] = []
+    for script in soup.find_all("script", src=True)[:8]:
+        src = str(script.get("src") or "").strip()
+        if not src:
+            continue
+        url = urljoin(base_url, src)
+        parsed = urlparse(url)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            continue
+        if parsed.netloc.lower() != base_host:
+            continue
+        try:
+            text, _final_url, _warnings = _fetch_static_html(url, timeout_seconds)
+        except ValueError:
+            continue
+        if len(text) <= 500_000:
+            texts.append(text)
+    return texts
+
+
+def _first_script_value(text: str, name: str) -> str:
+    kebab_name = re.sub(r"(?<!^)([A-Z])", r"-\1", name).lower()
+    patterns = [
+        rf"\b{re.escape(name)}\s*=\s*['\"]([^'\"]+)['\"]",
+        rf"\b{re.escape(name)}\s*:\s*['\"]([^'\"]+)['\"]",
+        rf"['\"]{re.escape(name)}['\"]\s*:\s*['\"]([^'\"]+)['\"]",
+        rf"data-{kebab_name}\s*=\s*['\"]([^'\"]+)['\"]",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, text)
+        if match:
+            return match.group(1).strip()
+    return ""
+
+
+def _sthree_search_body(base_url: str, *, brand_code: str, language: str) -> dict[str, Any]:
+    query = parse_qs(urlparse(base_url).query)
+    body: dict[str, Any] = {
+        "resultSize": 20,
+        "resultFrom": 0,
+        "resultPage": 0,
+        "language": language,
+        "brandCode": brand_code,
+    }
+    for target, names in {
+        "industry": ["industry"],
+        "type": ["type", "jobType"],
+        "country": ["country"],
+    }.items():
+        values = _query_values(query, names)
+        body[target] = values
+    for target, names in {
+        "keywords": ["keywords", "keyword", "searchKeyword", "query"],
+        "location": ["location"],
+        "searchRadius": ["searchRadius"],
+    }.items():
+        values = _query_values(query, names)
+        if values:
+            body[target] = values[0]
+    if "country" not in body:
+        body["country"] = []
+    return body
+
+
+def _query_values(query: dict[str, list[str]], names: list[str]) -> list[str]:
+    values: list[str] = []
+    lowered = {key.lower(): value for key, value in query.items()}
+    for name in names:
+        for value in lowered.get(name.lower(), []):
+            text = str(value).strip()
+            if text:
+                values.append(text)
+    return values
+
+
+def _sthree_field_mapping(record: dict[str, Any], base_url: str) -> dict[str, str]:
+    fields: dict[str, str] = {
+        "title": _first_existing_key(record, ["title", "jobTitle", "name"]),
+        "location": _first_existing_key(record, ["location", "locationName", "city", "country"]),
+        "remote": _first_existing_key(record, ["remoteWorkingAvailable", "remote", "isRemote"]),
+        "rate": _first_existing_key(record, ["salaryText", "salary", "rate", "payRate"]),
+        "workload": _first_existing_key(record, ["jobType", "type", "employmentType"]),
+        "posted_date": _first_existing_key(record, ["postDate", "postedDate", "datePosted"]),
+        "start_date": _first_existing_key(record, ["startDate"]),
+        "description_html": _first_existing_key(record, ["description", "descriptionHtml", "jobDescription"]),
+        "job_id": _first_existing_key(record, ["jobReference", "reference", "id"]),
+        "raw_text": "",
+    }
+    url_field = _first_existing_key(record, ["url", "jobUrl", "link"])
+    if url_field:
+        fields["url"] = url_field
+    elif record.get("slug") and record.get("jobReference"):
+        fields["url_template"] = _sthree_url_template(base_url)
+    return {key: value for key, value in fields.items() if value}
+
+
+def _first_existing_key(record: dict[str, Any], keys: list[str]) -> str:
+    lowered = {key.lower(): key for key in record}
+    for key in keys:
+        actual = lowered.get(key.lower())
+        value = record.get(actual) if actual else None
+        if actual and value is not None and value != "":
+            return actual
+    return ""
+
+
+def _sthree_url_template(base_url: str) -> str:
+    parsed = urlparse(base_url)
+    locale = _locale_from_url(base_url)
+    prefix = f"/{locale}" if locale else ""
+    return f"{parsed.scheme}://{parsed.netloc}{prefix}/job/{{slug}}/{{jobReference}}/"
+
+
+def _locale_from_url(url: str) -> str:
+    path_parts = [part for part in urlparse(url).path.split("/") if part]
+    if path_parts and re.fullmatch(r"[a-z]{2}-[a-z]{2}", path_parts[0], re.I):
+        return path_parts[0].lower()
+    return "en-gb"
+
+
+def _sample_api_record(record: dict[str, Any]) -> dict[str, Any]:
+    keys = [
+        "title",
+        "jobTitle",
+        "name",
+        "slug",
+        "jobReference",
+        "location",
+        "salaryText",
+        "jobType",
+        "postDate",
+        "startDate",
+    ]
+    sample = {key: record.get(key) for key in keys if key in record}
+    if "description" in record:
+        sample["description_preview"] = _preview(str(record.get("description") or ""), 240)
+    return sample
+
+
+def _json_path(value: Any, path: str) -> Any:
+    current = value
+    for token in [part for part in str(path or "").strip("$.").split(".") if part]:
+        if isinstance(current, dict):
+            current = current.get(token)
+        elif isinstance(current, list) and token.isdigit():
+            index = int(token)
+            current = current[index] if 0 <= index < len(current) else None
+        else:
+            return None
+    return current
+
+
+def _int_value(value: Any) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _artifact_relative_path(path: Path, artifact_dir: Path) -> str:
+    try:
+        return path.relative_to(artifact_dir).as_posix()
+    except ValueError:
+        return path.as_posix()
+
+
 def _fetch_calibration_html(
     normalized_url: str,
     *,
     recipe: JobBoardRecipe | None,
     rendered: bool | None,
     timeout_seconds: int,
+    session_state_path: str | Path | None = None,
 ) -> tuple[str, str, list[str], bool]:
     if rendered is True or (rendered is None and recipe and recipe.mode == "rendered_html"):
-        html, final_url, warnings = _fetch_rendered_html(normalized_url, timeout_seconds)
+        html, final_url, warnings = _fetch_rendered_calibration_html(
+            normalized_url,
+            timeout_seconds,
+            session_state_path=session_state_path,
+        )
         return html, final_url, warnings, True
     if rendered is False or recipe:
-        html, final_url, warnings = _fetch_static_html(normalized_url, timeout_seconds)
+        html, final_url, warnings = _fetch_static_calibration_html(
+            normalized_url,
+            timeout_seconds,
+            session_state_path=session_state_path,
+        )
         return html, final_url, warnings, False
 
-    html, final_url, warnings = _fetch_static_html(normalized_url, timeout_seconds)
+    html, final_url, warnings = _fetch_static_calibration_html(
+        normalized_url,
+        timeout_seconds,
+        session_state_path=session_state_path,
+    )
     if _static_capture_has_listing_evidence(html, final_url):
         return html, final_url, warnings, False
     try:
-        rendered_html, rendered_final_url, rendered_warnings = _fetch_rendered_html(normalized_url, timeout_seconds)
+        rendered_html, rendered_final_url, rendered_warnings = _fetch_rendered_calibration_html(
+            normalized_url,
+            timeout_seconds,
+            session_state_path=session_state_path,
+        )
     except RuntimeError as exc:
         return (
             html,
             final_url,
             warnings
+            + _client_rendered_job_search_warnings(html, final_url)
             + [
                 "Static capture did not expose stable job-list evidence, and browser-rendered capture was unavailable: "
                 f"{exc}"
@@ -335,9 +695,42 @@ def _fetch_calibration_html(
         final_url,
         warnings
         + rendered_warnings
+        + _client_rendered_job_search_warnings(html, final_url)
+        + _rendered_blocker_warnings(rendered_html)
         + ["Static and browser-rendered captures both lacked stable job-list evidence."],
         False,
     )
+
+
+def _client_rendered_job_search_warnings(html: str, base_url: str) -> list[str]:
+    lowered = html.lower()
+    if not (
+        "apiurl" in lowered
+        and ("text/x-handlebars-template" in lowered or "id=hitslist" in lowered or 'id="hitslist"' in lowered)
+        and ("job-search" in lowered or "jobsearch" in lowered)
+    ):
+        return []
+    warnings = [
+        "The page exposes client-side job-search templates but no rendered job rows. "
+        "The agent will not call hidden job-search APIs; browser rendering must expose visible job cards."
+    ]
+    query = parse_qs(urlparse(base_url).query)
+    if "country" not in query and "getcountrybyculture" in lowered:
+        warnings.append(
+            "The page script appears to default a missing country filter from the page locale. "
+            "Use an explicit country-specific source URL when learning this site."
+        )
+    return warnings
+
+
+def _rendered_blocker_warnings(html: str) -> list[str]:
+    text = BeautifulSoup(html, "html.parser").get_text(" ", strip=True).lower()
+    if "cloudflare" in text and ("sorry, you have been blocked" in text or "attention required" in text):
+        return [
+            "Browser-rendered capture appears blocked by site protection. "
+            "The agent will not bypass bot protection or captcha."
+        ]
+    return []
 
 
 def _static_capture_has_listing_evidence(html: str, base_url: str) -> bool:
@@ -420,6 +813,7 @@ def _capture_detail_sample(
     use_rendered: bool,
     timeout_seconds: int,
     enabled: bool,
+    session_state_path: str | Path | None = None,
 ) -> tuple[str, str, str, list[str]]:
     if not enabled:
         return "", "", "", []
@@ -428,13 +822,35 @@ def _capture_detail_sample(
         return "", "", "", ["No job-detail link was found for detail-sample capture."]
     try:
         detail_html, final_url, warnings = (
-            _fetch_rendered_html(sample_url, timeout_seconds)
+            _fetch_rendered_calibration_html(sample_url, timeout_seconds, session_state_path=session_state_path)
             if use_rendered
-            else _fetch_static_html(sample_url, timeout_seconds)
+            else _fetch_static_calibration_html(sample_url, timeout_seconds, session_state_path=session_state_path)
         )
     except ValueError as exc:
         return sample_url, "", "", [f"Detail sample capture failed for {sample_url}: {exc}"]
     return sample_url, detail_html, final_url, warnings
+
+
+def _fetch_static_calibration_html(
+    url: str,
+    timeout_seconds: int,
+    *,
+    session_state_path: str | Path | None = None,
+) -> tuple[str, str, list[str]]:
+    if session_state_path:
+        return _fetch_static_html(url, timeout_seconds, session_state_path=session_state_path)
+    return _fetch_static_html(url, timeout_seconds)
+
+
+def _fetch_rendered_calibration_html(
+    url: str,
+    timeout_seconds: int,
+    *,
+    session_state_path: str | Path | None = None,
+) -> tuple[str, str, list[str]]:
+    if session_state_path:
+        return _fetch_rendered_html(url, timeout_seconds, session_state_path=session_state_path)
+    return _fetch_rendered_html(url, timeout_seconds)
 
 
 def _detail_sample_url(html: str, base_url: str, recipe: JobBoardRecipe | None) -> str:
@@ -462,14 +878,28 @@ def _best_listing_card(soup: BeautifulSoup, base_url: str) -> dict[str, Any] | N
             matching_cards = [card for card in cards if not _likely_noise(card) and _job_detail_links(card, base_url)]
             if not matching_cards:
                 continue
+            card_detail_urls = [
+                absolute_url
+                for card in matching_cards
+                for _link, absolute_url, link_token in _job_detail_links(card, base_url)
+                if link_token == token
+            ]
+            unique_detail_url_count = len(set(card_detail_urls))
+            effective_match_count = unique_detail_url_count or len(matching_cards)
             average_links = sum(len(card.find_all("a", href=True)) for card in cards) / len(cards)
             average_text = sum(len(card.get_text(" ", strip=True)) for card in matching_cards) / len(matching_cards)
-            score = len(matching_cards) * 8 + min(average_text, 250) / 20
+            score = effective_match_count * 8 + min(average_text, 250) / 20
+            if len(matching_cards) > effective_match_count:
+                score -= (len(matching_cards) - effective_match_count) * 6
             selector_lower = selector.lower()
-            if any(term in selector_lower for term in ["job", "project", "card", "item", "row"]):
+            if any(term in selector_lower for term in ["job", "project", "card", "item"]):
                 score += 18
-            if any(term in selector_lower for term in ["card", "item", "row"]):
+            if any(term in selector_lower for term in ["card", "item"]):
                 score += 12
+            if "row" in selector_lower and not any(
+                term in selector_lower for term in ["job", "project", "card", "item"]
+            ):
+                score -= 8
             if "info" in selector_lower and not any(term in selector_lower for term in ["card", "item", "row"]):
                 score -= 10
             if ancestor.name in {"article", "tr", "li"}:
@@ -487,6 +917,7 @@ def _best_listing_card(soup: BeautifulSoup, base_url: str) -> dict[str, Any] | N
                     "score": round(score, 2),
                     "match_count": len(matching_cards),
                     "card_count": len(cards),
+                    "unique_url_count": unique_detail_url_count,
                     "url_token": token,
                     "sample_url": absolute_url,
                     "sample_text": _preview(matching_cards[0].get_text(" ", strip=True), 260),
@@ -496,7 +927,8 @@ def _best_listing_card(soup: BeautifulSoup, base_url: str) -> dict[str, Any] | N
         return None
     best = max(scored.values(), key=lambda item: item["score"])
     best_cards = soup.select(best["selector"])[:5]
-    best["title_selector"] = _link_selector_for_card(best_cards[0], best["url_token"])
+    best["link_selector"] = _link_selector_for_card(best_cards[0], best["url_token"])
+    best["title_selector"] = _title_selector_for_card(best_cards[0], best["link_selector"])
     if best_cards and best_cards[0].name == "tr":
         field_selectors, field_observations = _table_listing_field_selectors(best_cards[0], best_cards)
         best["field_selectors"] = field_selectors
@@ -556,7 +988,7 @@ def _detail_url_token(url: str) -> str:
     path = urlparse(url).path.lower()
     if not _url_is_probable_detail_url(path):
         return ""
-    for token in ["/job/", "/project/", "/freelance_projects/", "/jobs/"]:
+    for token in ["/job/", "/jobb/", "/job-role/", "/project/", "/freelance_projects/", "/jobs/"]:
         if token in path:
             return token
     return ""
@@ -590,13 +1022,44 @@ def _link_selector_for_card(card: Tag, token: str) -> str:
     return f'a[href*="{token}"]' if token else "a"
 
 
+def _title_selector_for_card(card: Tag, link_selector: str) -> str:
+    if _selector_has_useful_title(card, link_selector):
+        return link_selector
+    for heading in card.find_all(["h1", "h2", "h3", "h4"], recursive=True):
+        selector = str(heading.name or "")
+        if _selector_has_useful_title(card, selector):
+            return selector
+        link = heading.select_one("a[href]")
+        if link and _selector_has_useful_title(card, f"{selector} a"):
+            return f"{selector} a"
+    for selector in [
+        ".job-title a",
+        ".job-title",
+        ".title a",
+        ".title",
+        ".position a",
+        ".position",
+        '[class*="title"] a',
+        '[class*="title"]',
+    ]:
+        if _selector_has_useful_title(card, selector):
+            return selector
+    return link_selector or "a"
+
+
+def _selector_has_useful_title(card: Tag, selector: str) -> bool:
+    text = _selected_text(card, selector)
+    return bool(text and title_quality(text) == "useful")
+
+
 def _listing_recipe_from_card(card: dict[str, Any]) -> dict[str, Any]:
     card_selector = str(card["selector"])
     title_selector = str(card.get("title_selector") or "a")
+    link_selector = str(card.get("link_selector") or title_selector)
     listing: dict[str, Any] = {
         "card_selector": card_selector,
         "title_selector": title_selector,
-        "link_selector": title_selector,
+        "link_selector": link_selector,
     }
     listing.update(card.get("field_selectors") or {})
     return {key: value for key, value in listing.items() if value}
@@ -662,10 +1125,11 @@ def _available_listing_field_selectors(cards: list[Tag]) -> dict[str, str]:
     selector_fields = {
         "location_selector": [".job-location", ".location", '[data-testid="city"]', ".city"],
         "remote_selector": ['[data-testid="remoteInPercent"]', ".job-arrangement", ".remote"],
-        "workload_selector": ['[data-testid="type"]', ".job-type", ".type"],
+        "rate_selector": [".salary", ".rate", ".job-rate"],
+        "workload_selector": ['[data-testid="type"]', ".job_type", ".job-type", ".type"],
         "posted_date_selector": ['[data-testid="created"]', "time", ".posted-date", ".date"],
-        "start_date_selector": ['[data-testid="beginningText"]'],
-        "description_selector": [".job-summary", ".summary", ".description"],
+        "start_date_selector": ['[data-testid="beginningText"]', ".start_date"],
+        "description_selector": [".job-description", ".job-summary", ".summary", ".description", ".excerpt", ".left"],
         "company_selector": [
             '[data-testid="company"]',
             "div.project-info > div.mg-b-display-m:first-child",
@@ -686,6 +1150,7 @@ def _available_listing_field_selectors(cards: list[Tag]) -> dict[str, str]:
 def _pagination_recipe(html: str, base_url: str) -> dict[str, Any]:
     soup = BeautifulSoup(html, "html.parser")
     next_selector = 'link[rel="next"]' if soup.select('link[rel="next"][href*="pagenr="]') else ""
+    page_query_selector = _page_query_link_selector(soup)
     if soup.select("a.page-numbers"):
         return {
             "strategy": "url",
@@ -709,6 +1174,14 @@ def _pagination_recipe(html: str, base_url: str) -> dict[str, Any]:
             "page_link_selector": 'a[href*="pagenr="]',
             "next_selector": next_selector,
             "max_pages": _observed_max_page_from_links(observed_links, default=2),
+            "request_delay_seconds": 1.0,
+        }
+    if page_query_selector:
+        return {
+            "strategy": "url",
+            "page_link_selector": page_query_selector,
+            "next_selector": _page_query_next_selector(soup),
+            "max_pages": _observed_max_page(soup, default=2),
             "request_delay_seconds": 1.0,
         }
     if next_selector:
@@ -736,6 +1209,22 @@ def _pagination_recipe(html: str, base_url: str) -> dict[str, Any]:
             "request_delay_seconds": 1.0,
         }
     return {}
+
+
+def _page_query_link_selector(soup: BeautifulSoup) -> str:
+    if soup.select('a.page-link[href*="page="]'):
+        return 'a.page-link[href*="page="]'
+    if soup.select('a[href*="page="]'):
+        return 'a[href*="page="]'
+    return ""
+
+
+def _page_query_next_selector(soup: BeautifulSoup) -> str:
+    if soup.select('a.page-link[href*="page="][aria-label*="Next"]'):
+        return 'a.page-link[href*="page="][aria-label*="Next"]'
+    if soup.select('a[href*="page="][aria-label*="Next"]'):
+        return 'a[href*="page="][aria-label*="Next"]'
+    return ""
 
 
 def discover_ajax_pagination_templates(html: str, base_url: str) -> list[dict[str, Any]]:
@@ -900,10 +1389,11 @@ def _observed_max_page(soup: BeautifulSoup, default: int) -> int:
         label = link.get_text(" ", strip=True)
         if label.isdigit():
             numbers.append(int(label))
-        query_pages = parse_qs(urlparse(str(link.get("href") or "")).query).get("pagenr", [])
-        for value in query_pages:
-            if str(value).isdigit():
-                numbers.append(int(value))
+        query = parse_qs(urlparse(str(link.get("href") or "")).query)
+        for key in ["page", "pagenr"]:
+            for value in query.get(key, []):
+                if str(value).isdigit():
+                    numbers.append(int(value))
     return max(default, min(max(numbers or [default]), 50))
 
 
@@ -913,10 +1403,11 @@ def _observed_max_page_from_links(links: list[Any], default: int) -> int:
         label = str(getattr(link, "label", "") or "")
         if label.isdigit():
             numbers.append(int(label))
-        query_pages = parse_qs(urlparse(str(getattr(link, "url", "") or "")).query).get("pagenr", [])
-        for value in query_pages:
-            if str(value).isdigit():
-                numbers.append(int(value))
+        query = parse_qs(urlparse(str(getattr(link, "url", "") or "")).query)
+        for key in ["page", "pagenr"]:
+            for value in query.get(key, []):
+                if str(value).isdigit():
+                    numbers.append(int(value))
     return max(default, min(max(numbers or [default]), 50))
 
 
@@ -1239,6 +1730,7 @@ def _summary_markdown(
     application_entries: list[Any] | None = None,
     detail_sample_url: str = "",
     recipe_blueprint: dict[str, Any] | None = None,
+    api_observations: list[dict[str, Any]] | None = None,
 ) -> str:
     blueprint_recipe = (recipe_blueprint or {}).get("recipe") or {}
     lines = [
@@ -1249,19 +1741,30 @@ def _summary_markdown(
         f"Candidate regions: {len(candidates)}",
         f"Pagination-looking links: {len(pagination_links or [])}",
         f"Application entrypoints: {len(application_entries or [])}",
+        f"Page-declared API candidates: {len(api_observations or [])}",
         f"Detail sample: {detail_sample_url or 'none'}",
     ]
     if blueprint_recipe:
         listing = blueprint_recipe.get("listing") or {}
+        listing_api = blueprint_recipe.get("listing_api") or {}
         detail = blueprint_recipe.get("detail") or {}
         pagination = blueprint_recipe.get("pagination") or {}
-        lines.extend(
-            [
-                f"Draft card selector: `{listing.get('card_selector', '')}`",
-                f"Draft detail follow: {bool(detail.get('follow'))}",
-                f"Draft pagination selector: `{pagination.get('page_link_selector', '')}`",
-            ]
-        )
+        if listing_api:
+            lines.extend(
+                [
+                    f"Draft API listing: `{listing_api.get('method', 'GET')} {listing_api.get('url', '')}`",
+                    f"Draft API records path: `{listing_api.get('results_path', '')}`",
+                    f"Draft API pagination: `{(listing_api.get('pagination') or {}).get('strategy', 'none')}`",
+                ]
+            )
+        else:
+            lines.extend(
+                [
+                    f"Draft card selector: `{listing.get('card_selector', '')}`",
+                    f"Draft detail follow: {bool(detail.get('follow'))}",
+                    f"Draft pagination selector: `{pagination.get('page_link_selector', '')}`",
+                ]
+            )
     if audit:
         lines.extend(
             [
@@ -1281,6 +1784,16 @@ def _summary_markdown(
                 lines.append(f"- {job.title} - {job.url}")
     for warning in warnings:
         lines.append(f"Warning: {warning}")
+    if api_observations:
+        lines.append("")
+        lines.append("Page-declared API observations:")
+        for observation in api_observations[:5]:
+            lines.append(
+                "- "
+                f"`{observation.get('method', 'GET')} {observation.get('url', '')}` "
+                f"records={observation.get('record_count', 0)} total={observation.get('total_count', 0)} "
+                f"response={observation.get('response_artifact', '')}"
+            )
     lines.append("")
     lines.append("Top candidate selectors:")
     for candidate in candidates[:10]:

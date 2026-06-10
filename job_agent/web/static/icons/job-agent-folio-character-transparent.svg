@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <title>Folio job application guide character transparent</title>
+  <desc>A transparent version of the CV/application folder mascot for a job agent onboarding guide.</desc>
+
+  <ellipse cx="512" cy="818" rx="270" ry="44" fill="#1F2B22" opacity="0.16"/>
+
+  <path
+    d="M740 512C808 492 842 435 811 384"
+    stroke="#B96838"
+    stroke-width="42"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+  <circle cx="809" cy="380" r="34" fill="#EFE3C8"/>
+  <path d="M787 370L772 344M815 360L821 332M837 380L864 360"
+        stroke="#4A3024" stroke-width="12" stroke-linecap="round"/>
+
+  <path
+    d="M284 573C224 598 202 653 236 690"
+    stroke="#B96838"
+    stroke-width="38"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+  <circle cx="236" cy="690" r="28" fill="#EFE3C8"/>
+
+  <path
+    d="M270 350H424C449 350 463 363 477 383L500 416H720C759 416 792 449 792 488V732C792 771 759 804 720 804H304C265 804 232 771 232 732V388C232 367 249 350 270 350Z"
+    fill="#6F674A"
+  />
+  <path
+    d="M290 302H487C516 302 534 316 550 342L584 398H302C262 398 232 429 232 469V372C232 333 251 302 290 302Z"
+    fill="#B96838"
+  />
+
+  <rect x="326" y="404" width="372" height="332" rx="50" fill="#EFE3C8"/>
+
+  <text x="383" y="486" fill="#4A3024" font-size="70" font-family="Arial, Helvetica, sans-serif" font-weight="800" letter-spacing="3">CV</text>
+  <path d="M517 452H634" stroke="#4A3024" stroke-width="16" stroke-linecap="round" opacity="0.55"/>
+  <path d="M517 491H612" stroke="#4A3024" stroke-width="14" stroke-linecap="round" opacity="0.40"/>
+
+  <path d="M392 560L414 583L457 532" stroke="#B96838" stroke-width="20" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M492 552H624" stroke="#4A3024" stroke-width="14" stroke-linecap="round" opacity="0.36"/>
+  <path d="M392 632L414 655L457 604" stroke="#B96838" stroke-width="20" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M492 624H602" stroke="#4A3024" stroke-width="14" stroke-linecap="round" opacity="0.36"/>
+
+  <circle cx="431" cy="693" r="25" fill="#253529"/>
+  <circle cx="586" cy="693" r="25" fill="#253529"/>
+  <circle cx="440" cy="684" r="8" fill="#EFE3C8"/>
+  <circle cx="595" cy="684" r="8" fill="#EFE3C8"/>
+  <path d="M468 735C491 758 532 758 555 735"
+        stroke="#4A3024" stroke-width="20" stroke-linecap="round"/>
+
+  <rect x="646" y="602" width="92" height="78" rx="20" fill="#253529"/>
+  <path d="M674 602V590C674 575 684 566 699 566H715C730 566 740 575 740 590V602"
+        stroke="#253529" stroke-width="22" stroke-linecap="round"/>
+  <rect x="688" y="627" width="30" height="22" rx="7" fill="#B96838"/>
+
+  <path d="M390 798V838" stroke="#B96838" stroke-width="36" stroke-linecap="round"/>
+  <path d="M636 798V838" stroke="#B96838" stroke-width="36" stroke-linecap="round"/>
+  <ellipse cx="381" cy="850" rx="54" ry="24" fill="#EFE3C8"/>
+  <ellipse cx="645" cy="850" rx="54" ry="24" fill="#EFE3C8"/>
+</svg>

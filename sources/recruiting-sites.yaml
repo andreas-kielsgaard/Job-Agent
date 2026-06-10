@@ -10,10 +10,52 @@ sources:
   type: recipe_html
   url: https://www.freelancermap.com/projects?created=30&excludeDachProjects=true&query=sap&sort=2&pagenr=1
   recipe_path: sources/recipes/experimental/freelancermap.yaml
-  enabled: false
+  enabled: true
 - name: Accuro
   source_id: accuro
   type: recipe_html
   url: https://accuro.dk/en/consultant/freelance-projects/
   recipe_path: sources/recipes/experimental/accuro.yaml
-  enabled: false
+  enabled: true
+- name: Experis
+  source_id: experis
+  type: recipe_html
+  url: https://www.experis.pl/en/search?page=1&searchKeyword=SAP
+  recipe_path: sources/recipes/experimental/experis.yaml
+  enabled: true
+- name: Eursap Jobs
+  source_id: eursap-jobs
+  type: recipe_html
+  url: https://eursap.eu/jobs
+  recipe_path: sources/recipes/experimental/eursap-jobs.yaml
+  enabled: true
+- name: RED Global
+  source_id: red-global
+  type: recipe_html
+  url: https://www.redglobal.com/jobs/search?keywords=&role=H021HnPu&workplace=&types=
+  recipe_path: sources/recipes/experimental/red-global.yaml
+  enabled: true
+- name: Masento Group
+  source_id: masento-group
+  type: recipe_html
+  url: https://www.masentogroup.com/job-search?section=jobs&search=&jobDivision=2614&jobType%5B%5D=Contract
+  recipe_path: sources/recipes/experimental/masento-group.yaml
+  enabled: true
+- name: Next Ventures
+  source_id: next-ventures
+  type: recipe_html
+  url: https://next-ventures.com/practices/sap-recruitment/sap-jobs/
+  recipe_path: sources/recipes/experimental/next-ventures.yaml
+  enabled: true
+- name: SAP Contractors
+  source_id: sap-contractors
+  type: recipe_html
+  url: https://www.sapcontractors.com/search-jobs/?fwp_keyword=
+  recipe_path: sources/recipes/experimental/sap-contractors.yaml
+  enabled: true
+- name: Global Enterprise Partners
+  source_id: global-enterprise-partners
+  type: recipe_html
+  url: https://www.globalenterprisepartners.com/en-gb/job-search/?industry=SAP&type=Contract&searchRadius=20mi
+  recipe_path: sources/recipes/experimental/global-enterprise-partners.yaml
+  enabled: true

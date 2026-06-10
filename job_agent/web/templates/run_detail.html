@@ -11,16 +11,16 @@
         {% endfor %}
       </div>
     </div>
-    <span class="badge {{ run.status }}">{{ run.status }}</span>
+    <span class="badge {{ run.status }}" data-run-status>{{ run.status }}</span>
   </div>
   <div class="grid">
-    <div class="stat"><span>Loaded jobs</span><strong>{{ run.total_loaded }}</strong></div>
-    <div class="stat"><span>New or changed</span><strong>{{ run_overview.new_changed }}</strong></div>
-    <div class="stat"><span>Already seen skipped</span><strong>{{ run_overview.previously_seen_skipped }}</strong></div>
-    <div class="stat"><span>Proposed jobs</span><strong>{{ run_overview.proposed_jobs }}</strong></div>
-    <div class="stat"><span>Materials generated</span><strong>{{ run_overview.materials_generated }}</strong></div>
-    <div class="stat"><span>Materials missing</span><strong>{{ run_overview.materials_missing }}</strong></div>
-    <div class="stat"><span>Warnings</span><strong>{{ run.source_warnings }}</strong></div>
+    <div class="stat"><span>Listings seen</span><strong data-run-stat="total_loaded">{{ run.total_loaded }}</strong></div>
+    <div class="stat"><span>Fresh/updated</span><strong data-run-stat="new_changed">{{ run_overview.new_changed }}</strong></div>
+    <div class="stat"><span>Already known</span><strong data-run-stat="previously_seen_skipped">{{ run_overview.previously_seen_skipped }}</strong></div>
+    <div class="stat"><span>Review picks</span><strong data-run-stat="proposed_jobs">{{ run_overview.proposed_jobs }}</strong></div>
+    <div class="stat"><span>Materials generated</span><strong data-run-stat="materials_generated">{{ run_overview.materials_generated }}</strong></div>
+    <div class="stat"><span>Materials missing</span><strong data-run-stat="materials_missing">{{ run_overview.materials_missing }}</strong></div>
+    <div class="stat" data-run-stat-cell="source_warnings" {% if run.status in ["pending", "running"] or not run.source_warnings %}hidden{% endif %}><span>Issues</span><strong data-run-stat="source_warnings">{{ run.source_warnings }}</strong></div>
   </div>
   {% if run.is_test %}<p><span class="badge">Test run</span> This run is excluded from normal run views and does not mark jobs as seen.</p>{% endif %}
   {% if run_overview.limit_hit_sources %}
@@ -30,7 +30,7 @@
   <p><span class="badge warning">Detail limit reached</span> {{ run_overview.detail_limit_hit_sources|join(", ") }} left new listing jobs waiting for the next run.</p>
   {% endif %}
   <div class="action-row run-actions">
-    <a class="button" href="#proposed-jobs">Review proposed jobs</a>
+    <a class="button" href="#proposed-jobs">Review picks</a>
     <a class="button light" href="/jobs?run_id={{ run.run_id }}&dedupe=0">View all jobs from this run</a>
     <a class="button light" href="/jobs?date_from={{ run.started_at[:10] }}&date_to={{ run.started_at[:10] }}">View jobs from this day</a>
     {% if run.digest_path %}<a class="button light" href="/runs/{{ run.run_id }}/log">Open log</a>{% endif %}
@@ -40,71 +40,78 @@
   </div>
 </div>
 
-{% if run.status in ["pending", "running"] %}
-<script>
-  setTimeout(() => location.reload(), 2500);
-</script>
-{% endif %}
-
-<div class="panel">
-  <h2>Source Results</h2>
-  {% if source_progress %}
-  {% if run.status in ["pending", "running"] %}
-  <div class="grid">
-    <div class="stat"><span>Sources completed</span><strong>{{ source_progress_summary.sources_completed }}/{{ source_progress_summary.total_sources }}</strong></div>
-    <div class="stat"><span>Current source</span><strong>{{ source_progress_summary.current_source or "None" }}</strong></div>
-    <div class="stat"><span>Jobs found so far</span><strong>{{ source_progress_summary.jobs_found_so_far }}</strong></div>
-    <div class="stat"><span>Warnings so far</span><strong>{{ source_progress_summary.warnings_so_far }}</strong></div>
+<div class="panel daily-run-progress-panel" id="daily-run-progress-panel">
+  <div class="section-heading-row">
+    <div>
+      <p class="eyebrow">Daily run progress</p>
+      <h2 id="run-progress-phase">{{ run_progress.phase }}</h2>
+      <p class="muted" id="run-progress-summary">{{ run_progress.summary }}</p>
+    </div>
+    <span class="badge {{ run.status }}" id="run-progress-status">{{ run.status }}</span>
   </div>
-  {% endif %}
-  <div class="source-run-list">
+  <div class="run-progress-bar" aria-hidden="true"><span id="run-progress-bar-fill" style="width: {{ run_progress.progress_percent }}%"></span></div>
+  <div class="run-progress-grid">
+    <div><span>Sources</span><strong id="run-progress-sources">{{ run_progress.finished_sources }}/{{ run_progress.total_sources }}</strong></div>
+    <div><span>Active lanes</span><strong id="run-progress-parallel">{{ run_progress.running_sources }} running</strong></div>
+    <div><span>Listings seen</span><strong id="run-progress-jobs">{{ run_progress.jobs_found }}</strong></div>
+    <div><span>Review picks</span><strong id="run-progress-proposed">{{ run_progress.proposed_jobs }}</strong></div>
+    <div><span>Highlights</span><strong id="run-progress-signals">{{ run_progress.interesting_signals }}</strong></div>
+    <div id="run-progress-issues-cell" {% if run.status in ["pending", "running"] or not run_progress.warnings %}hidden{% endif %}><span>Issues</span><strong id="run-progress-warnings">{{ run_progress.warnings }}</strong></div>
+  </div>
+  <p class="muted run-progress-message" id="run-progress-message">{{ run_progress.latest_message or "Waiting for activity." }}</p>
+</div>
+
+<div class="panel source-window-panel">
+  <h2>Source Results</h2>
+  <div class="source-run-list" id="source-run-list">
+    {% if source_progress %}
     {% for source in source_progress %}
     <section class="source-run-card">
+      {% set source_highlights = source.highlights if source.highlights else [source.highlight] %}
       <div class="source-run-header">
         <div>
           <h3>{{ source.source_name }}</h3>
-          <p class="muted">{{ source.source_index }}/{{ source.source_count }} · {{ source.stage }}</p>
+          <p class="muted source-window-stage">{{ source.stage }}</p>
         </div>
         <span class="badge {{ source.status }}">{{ source.status }}</span>
       </div>
-      <div class="source-run-stats">
-        <div><span>Jobs</span><strong>{{ source.jobs_found }}</strong></div>
-        <div><span>New/changed</span><strong>{{ source.new_changed }}</strong></div>
-        <div><span>Proposed</span><strong>{{ source.included_roles }}</strong></div>
-        <div><span>Seen skipped</span><strong>{{ source.previously_seen_skipped }}</strong></div>
-        <div><span>Pagination</span><strong>{{ source.pagination_fetch_count }}</strong></div>
-        <div><span>Reviewed in detail</span><strong>{{ source.reviewed_in_detail_count }}</strong></div>
-        <div><span>Detail pages</span><strong>{{ source.detail_fetch_count }}</strong></div>
-        <div><span>Waiting detail</span><strong>{{ source.detail_limit_skipped_count }}</strong></div>
-        <div><span>Time</span><strong>{% if source.elapsed_time_seconds is not none %}{{ source.elapsed_time_seconds }}s{% else %}running{% endif %}</strong></div>
+      <div class="source-window-progress" aria-hidden="true"><span style="width: {{ source.progress_percent }}%"></span></div>
+      <div class="source-window-highlight-shell" data-highlight-index="0">
+        {% if source_highlights|length > 1 %}<button class="source-highlight-nav previous" type="button" data-highlight-nav="-1" aria-label="Previous finding">&lt;</button>{% endif %}
+        <div class="source-highlight-slides">
+          {% for highlight in source_highlights %}
+          <div class="source-window-highlight {{ highlight.kind }}" data-highlight-slide {% if not loop.first %}hidden{% endif %}>
+            <span>{{ highlight.label }}</span>
+            <strong>{{ highlight.title }}</strong>
+            <p>{{ highlight.detail }}</p>
+          </div>
+          {% endfor %}
+        </div>
+        {% if source_highlights|length > 1 %}<button class="source-highlight-nav next" type="button" data-highlight-nav="1" aria-label="Next finding">&gt;</button>{% endif %}
       </div>
-      <p class="muted">{{ source.latest_message or "Waiting to start." }}</p>
+      <div class="source-run-stats">
+        <div><span>Listings seen</span><strong>{{ source.jobs_found }}</strong></div>
+        <div><span>Fresh/updated</span><strong>{{ source.new_changed }}</strong></div>
+        <div><span>Review picks</span><strong>{{ source.included_roles }}</strong></div>
+        {% if source.status not in ["running", "waiting"] and source.warnings_count %}<div><span>Issues</span><strong>{{ source.warnings_count }}</strong></div>{% endif %}
+        <div><span>Time</span><strong>{% if source.elapsed_time_seconds is not none %}{{ source.elapsed_time_seconds }}s{% elif source.status in ["running", "waiting"] %}{{ source.status }}{% else %}not timed{% endif %}</strong></div>
+      </div>
+      <p class="source-window-pulse">{{ source.latest_message or "Waiting to start." }}</p>
       {% if source.listing_limit_skipped_count %}
       <p><span class="badge warning">Limit hit</span> {{ source.listing_limit_skipped_count }} listing card(s) were outside the configured limit.</p>
       {% endif %}
-      {% if source.recent_activity %}
-      <details class="diagnostic-panel">
-        <summary>Recent source activity ({{ source.activity_count }})</summary>
-        <ol class="activity-list compact">
-          {% for event in source.recent_activity %}
-          <li><span class="muted">{{ event.timestamp }}</span> {{ event.message }}</li>
-          {% endfor %}
-        </ol>
-      </details>
-      {% endif %}
     </section>
     {% endfor %}
+    {% endif %}
   </div>
-  {% else %}
-  <p>No source progress events recorded for this run.</p>
-  {% endif %}
+  <p id="source-progress-empty" {% if source_progress %}hidden{% endif %}>No source progress events recorded for this run.</p>
 </div>
 
 <div class="panel">
   <h2>Interesting Signals</h2>
-  {% if match_highlights %}
-  <p class="muted">{{ run_overview.interesting_signals }} scoring signal(s) were recorded; {{ run_overview.proposed_jobs }} job(s) passed into the review list below.</p>
-  <div class="signal-list">
+  <p class="muted" id="match-highlight-summary" {% if not match_highlights %}hidden{% endif %}>{{ run_overview.interesting_signals }} scoring signal(s) were recorded; {{ run_overview.proposed_jobs }} review pick(s) passed into the list below.</p>
+  <div class="signal-list" id="match-highlight-list">
+    {% if match_highlights %}
     {% for highlight in match_highlights[:8] %}
     <p>
       <span class="badge strong">{{ highlight.counts.score }}%</span>
@@ -113,6 +120,7 @@
       {{ highlight.message }}
     </p>
     {% endfor %}
+    {% endif %}
   </div>
   {% if match_highlights|length > 8 %}
   <details class="diagnostic-panel">
@@ -122,9 +130,7 @@
     {% endfor %}
   </details>
   {% endif %}
-  {% else %}
-  <p>No highlighted matches yet.</p>
-  {% endif %}
+  <p id="match-highlight-empty" {% if match_highlights %}hidden{% endif %}>No highlighted matches yet.</p>
 </div>
 
 <details class="panel diagnostic-panel" id="activity-log">
@@ -177,7 +183,7 @@
 </div>
 
 <div class="panel" id="proposed-jobs">
-  <h2>Proposed Jobs</h2>
+  <h2>Review Picks</h2>
   {% if batch_result.generated or batch_result.failed %}
   <p><span class="badge generated">Generated materials for {{ batch_result.generated }} jobs.</span> {% if batch_result.failed %}<span class="badge failed">{{ batch_result.failed }} failed.</span>{% endif %}</p>
   {% endif %}
@@ -186,7 +192,7 @@
     <label class="check"><input type="checkbox" name="use_llm"> Use Claude</label>
     <button type="submit">Generate materials for selected</button>
   </form>
-  <div class="triage-list">
+  <div class="triage-list" id="triage-list">
     {% for pkg in packages %}
     <article class="triage-card">
       <div class="triage-select">
@@ -247,4 +253,289 @@
     {% endfor %}
   </div>
 </div>
+<script>
+  (() => {
+    function showHighlight(shell, nextIndex) {
+      const slides = [...shell.querySelectorAll("[data-highlight-slide]")];
+      if (!slides.length) return;
+      const index = ((nextIndex % slides.length) + slides.length) % slides.length;
+      slides.forEach((slide, slideIndex) => {
+        slide.hidden = slideIndex !== index;
+      });
+      shell.dataset.highlightIndex = String(index);
+    }
+
+    document.addEventListener("click", (event) => {
+      const button = event.target.closest("[data-highlight-nav]");
+      if (!button) return;
+      const shell = button.closest(".source-window-highlight-shell");
+      if (!shell) return;
+      const direction = Number(button.dataset.highlightNav || 0);
+      const current = Number(shell.dataset.highlightIndex || 0);
+      showHighlight(shell, current + direction);
+    });
+  })();
+</script>
+{% if run.status in ["pending", "running"] %}
+<script>
+  (() => {
+    const runId = "{{ run.run_id }}";
+    const hasFilters = window.location.search.length > 0;
+    const terminalStatuses = new Set(["completed", "failed"]);
+    const esc = window.escapeHtml || ((value) => String(value || "")
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#039;"));
+    let pollTimer = null;
+
+    function setText(selector, value) {
+      const element = document.querySelector(selector);
+      if (element) element.textContent = value;
+    }
+
+    function updateSummary(data) {
+      const run = data.run || {};
+      const overview = data.run_overview || {};
+      const status = String(run.status || "running").toLowerCase();
+      const badge = document.querySelector("[data-run-status]");
+      if (badge) {
+        badge.textContent = status;
+        badge.className = `badge ${esc(status)}`;
+      }
+      setText('[data-run-stat="total_loaded"]', run.total_loaded || 0);
+      setText('[data-run-stat="new_changed"]', overview.new_changed || 0);
+      setText('[data-run-stat="previously_seen_skipped"]', overview.previously_seen_skipped || 0);
+      setText('[data-run-stat="proposed_jobs"]', overview.proposed_jobs || 0);
+      setText('[data-run-stat="materials_generated"]', overview.materials_generated || 0);
+      setText('[data-run-stat="materials_missing"]', overview.materials_missing || 0);
+      setText('[data-run-stat="source_warnings"]', run.source_warnings || 0);
+      const issueCell = document.querySelector('[data-run-stat-cell="source_warnings"]');
+      if (issueCell) issueCell.hidden = ["pending", "running"].includes(status) || !Number(run.source_warnings || 0);
+    }
+
+    function updateRunProgress(progress) {
+      if (!progress) return;
+      setText("#run-progress-phase", progress.phase || "Daily run progress");
+      setText("#run-progress-summary", progress.summary || "");
+      setText("#run-progress-sources", `${progress.finished_sources || 0}/${progress.total_sources || 0}`);
+      setText("#run-progress-parallel", `${progress.running_sources || 0} running`);
+      setText("#run-progress-jobs", progress.jobs_found || 0);
+      setText("#run-progress-proposed", progress.proposed_jobs || 0);
+      setText("#run-progress-signals", progress.interesting_signals || 0);
+      setText("#run-progress-warnings", progress.warnings || 0);
+      setText("#run-progress-message", progress.latest_message || "Waiting for activity.");
+      const status = String(progress.status || "running").toLowerCase();
+      const issuesCell = document.getElementById("run-progress-issues-cell");
+      if (issuesCell) issuesCell.hidden = ["pending", "running"].includes(status) || !Number(progress.warnings || 0);
+      const statusBadge = document.getElementById("run-progress-status");
+      if (statusBadge) {
+        statusBadge.textContent = status;
+        statusBadge.className = `badge ${esc(status)}`;
+      }
+      const fill = document.getElementById("run-progress-bar-fill");
+      if (fill) fill.style.width = `${Math.max(0, Math.min(100, Number(progress.progress_percent || 0)))}%`;
+    }
+
+    function updateSourceResults(progress) {
+      const items = (progress && progress.items) || [];
+      const list = document.getElementById("source-run-list");
+      const empty = document.getElementById("source-progress-empty");
+      if (!list || !empty) return;
+      empty.hidden = items.length > 0;
+      list.innerHTML = items.map((source) => renderSourceCard(source)).join("");
+    }
+
+    function renderSourceCard(source) {
+      const status = String(source.status || "waiting").toLowerCase();
+      const timeText = source.elapsed_time_seconds === null || source.elapsed_time_seconds === undefined
+        ? (["running", "waiting"].includes(status) ? status : "not timed")
+        : `${esc(source.elapsed_time_seconds)}s`;
+      const issuesMarkup = !["running", "waiting"].includes(status) && Number(source.warnings_count || 0) > 0
+        ? `<div><span>Issues</span><strong>${esc(source.warnings_count || 0)}</strong></div>`
+        : "";
+      const limitMarkup = Number(source.listing_limit_skipped_count || 0) > 0
+        ? `<p><span class="badge warning">Limit hit</span> ${esc(source.listing_limit_skipped_count)} listing card(s) were outside the configured limit.</p>`
+        : "";
+      return `
+        <section class="source-run-card" data-source-status="${esc(status)}">
+          <div class="source-run-header">
+            <div>
+              <h3>${esc(source.source_name || "Unknown source")}</h3>
+              <p class="muted source-window-stage">${esc(source.stage || "Waiting")}</p>
+            </div>
+            <span class="badge ${esc(status)}">${esc(status)}</span>
+          </div>
+          <div class="source-window-progress" aria-hidden="true"><span style="width:${Math.max(0, Math.min(100, Number(source.progress_percent || 0)))}%"></span></div>
+          ${renderHighlightShell(source)}
+          <div class="source-run-stats">
+            <div><span>Listings seen</span><strong>${esc(source.jobs_found || 0)}</strong></div>
+            <div><span>Fresh/updated</span><strong>${esc(source.new_changed || 0)}</strong></div>
+            <div><span>Review picks</span><strong>${esc(source.included_roles || 0)}</strong></div>
+            ${issuesMarkup}
+            <div><span>Time</span><strong>${timeText}</strong></div>
+          </div>
+          <p class="source-window-pulse">${esc(source.latest_message || "Waiting to start.")}</p>
+          ${limitMarkup}
+        </section>
+      `;
+    }
+
+    function renderHighlightShell(source) {
+      const highlights = Array.isArray(source.highlights) && source.highlights.length
+        ? source.highlights
+        : [source.highlight || {}];
+      const navPrevious = highlights.length > 1
+        ? '<button class="source-highlight-nav previous" type="button" data-highlight-nav="-1" aria-label="Previous finding">&lt;</button>'
+        : "";
+      const navNext = highlights.length > 1
+        ? '<button class="source-highlight-nav next" type="button" data-highlight-nav="1" aria-label="Next finding">&gt;</button>'
+        : "";
+      const slides = highlights.map((highlight, index) => `
+        <div class="source-window-highlight ${esc(highlight.kind || "neutral")}" data-highlight-slide ${index > 0 ? "hidden" : ""}>
+          <span>${esc(highlight.label || "Finding")}</span>
+          <strong>${esc(highlight.title || "Waiting for this source")}</strong>
+          <p>${esc(highlight.detail || "This source has not started yet.")}</p>
+        </div>
+      `).join("");
+      return `
+        <div class="source-window-highlight-shell" data-highlight-index="0">
+          ${navPrevious}
+          <div class="source-highlight-slides">${slides}</div>
+          ${navNext}
+        </div>
+      `;
+    }
+
+    function updateMatchHighlights(highlights, overview) {
+      const list = document.getElementById("match-highlight-list");
+      const empty = document.getElementById("match-highlight-empty");
+      const summary = document.getElementById("match-highlight-summary");
+      if (!list || !empty || !summary) return;
+      highlights = Array.isArray(highlights) ? highlights : [];
+      empty.hidden = highlights.length > 0;
+      summary.hidden = highlights.length === 0;
+      summary.textContent = `${overview.interesting_signals || highlights.length} scoring signal(s) were recorded; ${overview.proposed_jobs || 0} review pick(s) passed into the list below.`;
+      list.innerHTML = highlights.slice(0, 8).map((highlight) => {
+        const counts = highlight.counts || {};
+        const source = highlight.current_source ? ` - ${highlight.current_source}` : "";
+        return `
+          <p>
+            <span class="badge strong">${esc(counts.score || 0)}%</span>
+            <strong>${esc(highlight.current_job || "")}</strong>
+            <span class="muted">${esc(highlight.timestamp || "")}${esc(source)}</span><br>
+            ${esc(highlight.message || "")}
+          </p>
+        `;
+      }).join("");
+    }
+
+    function updatePackages(packages) {
+      if (hasFilters) return;
+      const list = document.getElementById("triage-list");
+      if (!list) return;
+      packages = Array.isArray(packages) ? packages : [];
+      const selected = new Set(
+        [...list.querySelectorAll('input[name="job_ids"]:checked')].map((input) => input.value)
+      );
+      if (!packages.length) {
+        list.innerHTML = "<p>No packages match the current filters.</p>";
+        return;
+      }
+      list.innerHTML = packages.map((pkg) => renderPackageCard(pkg, selected)).join("");
+    }
+
+    function renderPackageCard(pkg, selected) {
+      const jobId = String(pkg.stable_id || "");
+      const detailUrl = `/jobs/${encodeURIComponent(jobId)}?run_id=${encodeURIComponent(runId)}`;
+      const postingLink = pkg.source_url
+        ? `<a class="button light" href="${esc(pkg.source_url)}" target="_blank" rel="noreferrer">Open posting</a>`
+        : "";
+      const applyLink = pkg.application_url && pkg.application_url !== pkg.source_url
+        ? `<a class="button light" href="${esc(pkg.application_url)}" target="_blank" rel="noreferrer">Apply</a>`
+        : "";
+      const badges = Array.isArray(pkg.triage_badges) ? pkg.triage_badges : [];
+      const aiMessage = pkg.ai_evaluation_status === "failed"
+        ? `<p><span class="badge failed">AI failed</span> ${esc(pkg.ai_error || "")}</p>`
+        : pkg.ai_evaluation_status === "skipped"
+          ? `<p><span class="badge waiting">AI skipped</span> ${esc(pkg.ai_error || "")}</p>`
+          : "";
+      return `
+        <article class="triage-card">
+          <div class="triage-select">
+            <input form="batch-generate-form" type="checkbox" name="job_ids" value="${esc(jobId)}" ${selected.has(jobId) ? "checked" : ""}>
+          </div>
+          <div class="triage-main">
+            <div class="row">
+              <h3>${esc(pkg.title || "Untitled role")}</h3>
+              <span class="badge ${esc(pkg.match_category || "")}">${esc(pkg.match_score || 0)}% ${esc(pkg.match_category || "")}</span>
+              <span class="badge ${esc(pkg.application_status || "unreviewed")}">${esc(pkg.application_status || "unreviewed")}</span>
+            </div>
+            <p class="muted">
+              ${esc(pkg.company || "Company not listed")}
+              ${pkg.recruiter ? ` - ${esc(pkg.recruiter)}` : ""}
+              ${pkg.source ? ` - ${esc(pkg.source)}` : ""}
+            </p>
+            <div class="badge-row">
+              ${badges.map((badge) => `<span class="badge ${esc(badge.class || "")}">${esc(badge.label || "")}</span>`).join("")}
+            </div>
+            <div class="triage-facts">
+              <span><strong>Location:</strong> ${esc(pkg.location || "not listed")}</span>
+              <span><strong>Remote:</strong> ${esc(pkg.remote || "not listed")}</span>
+              <span><strong>Rate:</strong> ${esc(pkg.rate || "not listed")}</span>
+              ${pkg.workload ? `<span><strong>Workload:</strong> ${esc(pkg.workload)}</span>` : ""}
+            </div>
+            <p><strong>Why:</strong> ${esc(pkg.primary_summary || "No summary available yet.")}</p>
+            <p class="muted"><strong>Risk:</strong> ${esc(pkg.primary_risk || "No obvious risk flagged.")}</p>
+            ${aiMessage}
+          </div>
+          <div class="triage-actions">
+            <a class="button light" href="${detailUrl}">Open detail</a>
+            ${postingLink}
+            ${applyLink}
+            <form method="post" action="/api/jobs/${encodeURIComponent(jobId)}/generate">
+              <input type="hidden" name="return_to" value="/runs/${esc(runId)}">
+              <button class="light" type="submit">${esc(pkg.primary_action_label || "Generate materials")}</button>
+            </form>
+            <form method="post" action="/api/jobs/${encodeURIComponent(jobId)}/status">
+              <input type="hidden" name="return_to" value="/runs/${esc(runId)}">
+              <input type="hidden" name="status" value="not_interesting">
+              <button class="light" type="submit">Not interesting</button>
+            </form>
+            <form method="post" action="/api/jobs/${encodeURIComponent(jobId)}/status">
+              <input type="hidden" name="return_to" value="/runs/${esc(runId)}">
+              <input type="hidden" name="status" value="applied">
+              <button class="secondary" type="submit">Applied</button>
+            </form>
+          </div>
+        </article>
+      `;
+    }
+
+    async function refreshRunDetail() {
+      try {
+        const response = await fetch(`/api/runs/${encodeURIComponent(runId)}/status`, { cache: "no-store" });
+        if (!response.ok) return;
+        const data = await response.json();
+        updateSummary(data);
+        updateRunProgress(data.run_progress);
+        updateSourceResults(data.source_progress);
+        updateMatchHighlights(data.match_highlights, data.run_overview || {});
+        updatePackages(data.packages);
+        const status = String((data.run && data.run.status) || "").toLowerCase();
+        if (terminalStatuses.has(status) && pollTimer) {
+          window.clearInterval(pollTimer);
+          pollTimer = null;
+        }
+      } catch {
+        // The regular health check will recover on the next poll if the local server is still running.
+      }
+    }
+
+    pollTimer = window.setInterval(refreshRunDetail, 2000);
+    window.setTimeout(refreshRunDetail, 500);
+  })();
+</script>
+{% endif %}
 {% endblock %}

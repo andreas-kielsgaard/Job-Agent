@@ -32,7 +32,7 @@
     <p class="muted">This source has completed setup and is included in the daily run.</p>
     <div class="action-row">
       <form method="post" action="/sources/{{ source.id }}/run-now" class="inline-form">
-        <button type="submit" class="button">Run this source now</button>
+        <button type="submit" class="button">Run daily check now</button>
       </form>
       <form method="post" action="/sources/{{ source.id }}/execution/disable" class="inline-form">
         <button type="submit" class="button light">Remove from daily run</button>
@@ -127,7 +127,7 @@
         {% if source_setup_complete %}
         Setup is complete. The source is ready for normal operation.
         {% else %}
-        A source becomes part of the daily run after the app learns how to read it, a safe source test passes, and the listing index is captured.
+        A source becomes part of the daily run after the app learns how to read it and a safe source test passes with a listing index.
         {% endif %}
       </p>
     </div>
@@ -361,7 +361,7 @@
   <div class="section-heading-row">
     <div>
       <h2>Safe Source Test</h2>
-      <p class="muted">This verifies the full source flow without saving jobs, marking jobs as seen, or including the source in automatic checks.</p>
+      <p class="muted">This verifies the full source flow without saving job packages, marking jobs as seen, or including the source in automatic checks.</p>
     </div>
     {% if source_safe_test_action %}
     <a class="button" href="{{ source_safe_test_action.href }}">{{ source_safe_test_action.label }}</a>
@@ -412,7 +412,7 @@
   <div class="action-row">
     {% if execution_entry and execution_entry.enabled %}
     <form method="post" action="/sources/{{ source.id }}/run-now" class="inline-form">
-      <button type="submit" class="button">Run this source now</button>
+      <button type="submit" class="button">Run daily check now</button>
     </form>
     <form method="post" action="/sources/{{ source.id }}/execution/disable" class="inline-form">
       <button type="submit" class="button light">Remove from daily run</button>

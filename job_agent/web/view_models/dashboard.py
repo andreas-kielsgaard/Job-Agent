@@ -18,6 +18,7 @@ def build_dashboard_view(root: Path = ROOT) -> dict:
         runs = []
     latest_run = runs[0] if runs else None
     return {
+        "title": "Dashboard",
         "runs": runs[:8],
         "active_run": next((run for run in runs if run.status in {"pending", "running"}), None),
         "latest_run": latest_run,

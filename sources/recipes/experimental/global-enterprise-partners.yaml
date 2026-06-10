@@ -1,0 +1,74 @@
+source_name: Global Enterprise Partners
+start_url: https://www.globalenterprisepartners.com/en-gb/job-search/?industry=SAP&type=Contract&searchRadius=20mi
+mode: static_html
+listing_api:
+  method: POST
+  url: https://api.websites.sthree.com/api/services/v2/app/Search/Search
+  headers:
+    Content-Type: application/json
+    Abp.Localization.CultureName: en-gb
+  body:
+    resultSize: 20
+    resultFrom: 0
+    resultPage: 0
+    language: en-gb
+    brandCode: EP
+    industry:
+    - SAP
+    type:
+    - Contract
+    country: []
+    searchRadius: 20mi
+  results_path: result.results
+  total_path: result.hits
+  fields:
+    title: title
+    location: location
+    remote: remoteWorkingAvailable
+    rate: salaryText
+    workload: jobType
+    posted_date: postDate
+    description_html: description
+    job_id: jobReference
+    url_template: https://www.globalenterprisepartners.com/en-gb/job/{slug}/{jobReference}/
+  pagination:
+    strategy: offset
+    offset_param: resultFrom
+    offset_start: 0
+    page_param: resultPage
+    page_start: 0
+    page_size_param: resultSize
+    page_size: 20
+    max_pages: 5
+    request_delay_seconds: 1.0
+reject:
+  title_exact:
+  - Apply
+  - Apply now
+  - More info
+  - View Job
+  - Services
+  - Job Search
+  title_contains:
+  - Upload SAP Job
+  - Improve my CV
+  url_contains:
+  - /services
+  - /about
+  - /contact
+  - /candidates
+  - /clients
+  - /category
+  - /blog
+  - '#'
+patterns:
+  job_id_regex: (?:Job ID|Ref):\s*(?P<job_id>[A-Za-z0-9_/-]+)
+  remote_regex: \b(?P<remote>Remote|Hybrid|Hybrid-remote|Office based|On-site|\d+%\s*remote)\b
+  work_type_regex: \b(?P<work_type>Contract|Freelance|Permanent)\b
+  start_date_regex: '(?:Start(?: date)?\s*:?\s*)(?P<start_date>asap|\d{1,2}\s*/\s*\d{4}|\d{1,2}[./]\d{1,2}[./]\d{4}|[^*\n\r]+?)(?=\s+Duration\b|\s+\d+\s*%\s*workload\b|\s+End
+    date:|$)'
+  language_regex: (?:Languages?:\s*|Language skills:\s*|Fluent in\s+)(?P<language>[A-Z][A-Za-z]+(?:\s*\([^)]*\))?)
+limits:
+  max_cards: 95
+  min_title_length: 8
+  min_description_length: 0

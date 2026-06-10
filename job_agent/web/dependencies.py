@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from fastapi import Request
 from fastapi.templating import Jinja2Templates
@@ -16,14 +17,16 @@ from job_agent.web.workflows import AppWorkflowHandler
 WEB_DIR = Path(__file__).resolve().parent
 
 
-def template_context(request: Request) -> dict[str, str]:
+def template_context(request: Request) -> dict[str, Any]:
     from job_agent.web.runtime import compute_app_version, runtime
 
     active_draft = workflow_handler().profile.active_draft()
+    setup_guide = workflow_handler().guide.context(current_path=request.url.path)
     return {
         "asset_version": runtime.app_version or compute_app_version(runtime.root),
         "profile_unreviewed_draft": bool(active_draft),
         "profile_draft_url": str(active_draft.get("url") or "/setup#cv-profile-draft"),
+        "setup_guide": setup_guide,
     }
 
 
