@@ -23,5 +23,7 @@ def test_profile_contract_reports_sections_and_diagnostics(tmp_path: Path) -> No
     assert report["section_data_count"] >= 1
     assert report["section_empty_count"] >= 1
     assert {section["key"] for section in report["sections"]} >= {"identity", "skill_matrix", "cv_evidence"}
-    assert any(item["severity"] == "error" and "CV text extraction failed" in item["title"] for item in report["diagnostics"])
+    assert any(
+        item["severity"] == "error" and "CV text extraction failed" in item["title"] for item in report["diagnostics"]
+    )
     assert any("Advanced thresholds" in item["title"] for item in report["diagnostics"])

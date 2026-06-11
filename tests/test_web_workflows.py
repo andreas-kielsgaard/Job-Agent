@@ -60,7 +60,9 @@ def test_source_workflow_overview_uses_saved_state_only(monkeypatch, project_roo
         package_scan_count += 1
         return []
 
-    monkeypatch.setattr("job_agent.services.package_index_service.PackageIndexService.list_packages", list_saved_packages_once)
+    monkeypatch.setattr(
+        "job_agent.services.package_index_service.PackageIndexService.list_packages", list_saved_packages_once
+    )
 
     overview = handler.source.overview_context()
 

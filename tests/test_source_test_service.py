@@ -200,7 +200,11 @@ def test_source_test_verifies_detail_reads_across_paginated_listing_pages(
     assert "detail" in entry_kinds
     assert (artifact_dir / "source-test-result.json").exists()
     assert (artifact_dir / "source-run-metadata.json").exists()
-    assert any("SAP Consultant 5" in (project_root / entry["html_path"]).read_text(encoding="utf-8") for entry in manifest["entries"] if entry["kind"] == "pagination")
+    assert any(
+        "SAP Consultant 5" in (project_root / entry["html_path"]).read_text(encoding="utf-8")
+        for entry in manifest["entries"]
+        if entry["kind"] == "pagination"
+    )
 
 
 def test_source_test_reports_missing_session_for_session_required_recipe(project_root: Path) -> None:

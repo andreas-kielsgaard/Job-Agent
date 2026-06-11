@@ -60,11 +60,7 @@ def test_single_source_run_runs_only_selected_source(template_project: Path) -> 
 
 def test_single_source_run_preserves_source_warnings(template_project: Path) -> None:
     (template_project / "sources" / "recruiting-sites.yaml").write_text(
-        "sources:\n"
-        "  - name: Broken Source\n"
-        "    source_id: broken-source\n"
-        "    type: unsupported\n"
-        "    enabled: true\n",
+        "sources:\n  - name: Broken Source\n    source_id: broken-source\n    type: unsupported\n    enabled: true\n",
         encoding="utf-8",
     )
 

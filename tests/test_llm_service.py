@@ -8,7 +8,14 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
-from job_agent.llm import DEFAULT_CLAUDE_MODEL, LlmService, model_options, normalize_model
+from job_agent.llm import (
+    DEFAULT_CLAUDE_MODEL,
+    ExternalAgentService,
+    LlmRequest,
+    LlmService,
+    model_options,
+    normalize_model,
+)
 from job_agent.token_usage import TokenUsageStore
 
 
@@ -154,6 +161,30 @@ class LlmServiceTests(unittest.TestCase):
 
             self.assertEqual(calls, [DEFAULT_CLAUDE_MODEL])
             self.assertEqual(completion.model, DEFAULT_CLAUDE_MODEL)
+
+    def test_external_agent_service_persists_prompt_and_returns_completion(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            service = ExternalAgentService(root)
+
+            interaction = service.prepare(
+                LlmRequest(
+                    prompt="Write a careful application.",
+                    max_tokens=700,
+                    purpose="application_generation",
+                    run_id="run-1",
+                    associated_job_id="stable-1",
+                ),
+                title="Draft application",
+            )
+            loaded = service.load(interaction.interaction_id)
+            completion = service.complete(interaction.interaction_id, "External draft")
+
+            self.assertEqual(loaded.request.prompt, "Write a careful application.")
+            self.assertEqual(loaded.request.purpose, "application_generation")
+            self.assertEqual(completion.text, "External draft")
+            self.assertEqual(completion.provider, "external_agent")
+            self.assertTrue((root / "output" / "external-agent-interactions").exists())
 
     @staticmethod
     def _fake_anthropic_module() -> types.ModuleType:

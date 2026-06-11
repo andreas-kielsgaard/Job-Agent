@@ -11,10 +11,7 @@ from job_agent.services.source_registry_service import SourceRegistryService
 def test_execution_service_loads_existing_sources(project_root: Path) -> None:
     config = project_root / "sources" / "recruiting-sites.yaml"
     config.write_text(
-        "sources:\n"
-        "  - name: Local Sample\n"
-        "    type: local_yaml\n"
-        "    path: jobs/raw/sample_jobs.yaml\n",
+        "sources:\n  - name: Local Sample\n    type: local_yaml\n    path: jobs/raw/sample_jobs.yaml\n",
         encoding="utf-8",
     )
 

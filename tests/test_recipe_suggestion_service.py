@@ -429,7 +429,9 @@ def test_refinement_retries_when_source_test_rejects_url_pagination_without_alte
     assert len(result.attempts) == 2
     assert len(client.prompts) == 1
     assert result.attempts[0].quality_status == "poor"
-    assert any("Source test already proved URL pagination" in warning for warning in result.attempts[0].quality_warnings)
+    assert any(
+        "Source test already proved URL pagination" in warning for warning in result.attempts[0].quality_warnings
+    )
     assert "strategy: browser_click" in result.final_result.suggested_recipe_yaml
 
 

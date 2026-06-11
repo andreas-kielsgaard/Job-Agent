@@ -3,10 +3,10 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from tests.helpers import write_sample_package
 
 from job_agent.io.json_store import read_json
 from job_agent.services.material_service import MaterialService, MaterialUpdate
-from tests.helpers import write_sample_package
 
 
 def test_save_job_materials_writes_files_and_marks_generated(project_root: Path) -> None:
@@ -72,3 +72,24 @@ def test_generate_many_continues_after_failure(template_project: Path) -> None:
         index = read_json(Path(package["_index_path"]), {})
         assert index["materials_generated"] is True
         assert index["material_status"] == "generated"
+
+
+def test_external_application_prompt_round_trip_updates_package(template_project: Path) -> None:
+    write_sample_package(template_project)
+    service = MaterialService(template_project)
+
+    prepared = service.prepare_external_application_generation("stable-1")
+    refreshed = service.apply_external_application_generation(
+        "stable-1",
+        prepared["interaction_id"],
+        "External application text",
+    )
+
+    assert "SAP ABAP Consultant" in prepared["prompt"]
+    assert refreshed["materials_generated"] is True
+    assert refreshed["material_status"] == "generated"
+    assert refreshed["external_agent_application_interaction_id"] == prepared["interaction_id"]
+    package = service.packages.find_package("stable-1")
+    files = service.packages.read_package_files(package)
+    assert files["application"] == "External application text\n"
+    assert "Standard Form Answer Package" in files["form_answers"]

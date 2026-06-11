@@ -6,6 +6,7 @@ requires-python = ">=3.11"
 [tool.ruff]
 line-length = 120
 target-version = "py311"
+src = ["app/code"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
@@ -17,13 +18,14 @@ ignore = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q -m 'not exploratory'"
+pythonpath = ["app/code"]
 markers = [
   "exploratory: development-only probes for source recipes and feature exploration; excluded from the product verification suite.",
 ]
 
 [tool.coverage.run]
 branch = true
-source = ["job_agent"]
+source = ["app/code/job_agent"]
 
 [tool.coverage.report]
 show_missing = true

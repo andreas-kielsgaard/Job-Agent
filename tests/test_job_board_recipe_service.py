@@ -787,7 +787,7 @@ def test_url_pagination_skips_links_back_to_start_page(monkeypatch: pytest.Monke
         return "\n".join(
             (
                 f'<div class="job-card"><h2><a class="job-link" href="/jobs/sap-{index}">'
-                f"SAP Consultant {index}</a></h2><p class=\"summary\">SAP listing {index} with useful context.</p></div>"
+                f'SAP Consultant {index}</a></h2><p class="summary">SAP listing {index} with useful context.</p></div>'
             )
             for index in range(start, stop + 1)
         )

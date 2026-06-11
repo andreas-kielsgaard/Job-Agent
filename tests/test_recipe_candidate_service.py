@@ -12,7 +12,6 @@ from job_agent.services.recipe_suggestion_service import (
     RecipeSuggestionResult,
 )
 
-
 VALID_RECIPE_YAML = """source_name: Example Jobs
 start_url: https://example.com/jobs
 mode: static_html

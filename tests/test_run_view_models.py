@@ -35,14 +35,14 @@ def test_source_warning_updates_message_and_terminal_completed_status() -> None:
         [
             _event("source_started", source_index=1, source_count=1, source="HTML"),
             _event("source_warning", source_index=1, source_count=1, source="HTML", warnings_count=1),
-            _event("source_completed", source_index=1, source_count=1, source="HTML", warnings_count=1),
+            _event("source_completed", source_index=1, source_count=1, source="HTML", warnings_count=1, message=""),
         ]
     )
 
     item = progress["items"][0]
     assert item["status"] == "warning"
     assert item["warnings_count"] == 1
-    assert "source_completed" in item["latest_message"]
+    assert item["latest_message"] == "0 listing(s) seen; preparing review decisions."
     assert progress["summary"]["sources_completed"] == 1
     assert progress["summary"]["warnings_so_far"] == 1
 
@@ -144,6 +144,7 @@ def _event(
     jobs_found: int = 0,
     warnings_count: int = 0,
     elapsed_time_seconds: float | None = None,
+    message: str | None = None,
 ) -> dict:
     counts = {
         "source_index": source_index,
@@ -157,7 +158,7 @@ def _event(
         "event_type": event_type,
         "phase": "source_ingestion",
         "current_source": source,
-        "message": f"{event_type} for {source}",
+        "message": f"{event_type} for {source}" if message is None else message,
         "counts": counts,
         "timestamp": f"2026-05-07T10:0{source_index}:00+00:00",
     }

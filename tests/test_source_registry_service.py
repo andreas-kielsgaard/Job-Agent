@@ -25,11 +25,7 @@ def test_default_source_registry_creation_and_listing(project_root: Path) -> Non
 def test_existing_partial_registry_is_augmented_with_builtin_sources(project_root: Path) -> None:
     registry = project_root / "sources" / "source-registry.yaml"
     registry.write_text(
-        "sources:\n"
-        "  - id: manual-intake\n"
-        "    name: Manual Intake\n"
-        "    kind: manual\n"
-        "    status: active\n",
+        "sources:\n  - id: manual-intake\n    name: Manual Intake\n    kind: manual\n    status: active\n",
         encoding="utf-8",
     )
 
@@ -69,11 +65,7 @@ def test_registry_discovers_recipe_files_not_listed_in_registry(project_root: Pa
 def test_source_registry_normalizes_missing_and_invalid_fields(project_root: Path) -> None:
     registry = project_root / "sources" / "source-registry.yaml"
     registry.write_text(
-        "sources:\n"
-        "  - name: Strange Source\n"
-        "    kind: mystery\n"
-        "    status: weird\n"
-        "    tags: sap\n",
+        "sources:\n  - name: Strange Source\n    kind: mystery\n    status: weird\n    tags: sap\n",
         encoding="utf-8",
     )
 
@@ -146,11 +138,7 @@ def test_add_source_can_start_with_existing_recipe(project_root: Path) -> None:
     recipe = project_root / "sources" / "recipes" / "experimental" / "accuro.yaml"
     recipe.parent.mkdir(parents=True, exist_ok=True)
     recipe.write_text(
-        "source_name: Accuro\n"
-        "listing:\n"
-        "  card_selector: article\n"
-        "  title_selector: h2\n"
-        "  link_selector: a\n",
+        "source_name: Accuro\nlisting:\n  card_selector: article\n  title_selector: h2\n  link_selector: a\n",
         encoding="utf-8",
     )
 
@@ -236,10 +224,7 @@ def test_registry_includes_saved_source_health(project_root: Path) -> None:
 def test_registry_loading_does_not_change_daily_run_source_config(project_root: Path) -> None:
     source_config = project_root / "sources" / "recruiting-sites.yaml"
     source_config.write_text(
-        "sources:\n"
-        "  - name: Local Sample\n"
-        "    type: local_yaml\n"
-        "    path: jobs/raw/sample_jobs.yaml\n",
+        "sources:\n  - name: Local Sample\n    type: local_yaml\n    path: jobs/raw/sample_jobs.yaml\n",
         encoding="utf-8",
     )
     before = source_config.read_text(encoding="utf-8")

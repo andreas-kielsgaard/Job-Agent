@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from tests.helpers import write_sample_package
+
 from job_agent.application_status_store import ApplicationStatusStore
 from job_agent.run_store import RunOptions, RunStore
 from job_agent.services.stats_service import StatsService
-from tests.helpers import write_sample_package
 
 
 def test_dashboard_stats_handles_no_runs(project_root: Path) -> None:

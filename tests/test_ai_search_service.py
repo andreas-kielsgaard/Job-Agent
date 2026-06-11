@@ -16,7 +16,9 @@ from job_agent.services.ai_search_service import (
 def test_should_ai_evaluate_promising_and_skip_excluded() -> None:
     profile = {"thresholds": {"ai_evaluation_score": 60}}
 
-    assert should_ai_evaluate_job(Job(title="SAP ABAP", source_confidence="manual"), MatchResult(80, "strong"), profile, [])
+    assert should_ai_evaluate_job(
+        Job(title="SAP ABAP", source_confidence="manual"), MatchResult(80, "strong"), profile, []
+    )
     assert should_ai_evaluate_job(
         Job(title="Adjacent role", source_confidence="manual"),
         MatchResult(50, "weak", review_triggers=["scope"], review_trigger_labels=["Scope"]),
@@ -29,7 +31,9 @@ def test_should_ai_evaluate_promising_and_skip_excluded() -> None:
     assert not should_ai_evaluate_job(
         Job(title="Old SAP Role", source_confidence="manual"), MatchResult(0, "excluded"), profile, ["highlight"]
     )
-    assert not should_ai_evaluate_job(Job(title="Low fit", source_confidence="manual"), MatchResult(20, "weak"), profile, [])
+    assert not should_ai_evaluate_job(
+        Job(title="Low fit", source_confidence="manual"), MatchResult(20, "weak"), profile, []
+    )
 
 
 def test_ai_evaluation_can_be_configured_for_excluded_review_triggers() -> None:

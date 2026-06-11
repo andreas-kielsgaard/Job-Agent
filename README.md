@@ -2,82 +2,104 @@
 
 A local-first preparation agent for SAP freelance and contract roles.
 
-The boundary is intentional: this agent prepares review material. It does not submit applications, create accounts, log in, upload CVs, bypass captchas, or send emails.
+The boundary is intentional: this agent prepares review material. It does not submit applications, create accounts, log in, upload CVs to job sites, bypass captchas, or send emails.
 
-## What It Does Today
+## Start Here
+
+After pulling the repo, use the launcher for your OS:
+
+```text
+Start-JobAgent-Windows.bat
+Start-JobAgent-Mac.command
+```
+
+On first run the launcher:
+
+1. Finds Python 3.11+.
+2. Asks before attempting to install Python if it is missing.
+3. Creates `app/environment/.venv`.
+4. Installs `app/environment/requirements.txt`.
+5. Applies first-run defaults from `setup/defaults/`.
+6. Creates local private folders under `user/` and generated state under `runtime/`.
+7. Starts the FastAPI web UI and opens `http://127.0.0.1:8765/`.
+
+The setup flow is safe to test from a fresh checkout because defaults are copied into ignored local folders instead of editing the committed examples.
+
+## Folder Layout
+
+```text
+Start-JobAgent-Windows.bat
+Start-JobAgent-Mac.command
+README.md
+app/
+  code/job_agent/              Python application package
+  resources/
+    prompts/                   Prompt templates
+    templates/                 Markdown/Jinja material templates
+    jobs/raw/                  Sample job YAML
+  environment/
+    requirements*.txt          Dependency sets
+    scripts/                   Developer and launcher scripts
+setup/
+  defaults/
+    profile/                   Public starter profile copied on first run
+    sources/                   Starter source registry, recipes, and execution config
+    .env.example               Starter env file copied to user/.env
+user/                          Ignored local setup
+  profile/                     Private profile content
+  uploads/cv/                  Uploaded reference CV files
+  sources/                     Local editable source setup
+  .env                         Local API keys and model preferences
+runtime/                       Ignored generated state
+  output/                      Runs, packages, digests, logs, diagnostics
+  jobs/                        Seen jobs, application status, source listing index
+docs/
+tests/
+```
+
+Legacy temp roots used by tests can still use `profile/`, `sources/`, `jobs/`, `output/`, `templates/`, and `prompts/`; the app resolves both layouts.
+
+## What It Does
 
 The daily run:
 
-1. Loads your private structured profile from `profile/`, or placeholder data from `profile.example/`.
-2. Reads enabled sources from `sources/recruiting-sites.yaml`.
-3. Imports jobs from stable local YAML sources and best-effort public HTML sources.
+1. Loads your private structured profile from `user/profile/`, or setup defaults if no private profile exists.
+2. Reads enabled sources from `user/sources/recruiting-sites.yaml`.
+3. Imports jobs from local YAML, bounded public HTML, or approved recipe-backed sources.
 4. Records whether a job is new, changed, or previously seen.
-5. Scores roles with component-based SAP contract matching.
-6. Optionally uses Claude for AI-enhanced search summaries on promising postings.
-7. Creates placeholder packages for included roles; recruiter-facing materials are generated later unless you opt in.
-8. Writes a daily digest, excluded/weak-role summary, per-run log, run registry entry, event stream, token usage records, and package indexes.
+5. Scores roles with deterministic SAP contract matching.
+6. Optionally uses Claude for AI-enhanced review summaries and generated materials.
+7. Writes review packages, digests, run records, event streams, and local status files under `runtime/`.
 
-Default package per included role:
+## Local Web UI
 
-```text
-job.json
-match.json
-index.json
-```
+The web UI supports setup, source review, test runs, daily runs, job triage, generated-material review, manual posting intake, match sandboxing, stats, and local profile editing.
 
-When material generation is enabled during the run, or triggered manually from a run/job page, the package also gets `cv-at-a-glance.md`, `application.md`, `form-answers.md`, and `match-analysis.md`. From a run overview, select multiple jobs and use “Generate materials for selected” to prepare several packages at once.
+The server binds to `127.0.0.1` and is intended for one local user, not public hosting.
 
-## Quick Start
+## CLI Use
+
+The launcher is the normal path. For direct CLI work from PowerShell:
 
 ```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-Copy-Item -Recurse profile.example profile
-python -m job_agent.cli run-daily --include-seen
+$env:PYTHONPATH = "$PWD\app\code"
+.\app\environment\.venv\Scripts\python.exe -m job_agent.cli run-daily --include-seen
 ```
 
-The first run uses `jobs/raw/sample_jobs.yaml`, which includes:
+For macOS/Linux:
 
-- strong ABAP/RAP match
-- Fiori-adjacent partial match
-- exploratory SAP project manager role
-- language-mismatch role
-- old/expired role
-
-## Source Strategy
-
-Site-specific source adapters are optional accelerators, not the core product. Manual posting intake is the fallback for one-off recruiter, LinkedIn, company, and portal postings. Build source adapters only for recurring high-value sources; they only need to produce candidate postings and raw text, not perfect field extraction. Avoid login-gated, captcha, or bypass workflows.
-
-## Job-Board Extraction Recipes
-
-Job-board extraction recipes are constrained YAML configs for public, visible recruiter and job-board pages. They are the preferred bounded alternative to custom Python adapters when a page needs explicit card, title, link, and field selectors.
-
-Recipes are written manually for now. They are not generated by Claude, and they are not automatically part of daily runs yet. Test a recipe against a local HTML fixture or one public URL:
-
-```powershell
-python -m job_agent.cli test-recipe sources/recipes/examples/synthetic-job-board.yaml path/to/job-board.html --base-url https://example.com/jobs
-python -m job_agent.cli test-recipe sources/recipes/examples/synthetic-job-board.yaml https://example.com/jobs
-python -m job_agent.cli test-recipe sources/recipes/examples/synthetic-job-board.yaml https://example.com/jobs --rendered
+```bash
+export PYTHONPATH="$PWD/app/code"
+./app/environment/.venv/bin/python -m job_agent.cli run-daily --include-seen
 ```
 
-Recipe testing fetches only the provided URL. Recipes can use `mode: static_html` or `mode: rendered_html`; rendered mode uses Playwright on that same page and does not inspect hidden endpoints or network APIs. For local HTML fixtures, the fixture is used as-is even when the recipe mode is rendered.
-
-Recipes can optionally follow extracted candidate detail URLs with `detail.follow: true`. Detail following is bounded by `detail.max_detail_pages`, only fetches URLs already extracted from the listing page, does not recurse, and does not follow additional links. Do not use recipes against login, captcha, private, session-only, or protected pages. Pagination, hidden endpoint discovery, and broad crawling are intentionally not implemented.
+Use `--mark-seen` only after you are comfortable with the output.
 
 ## Optional Claude Setup
 
-The agent works without Claude. Deterministic fallbacks are always available.
+The agent works without Claude. Deterministic matching and fallback materials remain available.
 
-To improve application text:
-
-```powershell
-Copy-Item .env.example .env
-notepad .env
-python -m job_agent.cli run-daily --include-seen --use-llm
-```
-
-Set:
+To configure Claude, open Setup in the web UI or edit `user/.env`:
 
 ```text
 ANTHROPIC_API_KEY=your_private_key
@@ -85,251 +107,58 @@ CLAUDE_MODEL=claude-sonnet-4-6
 CLAUDE_USE_BY_DEFAULT=false
 ```
 
-There are two separate Claude modes:
-
-- AI-enhanced search: `--ai-enhanced-search` interprets promising postings against your profile and stores concise relevance summaries, confidence, risks, and priority flags for triage. It does not generate CVs or applications.
-- Material generation: `--generate-materials` opts into CV/application/form-answer generation during the run. `--use-llm` lets Claude help draft application text when material generation is enabled.
-
-If the key is missing or a call fails, deterministic search still completes and the run records a clear AI status or fallback note.
-
-Daily runs default to search/classify/score/highlight only. This keeps normal morning runs faster and cheaper. The run detail page is the main triage view after a run: it sorts promising jobs first, shows AI summaries and risk flags when available, adds badges for relevance/material status, and includes direct posting/application links. Generate materials manually from the run overview for selected jobs, or from an individual job detail page when a role is worth pursuing. Check “Use Claude” during selected generation if you want Claude-assisted application text. For postings you find outside configured sources, use Add posting to paste the role into the same scoring, AI-evaluation, and material-generation workflow.
+AI review is advisory. Deterministic scoring remains the source of truth for match category and inclusion decisions.
 
 ## Optional Playwright Diagnostics
 
-Playwright is not required for normal use. It is an optional probe layer for later rendered recruiter-site diagnostics.
+Playwright is only for explicit browser diagnostics and recipe/source setup probes.
 
 ```powershell
-pip install -r requirements-playwright.txt
-python -m playwright install chromium
-python scripts/check_playwright.py
+.\app\environment\.venv\Scripts\python.exe -m pip install -r app\environment\requirements-playwright.txt
+.\app\environment\.venv\Scripts\python.exe -m playwright install chromium
+.\app\environment\.venv\Scripts\python.exe app\environment\scripts\check_playwright.py
 ```
 
-You can also probe a specific page manually:
-
-```powershell
-python -m job_agent.browser.playwright_probe https://example.com --screenshot
-```
-
-Artifacts are written under ignored `output/browser-probes/`. See [docs/playwright-setup.md](docs/playwright-setup.md) for the Windows setup notes. Playwright is not connected to daily runs or source adapters yet.
-
-## Local Web UI
-
-Start the frontend on localhost:
-
-```powershell
-.\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-python -m job_agent.web.app
-```
-
-Open:
-
-```text
-http://127.0.0.1:8765
-```
-
-On Windows you can also double-click:
-
-```text
-scripts/open_frontend.bat
-```
-
-The launcher starts the web app only if it is not already running, then opens the browser. In launcher mode, the web app shuts itself down after 2 minutes with no open page activity and no active agent run.
-
-The web UI supports:
-
-- launching a daily run with options
-- overview dashboard with latest-run status, daily-run action, jobs found today, unreviewed jobs, and applications in the last 7 days
-- test runs that are hidden from normal run views and never mark jobs as seen
-- triaging a run through sorted job cards with concise reasons, risks, badges, material status, and direct external links
-- skipping automatic CV/application/form generation to save tokens, then generating materials manually from a job page
-- monitoring the active run through run events and logs
-- reviewing previous runs
-- opening generated job packages
-- viewing match analysis, CV, application text, and form answers
-- copying generated text
-- copying a non-AI external-agent review bundle from each job page
-- editing generated CV, application, form answers, and match analysis directly in the browser
-- browsing all unique jobs across runs from the Jobs page
-- bulk-updating selected jobs to unreviewed/seen, interesting, not interesting, applied, or archived
-- viewing a Stats page with run, package, match, and application-status metrics
-- archiving, soft-deleting, restoring, and viewing archived/deleted/test runs from the Runs page
-- using "Edit with AI" on setup text blocks and job materials with a reusable context-aware prompt builder
-- selecting which context blocks are included for each AI edit button, with saved per-button preferences
-- marking jobs as `unreviewed`, `interesting`, `not_interesting`, `applied`, or `archived`
-- guided setup for common profile and preference fields
-- address setup with street address, post code, city, country, and kommune
-- choosing a Claude model from simplified quality/cost/speed options
-- editing local setup files such as skills, experience, sources, templates, and prompts
-- uploading a full reference CV as PDF, DOCX, TXT, or Markdown
-- extracting uploaded CV text into `profile/canonical-cv.md` when requested
-
-The server binds to `127.0.0.1` by default. It is intended for one local user, not public hosting.
-
-### Setup Guidance
-
-The setup page is designed for low-technical editing first:
-
-- Profile basics and availability/preferences use normal form fields.
-- Sources can be enabled/disabled or added through a simple source form.
-- Advanced files such as skills, experience, templates, and prompts remain editable as text with inline instructions.
-- Template variables are documented on the setup page. Recruiter-facing templates should avoid internal score language.
-- Template variable docs are hidden behind a clickable reference so the page stays approachable.
-- "Edit with AI" buttons build prompts from relevant context such as app purpose, profile data, canonical CV, skills, experience, writing style, job JSON, and match data.
-
-The uploaded reference CV is stored under ignored `profile/files/` and is linked from each posting detail page so it is easy to upload manually alongside the generated at-a-glance CV.
-
-The default Claude setting is the current Sonnet release, `claude-sonnet-4-6`. Anthropic model IDs are pinned snapshots: newer Claude releases ship under new model IDs rather than updating an existing ID in place. The app maps older saved values such as `claude-sonnet-4-0` to the current default before calling the API.
+Artifacts are written under `runtime/output/`.
 
 ## Private Data
-
-This repo is designed to be safe as a public GitHub repository.
 
 Commit:
 
 ```text
-profile.example/
-.env.example
+setup/defaults/
+app/resources/
 ```
 
 Do not commit:
 
 ```text
-profile/
-.env
-output/
-jobs/seen_jobs.json
-jobs/application_status.json
+user/
+runtime/
+app/environment/.venv/
 ```
 
-`profile/` is where your real name, contact details, address, CV, skills, preferences, and work history belong. It is ignored by Git.
+`user/profile/` is where real name, contact details, address, CV narrative, skills, preferences, and work history belong. `user/uploads/cv/` stores the full reference CV used as evidence for setup and manual upload convenience.
 
-## Source Ingestion
+## Development
 
-Sources are configured in `sources/recruiting-sites.yaml`.
-
-Current adapters:
-
-- `local_yaml`: reliable smoke-test and manual-import source.
-- `generic_html` / `search_page`: best-effort public HTML link extraction.
-- `WhitehallResourcesAdapter`: site-specific hook currently backed by generic extraction until selectors are tested.
-
-The generic HTML adapter is conservative. If it cannot find plausible job links, it returns a source warning instead of inventing a fake job from the whole page.
-
-## Scoring
-
-Scoring is split into components:
-
-- technical match
-- module match
-- contract fit
-- location fit
-- seniority fit
-- leadership/project-management interest
-- language risk
-- frontend or functional risk
-- freshness risk
-- rate visibility or fit
-
-Categories:
-
-- `strong`
-- `exploratory`
-- `weak`
-- `excluded`
-
-Freshness rules:
-
-- exclude postings older than 4 months
-- exclude deadlines more than 3 weeks overdue
-- mark missing dates as uncertain
-
-## Prototype vs Production-Ish
-
-Prototype behavior:
-
-- sample YAML jobs are the most reliable source
-- generic HTML extraction only finds obvious public links
-- standard form answers are generic and not based on inspected forms
-- no PDF/DOCX rendering yet
-
-Production-ish behavior already present:
-
-- private profile and secret handling
-- structured job model
-- source adapter pattern
-- component scoring
-- structured seen-job storage
-- structured application-status storage
-- run registry and per-run event logs
-- package index JSON files for UI consumption
-- token usage capture for Claude responses where available
-- included and excluded daily outputs
-- deterministic fallback generation
-- lightweight tests
-
-## Tests
+Run tests from the repo root:
 
 ```powershell
-pip install -r requirements.txt
-pip install -r requirements-dev.txt
-pytest
-pytest --cov=job_agent --cov-report=term-missing
+python -m pytest
 ```
 
-Lint and formatting:
+Run lint/format checks:
 
 ```powershell
 python -m ruff check .
 python -m ruff format --check .
 ```
 
-The tests use temporary project roots and block accidental external network/API calls by default. Coverage is configured as a diagnostic with no required percentage yet; the goal is meaningful coverage of file persistence, setup writes, package indexes, run lifecycle, generated material handling, and route smoke/error behavior. Critical local JSON corruption is surfaced in strict store tests, while the local web layer can back up and reset known run/status files so the UI has a recovery path.
+The default test suite excludes exploratory live-source probes.
 
-Basic smoke checks:
+Useful docs:
 
-```powershell
-python -m job_agent.cli run-daily --include-seen
-python -m job_agent.web.app
-```
-
-## Architecture
-
-The app is split into small local-first layers:
-
-- `job_agent/run_service.py` orchestrates daily discovery, scoring, packaging, logging, and run summaries.
-- Source ingestion emits per-source run events as each enabled source starts, warns, fails, and completes. The web UI can use these events for live progress, but this does not make the current generic source adapters production-grade scrapers.
-- `job_agent/run_store.py`, `store.py`, `application_status_store.py`, and `token_usage.py` persist local state as ignored JSON/JSONL files.
-- `job_agent/services/` contains reusable operations for package indexes, generated materials, setup/profile editing, CV reference files, review bundles, stats, LLM calls, and AI-assisted editing.
-- `job_agent/io/` contains atomic JSON/YAML/text write helpers used by local stores and services.
-- `job_agent/web/app.py` only creates the FastAPI app, registers middleware/startup hooks, and includes routers.
-- `job_agent/web/routers/` contains HTTP routes grouped by dashboard, runs, jobs, setup, files, stats, health, and AI edit.
-- `job_agent/web/view_models/` builds template contexts so routes stay thin.
-- `job_agent/web/formatting.py` contains small presentation helpers such as the current Markdown-to-HTML renderer.
-- `job_agent/web/templates/` and `job_agent/web/static/` are the presentation layer.
-
-Runtime output and private profile data remain local and ignored by Git.
-`LlmService` is the shared Anthropic completion wrapper for generated applications and AI edits. It reads `.env` directly on each call so setup-page edits to the key/model are picked up without restarting the web app, and token usage is recorded when Anthropic returns usage data.
-The test suite includes service/store boundary tests for run state, application status, setup, CV references, package indexes, review bundles, and basic web smoke checks.
-
-## Daily Automation On Windows
-
-Once manual runs look good, schedule:
-
-```powershell
-powershell.exe -ExecutionPolicy Bypass -File "C:\Users\user\Documents\Job Agent\scripts\run_daily.ps1"
-```
-
-Start manually first. Scheduling is much easier to trust after you have reviewed several generated digests.
-
-## Important Files
-
-- `profile.example/`: public placeholder profile files.
-- `profile/`: private local profile files, ignored by Git.
-- `sources/recruiting-sites.yaml`: job source configuration.
-- `jobs/raw/sample_jobs.yaml`: smoke-test job postings.
-- `prompts/`: Claude prompt templates.
-- `templates/`: recruiter-facing and internal Markdown templates.
-- `job_agent/`: Python implementation.
-- `output/`: generated materials, ignored by Git.
-- `SECURITY.md`: secret and personal-data handling.
+- `docs/how-it-works.md`: core data flow.
+- `docs/agent-info-map.md`: where to read before changing each area.
+- `docs/agent-test-map.md`: targeted test selection.

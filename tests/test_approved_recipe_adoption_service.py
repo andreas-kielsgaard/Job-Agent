@@ -11,7 +11,6 @@ from job_agent.services.recipe_candidate_service import RecipeCandidateStore
 from job_agent.services.recipe_suggestion_service import RecipeSuggestionResult
 from job_agent.services.source_registry_service import SourceRegistryService
 
-
 VALID_RECIPE_YAML = """source_name: Example Jobs
 mode: static_html
 listing:
@@ -62,7 +61,9 @@ def test_adoption_refuses_approved_candidate_without_recipe_path(project_root: P
 
 
 def test_adoption_refuses_missing_approved_recipe_file(project_root: Path) -> None:
-    candidate = _approved_candidate(project_root, recipe_path="sources/recipes/experimental/missing.yaml", write_recipe=False)
+    candidate = _approved_candidate(
+        project_root, recipe_path="sources/recipes/experimental/missing.yaml", write_recipe=False
+    )
 
     with pytest.raises(ValueError, match="missing"):
         ApprovedRecipeAdoptionService(project_root).adopt(candidate.candidate_id, "eursap-jobs")

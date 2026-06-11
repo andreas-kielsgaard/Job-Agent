@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import shutil
 from pathlib import Path
 
@@ -13,7 +12,7 @@ from job_agent.web.app import create_app
 from job_agent.web.runtime import runtime
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-APP_STATE_PATHS = ("jobs", "sources", "output")
+APP_STATE_PATHS = ("runtime", "user")
 
 
 @pytest.fixture(autouse=True)
@@ -171,7 +170,7 @@ def minimal_profile(project_root: Path) -> Path:
 @pytest.fixture
 def template_project(project_root: Path, minimal_profile: Path) -> Path:
     repo_root = Path(__file__).resolve().parents[1]
-    for template in (repo_root / "templates").glob("*.j2"):
+    for template in (repo_root / "app" / "resources" / "templates").glob("*.j2"):
         shutil.copy2(template, project_root / "templates" / template.name)
     return project_root
 
@@ -198,8 +197,8 @@ def local_yaml_source_project(template_project: Path) -> Path:
     return template_project
 
 
-def _snapshot_app_state() -> dict[str, tuple[str, int, str]]:
-    snapshot: dict[str, tuple[str, int, str]] = {}
+def _snapshot_app_state() -> dict[str, tuple[str, int, int]]:
+    snapshot: dict[str, tuple[str, int, int]] = {}
     for relative in APP_STATE_PATHS:
         path = REPO_ROOT / relative
         if not path.exists():
@@ -207,16 +206,16 @@ def _snapshot_app_state() -> dict[str, tuple[str, int, str]]:
         for item in sorted(path.rglob("*")):
             item_relative = item.relative_to(REPO_ROOT).as_posix()
             if item.is_dir():
-                snapshot[item_relative] = ("dir", 0, "")
+                snapshot[item_relative] = ("dir", 0, item.stat().st_mtime_ns)
             elif item.is_file():
-                digest = hashlib.sha256(item.read_bytes()).hexdigest()
-                snapshot[item_relative] = ("file", item.stat().st_size, digest)
+                stat = item.stat()
+                snapshot[item_relative] = ("file", stat.st_size, stat.st_mtime_ns)
     return snapshot
 
 
 def _changed_paths(
-    before: dict[str, tuple[str, int, str]],
-    after: dict[str, tuple[str, int, str]],
+    before: dict[str, tuple[str, int, int]],
+    after: dict[str, tuple[str, int, int]],
 ) -> list[str]:
     paths = sorted(set(before) | set(after))
     return [path for path in paths if before.get(path) != after.get(path)]

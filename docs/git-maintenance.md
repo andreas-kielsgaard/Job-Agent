@@ -1,4 +1,4 @@
-# Git Maintenance
+﻿# Git Maintenance
 
 This repository uses Git as both a version ledger and a backup system. The daily
 maintenance job should keep work recoverable without turning commits into noisy
@@ -23,9 +23,9 @@ snapshots or risking private data.
 - Never add behavior that submits applications, creates accounts, logs in,
   bypasses captcha or bot protection, uploads CVs, or sends emails.
 - Never commit private local files or secrets. In this repo, private data and
-  generated output normally live in ignored paths such as `profile/`, `.env`,
-  `output/`, `jobs/seen_jobs.json`, `jobs/application_status.json`,
-  `jobs/source_listing_index.json`, `sources/source-execution-readiness.yaml`,
+  generated output normally live in ignored paths such as `user/profile/`, `.env`,
+  `runtime/output/`, `runtime/jobs/seen_jobs.json`, `runtime/jobs/application_status.json`,
+  `runtime/jobs/source_listing_index.json`, `sources/source-execution-readiness.yaml`,
   `sources/source-sessions.yaml`, and `sources/sessions/`.
 - Treat all existing uncommitted changes as user-owned. Do not reset, checkout,
   clean, rebase, squash, or force-push unless the user explicitly asks.
@@ -87,3 +87,4 @@ Stop without committing if:
 - The change set is too ambiguous to group safely.
 
 In those cases, leave the worktree intact and report the exact blocker.
+

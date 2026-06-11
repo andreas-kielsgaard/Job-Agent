@@ -166,9 +166,7 @@ def test_recipe_generation_status_cli_prints_workflow_state(capsys, project_root
     assert "does not mutate anything" in output
 
 
-def test_recipe_generation_live_capture_uses_connected_source_session(
-    monkeypatch, project_root: Path
-) -> None:
+def test_recipe_generation_live_capture_uses_connected_source_session(monkeypatch, project_root: Path) -> None:
     artifact = _write_artifact(project_root)
     state_path = project_root / "sources" / "sessions" / "eursap.storage-state.json"
     state_path.parent.mkdir(parents=True, exist_ok=True)
@@ -215,7 +213,9 @@ def test_recipe_generation_live_capture_uses_connected_source_session(
         return RecipeRefinementResult(final_result=result, attempts=[attempt], accepted=True)
 
     monkeypatch.setattr("job_agent.services.recipe_generation_run_service.capture_recipe_calibration", fake_capture)
-    monkeypatch.setattr("job_agent.services.recipe_generation_run_service.suggest_recipe_with_refinement", fake_refinement)
+    monkeypatch.setattr(
+        "job_agent.services.recipe_generation_run_service.suggest_recipe_with_refinement", fake_refinement
+    )
 
     run = RecipeGenerationRunService(project_root).start_from_source_capture(
         "eursap-jobs",

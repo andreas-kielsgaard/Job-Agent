@@ -116,7 +116,9 @@ def test_source_listing_index_result_reports_duplicate_pagination_pages(
                 },
             )
 
-    monkeypatch.setattr("job_agent.services.source_listing_index_service.adapter_for_source", lambda source, root: FakeAdapter())
+    monkeypatch.setattr(
+        "job_agent.services.source_listing_index_service.adapter_for_source", lambda source, root: FakeAdapter()
+    )
 
     result = SourceListingIndexService(project_root).index("detail-source")
 

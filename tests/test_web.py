@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 
 from fastapi.testclient import TestClient
+from tests.helpers import write_sample_package
 
 from job_agent.models import Job
 from job_agent.run_store import RunEvent, RunOptions, RunStore
@@ -111,7 +112,9 @@ def test_jobs_and_stats_pages_load(client: TestClient) -> None:
 
 
 def test_jobs_multi_filters_load(client: TestClient) -> None:
-    response = client.get("/jobs?app_status=interesting&app_status=not_interesting&category=strong&category=exploratory")
+    response = client.get(
+        "/jobs?app_status=interesting&app_status=not_interesting&category=strong&category=exploratory"
+    )
 
     assert response.status_code == 200
     assert "Jobs" in response.text
@@ -297,9 +300,7 @@ def test_running_run_detail_uses_live_status_polling(client: TestClient, project
     assert "setTimeout(() => location.reload(), 2500)" not in response.text
 
 
-def test_completed_run_status_does_not_show_unfinished_sources_as_running(
-    client: TestClient, project_root
-) -> None:
+def test_completed_run_status_does_not_show_unfinished_sources_as_running(client: TestClient, project_root) -> None:
     store = RunStore(project_root)
     record = store.create_run(RunOptions())
     store.update(record.run_id, status="completed")
@@ -356,3 +357,44 @@ def test_ai_edit_context_endpoint(client: TestClient) -> None:
     assert "blocks" in data
     assert "selected_blocks" in data
     assert any(block["key"] == "application_examples" for block in data["blocks"])
+
+
+def test_ai_edit_external_agent_mode_returns_prompt(client: TestClient, project_root) -> None:
+    response = client.post(
+        "/api/ai-edit/generate",
+        json={
+            "mode": "external_agent",
+            "field_id": "profile.canonical_cv",
+            "button_id": "setup.canonical_cv",
+            "current_text": "Current CV",
+            "user_instruction": "Tighten the language.",
+            "selected_blocks": ["app_context", "canonical_cv"],
+            "disabled_blocks": [],
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["ok"] is True
+    assert data["interaction_id"]
+    assert "Tighten the language" in data["prompt"]
+    assert (project_root / "output" / "external-agent-interactions").exists()
+
+
+def test_job_review_bundle_uses_external_agent_controller(client: TestClient, project_root) -> None:
+    write_sample_package(project_root)
+
+    detail = client.get("/jobs/stable-1?run_id=run-1")
+    response = client.post(
+        "/api/jobs/stable-1/review-bundle/external-agent/prepare",
+        data={"run_id": "run-1"},
+    )
+
+    assert detail.status_code == 200
+    assert "/review-bundle/external-agent/prepare" in detail.text
+    assert 'id="review-bundle"' not in detail.text
+    assert response.status_code == 200
+    data = response.json()
+    assert data["ok"] is True
+    assert data["response_mode"] == "none"
+    assert "External Agent Review Bundle" in data["prompt"]

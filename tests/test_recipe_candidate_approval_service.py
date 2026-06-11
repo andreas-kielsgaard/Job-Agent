@@ -10,7 +10,6 @@ from job_agent.services.recipe_candidate_service import RecipeCandidateStore
 from job_agent.services.recipe_suggestion_service import RecipeSuggestionResult
 from job_agent.services.source_health_service import SourceHealthService
 
-
 VALID_RECIPE_YAML = """source_name: Example Jobs
 start_url: https://example.com/jobs
 mode: static_html
@@ -70,7 +69,9 @@ def test_approval_refuses_overwrite_without_flag(project_root: Path) -> None:
     recipe_path.write_text("keep me\n", encoding="utf-8")
 
     with pytest.raises(ValueError, match="already exists"):
-        RecipeCandidateApprovalService(project_root).approve(candidate.candidate_id, "sources/recipes/experimental/example.yaml")
+        RecipeCandidateApprovalService(project_root).approve(
+            candidate.candidate_id, "sources/recipes/experimental/example.yaml"
+        )
 
     assert recipe_path.read_text(encoding="utf-8") == "keep me\n"
 

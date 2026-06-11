@@ -5,9 +5,10 @@ import unittest
 from datetime import date
 from pathlib import Path
 
+from tests.helpers import write_sample_package
+
 from job_agent.io.json_store import read_json, write_json
 from job_agent.services.package_index_service import PackageIndexService
-from tests.helpers import write_sample_package
 
 
 class PackageIndexServiceTests(unittest.TestCase):

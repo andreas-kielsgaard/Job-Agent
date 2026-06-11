@@ -7,10 +7,10 @@ from pathlib import Path
 
 from job_agent.application_status_store import ApplicationStatusStore
 from job_agent.digest import write_job_package
+from job_agent.llm import DEFAULT_CLAUDE_MODEL
 from job_agent.models import GeneratedPackage, Job, MatchResult
 from job_agent.services.material_service import MaterialService, MaterialUpdate
 from job_agent.services.package_index_service import PackageIndexService
-from job_agent.llm import DEFAULT_CLAUDE_MODEL
 from job_agent.services.setup_service import SetupService
 
 

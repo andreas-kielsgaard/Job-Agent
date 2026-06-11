@@ -1,0 +1,542 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="source-detail-header">
+  <div>
+    <p class="eyebrow">Source</p>
+    <h1>{{ source.name }}</h1>
+    {% if source.url %}
+    <a class="source-url" href="{{ source.url }}" target="_blank" rel="noreferrer">{{ source.url }}</a>
+    {% else %}
+    <p class="muted">No source URL saved.</p>
+    {% endif %}
+  </div>
+  <div class="source-header-actions">
+    {% if source.status == "archived" %}<span class="badge low">Archived</span>{% endif %}
+    <a class="button light" href="{{ source_jobs_url }}">View all jobs from this source</a>
+    <a class="button light" href="/sources">Back to sources</a>
+  </div>
+</div>
+
+{% if execution_message %}
+<div class="panel"><span class="badge high">{{ execution_message }}</span></div>
+{% endif %}
+{% if execution_warning %}
+<div class="panel"><span class="badge low">{{ execution_warning }}</span></div>
+{% endif %}
+
+<div class="panel source-status-panel">
+  <div class="source-status-main">
+    {% if source_card.lifecycle.state == "implemented" %}
+    <span class="badge high">Implemented</span>
+    <h2>Running in daily checks</h2>
+    <p class="muted">This source has completed setup and is included in the daily run.</p>
+    <div class="action-row">
+      <form method="post" action="/sources/{{ source.id }}/run-now" class="inline-form">
+        <button type="submit" class="button">Run daily check now</button>
+      </form>
+      <form method="post" action="/sources/{{ source.id }}/execution/disable" class="inline-form">
+        <button type="submit" class="button light">Remove from daily run</button>
+      </form>
+      <a class="button light" href="{{ source_jobs_url }}">View jobs</a>
+    </div>
+    {% else %}
+    <span class="badge {{ source_status.badge_class }}">{{ source_status.badge }}</span>
+    <h2>{{ source_status.title }}</h2>
+    <p class="muted">{{ source_status.summary }}</p>
+    <div class="action-row">
+      {% if source_status.primary_action %}
+        {% if source_status.primary_action.type == "post" %}
+        <form method="post" action="{{ source_status.primary_action.action }}" class="inline-form">
+          <button type="submit" class="button">{{ source_status.primary_action.label }}</button>
+        </form>
+        {% else %}
+        <a class="button" href="{{ source_status.primary_action.href }}">{{ source_status.primary_action.label }}</a>
+        {% endif %}
+      {% endif %}
+      <a class="button light" href="#source-settings">Edit source</a>
+    </div>
+    {% endif %}
+  </div>
+  {% if source_card.lifecycle.state == "implemented" %}
+  <div class="source-progress-grid">
+    <div>
+      <span>Indexing</span>
+      <strong>{{ source_card.index.status_label }}</strong>
+      <p>{{ source_card.index.indexed_count }} job posting{% if source_card.index.indexed_count != 1 %}s{% endif %} indexed.</p>
+      {% if source_card.index.no_longer_posted_count %}
+      <p>{{ source_card.index.no_longer_posted_count }} historical posting{% if source_card.index.no_longer_posted_count != 1 %}s{% endif %} no longer posted.</p>
+      {% endif %}
+    </div>
+    <div>
+      <span>Detail review</span>
+      <strong>{{ source_card.detail.reviewed_count }}/{{ source_card.detail.total_count or source_card.index.indexed_count or source_card.detail.reviewed_count }}</strong>
+      <p>{{ source_card.detail.summary }}</p>
+    </div>
+    <div>
+      <span>High matches</span>
+      <strong>{{ source.stats.strong_matches }}</strong>
+      <p>{{ source.stats.exploratory_matches }} exploratory; best score {{ source.stats.best_match_score }}%.</p>
+    </div>
+    <div>
+      <span>Follow-up</span>
+      <strong>{{ source.stats.interesting_count }} interesting</strong>
+      <p>{{ source.stats.applied_count }} applied, {{ source.stats.not_interesting_count }} not interesting.</p>
+    </div>
+  </div>
+  {% else %}
+  <div class="source-progress-grid">
+    <div>
+      <span>Review evidence</span>
+      <strong>{{ source_status.preview_label }}</strong>
+      <p>{% if go_live_readiness.last_checked_at %}Source-test proof is available from {{ go_live_readiness.last_checked_at }}.{% else %}Run the safe source test to create review evidence.{% endif %}</p>
+    </div>
+    <div>
+      <span>Safe source test</span>
+      <strong>{{ source_status.source_test_label }}</strong>
+      <p>{{ go_live_readiness.readiness_summary }}</p>
+    </div>
+    <div>
+      <span>Source session</span>
+      <strong>{{ source_session.label }}</strong>
+      <p>{{ source_session.summary }}</p>
+    </div>
+    <div>
+      <span>Daily run</span>
+      <strong>{{ source_status.automation_label }}</strong>
+      <p>{% if execution_entry and execution_entry.enabled %}Included in automatic job checks.{% else %}Not included until you explicitly turn it on.{% endif %}</p>
+    </div>
+  </div>
+  {% endif %}
+  {% if source_status.blockers %}
+  <div class="source-blockers">
+    <strong>Needs attention</strong>
+    <ul>
+      {% for blocker in source_status.blockers %}
+      <li>{{ blocker }}</li>
+      {% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+</div>
+
+<details class="panel setup-guide-panel{% if source_setup_complete %} complete{% endif %}" id="setup-guide" {% if not source_setup_complete %}open{% endif %}>
+  <summary class="setup-guide-summary">
+    <div>
+      <h2>Setup Guide</h2>
+      <p class="muted">
+        {% if source_setup_complete %}
+        Setup is complete. The source is ready for normal operation.
+        {% else %}
+        A source becomes part of the daily run after the app learns how to read it and a safe source test passes with a listing index.
+        {% endif %}
+      </p>
+    </div>
+    <span class="badge {% if source_setup_complete %}high{% else %}medium{% endif %}">
+      {% if source_setup_complete %}Completed{% else %}In progress{% endif %}
+    </span>
+  </summary>
+  <div class="setup-step-list">
+    {% for step in source_setup_steps %}
+    <article class="setup-step {{ step.state }}">
+      <div class="setup-step-number">{{ loop.index }}</div>
+      <div class="setup-step-body">
+        <h3>{{ step.title }}</h3>
+        <p>{{ step.summary }}</p>
+      </div>
+      <div class="setup-step-action">
+        <span class="badge {{ step.badge_class }}">{{ step.badge }}</span>
+        {% if step.action %}
+          {% if step.action.type == "post" %}
+          <form method="post" action="{{ step.action.action }}" class="inline-form">
+            <button type="submit" class="button light">{{ step.action.label }}</button>
+          </form>
+          {% else %}
+          <a class="button light" href="{{ step.action.href }}">{{ step.action.label }}</a>
+          {% endif %}
+        {% endif %}
+      </div>
+    </article>
+    {% endfor %}
+  </div>
+</details>
+
+<div class="panel" id="reading-plan">
+  <div class="section-heading-row">
+    <div>
+      <h2>Reading Plan</h2>
+      <p class="muted">The reading plan tells the app how to find job cards, follow pagination, open one job detail page at a time, and fill job-report fields.</p>
+    </div>
+    {% if source.recipe_path and recipe_preview_url and go_live_readiness.last_checked_at %}
+    <a class="button light" href="{{ recipe_preview_url }}">Review found contents</a>
+    {% endif %}
+  </div>
+
+  {% if recipe_generation_status.warnings %}
+  <div class="source-blockers plan-notes">
+    <strong>Plan notes</strong>
+    <ul>
+      {% for warning in recipe_generation_status.warnings %}
+      <li>{{ warning }}</li>
+      {% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+
+  {% if source.kind in ["manual", "local_yaml"] %}
+  <div class="empty-state">
+    <h3>No reading plan needed</h3>
+    <p class="muted">{% if source.kind == "manual" %}Manual intake is for jobs you add yourself from emails, recruiters, or copied postings.{% else %}This source reads controlled local data rather than a public job-board page.{% endif %}</p>
+  </div>
+  {% elif source.recipe_path %}
+  <div class="source-proof-grid">
+    {% for capability in recipe_capabilities %}
+    <div>
+      <span>{{ capability.label }}</span>
+      <strong class="status-tooltip" tabindex="0" data-tooltip="{{ capability.detail }}">{{ capability.status }}</strong>
+    </div>
+    {% endfor %}
+  </div>
+  <div class="action-row reading-plan-actions">
+    {% if go_live_readiness.readiness_status != "ready" %}
+    <a class="button" href="/sources/{{ source.id }}/test-run?start=1">Test source safely</a>
+    {% else %}
+    <a class="button" href="{{ recipe_preview_url }}">Review found contents</a>
+    {% endif %}
+    <a class="button light" href="{{ recipe_editor_url }}">Edit rules</a>
+  </div>
+  {% else %}
+  <div class="empty-state">
+    <h3>No reading plan selected yet</h3>
+    <p class="muted">Start by letting the app inspect one source page and one representative job detail page. It will create a plan for you to review before anything is used automatically.</p>
+    {% if source.status != "archived" and source.url %}
+    <form method="post" action="/sources/{{ source.id }}/reading-plan/learn" class="inline-form">
+      <button type="submit" class="button">Learn source</button>
+    </form>
+    {% endif %}
+    {% if recipe_generation_status.latest_reviewable_candidate_id %}
+    <a class="button light" href="/recipe-candidates/{{ recipe_generation_status.latest_reviewable_candidate_id }}?source_id={{ source.id }}">Review latest generated plan</a>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  {% if source.kind not in ["manual", "local_yaml"] %}
+  <details class="diagnostic-panel">
+    <summary>Choose an existing reading plan</summary>
+    <p class="muted">Use this when you already know which saved rules match this source.</p>
+    <form method="post" action="/sources/{{ source.id }}/recipe/update">
+      <div class="form-grid">
+        <div>
+          <label>Reading plan</label>
+          <select name="recipe_path">
+            <option value="">No reading plan selected</option>
+            {% for option in recipe_options %}
+            <option value="{{ option.value }}" {% if source.recipe_path == option.value %}selected{% endif %}>{{ option.label }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="form-actions">
+          <button type="submit" class="button light">Use selected plan</button>
+        </div>
+      </div>
+    </form>
+  </details>
+  {% endif %}
+
+  {% if source.recipe_path %}
+  <details class="diagnostic-panel">
+    <summary>Source-test evidence and fields</summary>
+    <div class="grid" style="margin-top:12px;">
+      <div class="stat"><span>Source test</span><strong>{{ go_live_readiness.readiness_status }}</strong></div>
+      <div class="stat"><span>Last source test</span><strong>{{ go_live_readiness.last_checked_at or "Never" }}</strong></div>
+      <div class="stat"><span>Jobs found</span><strong>{{ go_live_readiness.dry_run_job_count }}</strong></div>
+      <div class="stat"><span>Warnings</span><strong>{{ go_live_readiness.dry_run_warning_count }}</strong></div>
+      <div class="stat"><span>Pagination proof</span><strong>{{ go_live_readiness.checks.get("pagination_fetch_count", 0) }} page(s)</strong></div>
+      <div class="stat"><span>Unique paginated jobs</span><strong>{{ go_live_readiness.dry_run_pagination_unique_jobs_from_fetched_pages }}</strong></div>
+    </div>
+    <p><strong>Summary:</strong> {{ go_live_readiness.readiness_summary }}</p>
+    {% if go_live_readiness.sample_titles %}
+    <p><strong>Sample titles:</strong> {{ go_live_readiness.sample_titles|join(", ") }}</p>
+    {% endif %}
+    {% if recipe_explanation %}
+    <div class="grid" style="margin-top:12px;">
+      {% for item in recipe_explanation.listing_fields + recipe_explanation.navigation_fields %}
+      <div class="stat"><span>{{ item.label }}</span><strong>{{ item.detail }}</strong></div>
+      {% endfor %}
+    </div>
+    {% endif %}
+    {% if go_live_readiness.dry_run_warnings %}
+    <ul>
+      {% for warning in go_live_readiness.dry_run_warnings %}
+      <li>{{ warning }}</li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+  </details>
+  {% endif %}
+
+  {% if source.kind not in ["manual", "local_yaml"] %}
+  <details class="diagnostic-panel" id="recipe-generation">
+    <summary>Advanced: regenerate or inspect plans</summary>
+    <p class="muted">These controls are useful when the plan needs to be rebuilt or debugged. The normal path is the Learn source button above.</p>
+    {% if source.url %}
+    <form method="post" action="/sources/{{ source.id }}/recipe-calibration/capture">
+      <div class="row">
+        <label>Page regions <input type="number" name="max_candidates" value="30" min="5" max="50" style="max-width:7rem;"></label>
+        <label class="check"><input type="checkbox" name="rendered" value="1"> Render with browser</label>
+        <label class="check"><input type="checkbox" name="capture_detail" value="1" checked> Capture one detail page</label>
+        <button type="submit" class="button light">Capture sample only</button>
+      </div>
+    </form>
+    {% endif %}
+    {% if recipe_artifacts %}
+    <form method="post" action="/sources/{{ source.id }}/recipe-candidates/generate">
+      <label>Saved sample</label>
+      <select name="artifact_dir">
+        {% for artifact in recipe_artifacts %}
+        <option value="{{ artifact.artifact_dir }}">{{ artifact.display_name }} - {{ artifact.match_status }} - {{ artifact.capture_url or "unknown URL" }}</option>
+        {% endfor %}
+      </select>
+      <div class="row">
+        <label class="check"><input type="checkbox" name="refine" value="1" checked> Validate and refine locally</label>
+        <label>Max attempts <input type="number" name="max_attempts" value="3" min="1" max="8" style="max-width:7rem;"></label>
+        <button type="submit" class="button">Generate plan from saved sample</button>
+        <button
+          class="button light"
+          type="button"
+          onclick="openExternalAgent(this)"
+          data-title="Generate reading plan externally"
+          data-prepare-url="/sources/{{ source.id }}/recipe-candidates/external-agent/prepare"
+          data-apply-url="/sources/{{ source.id }}/recipe-candidates/external-agent/apply"
+        >Use external agent</button>
+      </div>
+    </form>
+    <details class="diagnostic-panel">
+      <summary>Saved samples</summary>
+      {% for artifact in recipe_artifacts %}
+      <div class="stat" style="margin:0.6rem 0;">
+        <span>{{ artifact.display_name }} | {{ artifact.match_reason }}</span>
+        <strong>{{ artifact.capture_mode or "unknown mode" }} | {{ artifact.candidate_count }} regions | page.html: {{ "yes" if artifact.has_page_html else "no" }}</strong>
+        <p class="muted">{{ artifact.capture_url or "No capture URL" }}</p>
+        {% if artifact.top_candidate_selectors %}
+        <p class="muted">Selectors: {{ artifact.top_candidate_selectors|join(", ") }}</p>
+        {% endif %}
+      </div>
+      {% endfor %}
+    </details>
+    {% else %}
+    <p class="muted">No saved samples found yet.</p>
+    {% endif %}
+    <details class="diagnostic-panel">
+      <summary>Generated plans ({{ recipe_candidates|length }})</summary>
+      {% if recipe_candidates %}
+      <table>
+        <thead>
+          <tr><th>Plan</th><th>Status</th><th>Quality</th><th>Jobs</th><th>Actions</th></tr>
+        </thead>
+        <tbody>
+          {% for candidate in recipe_candidates %}
+          <tr>
+            <td><a href="/recipe-candidates/{{ candidate.candidate_id }}?source_id={{ source.id }}">{{ candidate.candidate_id }}</a><br><span class="muted">{{ candidate.created_at }}</span></td>
+            <td>{{ candidate.status }}</td>
+            <td>{{ candidate.quality_status or ("schema valid" if candidate.schema_valid else "needs review") }}</td>
+            <td>{{ candidate.extracted_job_count }} extracted / {{ candidate.useful_titles }} useful / {{ candidate.unique_urls }} URLs</td>
+            <td><a class="button light" href="/recipe-candidates/{{ candidate.candidate_id }}?source_id={{ source.id }}">Open</a></td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <p class="muted">No generated plans match this source yet.</p>
+      {% endif %}
+    </details>
+    {% if source.recipe_path %}
+    <details class="diagnostic-panel">
+      <summary>Advanced checks and tools</summary>
+      <div class="action-row" style="margin-top:12px;">
+        <a class="button light" href="{{ compatibility_url }}">Compatibility evidence</a>
+        <a class="button light" href="{{ recipe_preview_url }}">Review found contents</a>
+        <a class="button light" href="{{ recipe_editor_url }}">Recipe editor</a>
+      </div>
+    </details>
+    {% endif %}
+  </details>
+  {% endif %}
+</div>
+
+{% if source.recipe_path and source_card.lifecycle.state != "implemented" %}
+{% set source_test_is_stale = go_live_readiness.checks.get("recipe_changed_after_source_test") %}
+<div class="panel" id="safe-test">
+  <div class="section-heading-row">
+    <div>
+      <h2>Safe Source Test</h2>
+      <p class="muted">This verifies the full source flow without saving job packages, marking jobs as seen, or including the source in automatic checks.</p>
+    </div>
+    {% if source_safe_test_action %}
+    <a class="button" href="{{ source_safe_test_action.href }}">{{ source_safe_test_action.label }}</a>
+    {% endif %}
+  </div>
+  <div class="grid">
+    <div class="stat"><span>Source test</span><strong>{{ source_status.source_test_label }}</strong></div>
+    <div class="stat"><span>Jobs found in test</span><strong>{{ go_live_readiness.dry_run_job_count }}</strong></div>
+    <div class="stat"><span>Last source test</span><strong>{{ go_live_readiness.last_checked_at or "Never" }}</strong></div>
+    <div class="stat"><span>Daily run</span><strong>{{ source_status.automation_label }}</strong></div>
+  </div>
+  {% if source_test_is_stale %}
+  <p><span class="badge medium">Previous source-test details are from an older reading plan.</span></p>
+  {% endif %}
+  {% if go_live_readiness.dry_run_capability_checks and not source_test_is_stale %}
+  <div class="source-proof-grid">
+    {% for check in go_live_readiness.dry_run_capability_checks %}
+    <div>
+      <span>{{ check.capability|replace("_", " ")|title }}</span>
+      <strong class="status-tooltip" tabindex="0" data-tooltip="{{ check.detail }}">{{ check.status|replace("_", " ")|title }}</strong>
+    </div>
+    {% endfor %}
+  </div>
+  {% elif go_live_readiness.dry_run_capability_checks %}
+  <details class="diagnostic-panel">
+    <summary>Historical source-test details</summary>
+    <div class="source-proof-grid">
+      {% for check in go_live_readiness.dry_run_capability_checks %}
+      <div>
+        <span>{{ check.capability|replace("_", " ")|title }}</span>
+        <strong class="status-tooltip" tabindex="0" data-tooltip="{{ check.detail }}">{{ check.status|replace("_", " ")|title }}</strong>
+      </div>
+      {% endfor %}
+    </div>
+  </details>
+  {% endif %}
+  <p><strong>Summary:</strong> {{ go_live_readiness.readiness_summary }}</p>
+  {% if go_live_readiness.sample_titles %}
+  <p><strong>Sample titles:</strong> {{ go_live_readiness.sample_titles|join(", ") }}</p>
+  {% endif %}
+  {% for blocker in go_live_readiness.blockers %}
+  <p class="muted">Blocker: {{ blocker }}</p>
+  {% endfor %}
+  {% for warning in go_live_readiness.warnings %}
+  <p class="muted">Warning: {{ warning }}</p>
+  {% endfor %}
+
+  <div class="action-row">
+    {% if execution_entry and execution_entry.enabled %}
+    <form method="post" action="/sources/{{ source.id }}/run-now" class="inline-form">
+      <button type="submit" class="button">Run daily check now</button>
+    </form>
+    <form method="post" action="/sources/{{ source.id }}/execution/disable" class="inline-form">
+      <button type="submit" class="button light">Remove from daily run</button>
+    </form>
+    {% elif go_live_readiness.readiness_status == "ready" %}
+    <form method="post" action="/sources/{{ source.id }}/enable-when-ready" class="inline-form">
+      <button type="submit" class="button">Include in daily run</button>
+    </form>
+    {% endif %}
+  </div>
+
+  {% if execution_entry %}
+  <details class="diagnostic-panel">
+    <summary>Daily-run projection</summary>
+    <pre class="copy-source">name: {{ execution_entry.name }}
+source_id: {{ execution_entry.source_id }}
+type: {{ execution_entry.type }}
+url: {{ execution_entry.url }}
+recipe_path: {{ execution_entry.recipe_path }}
+enabled: {{ "true" if execution_entry.enabled else "false" }}</pre>
+    {% if source.status != "archived" %}
+    <form method="post" action="/sources/{{ source.id }}/execution/update" class="inline-form">
+      <button type="submit" class="button light">Refresh daily-run projection</button>
+    </form>
+    {% endif %}
+  </details>
+  {% endif %}
+</div>
+{% endif %}
+
+<div class="panel">
+  <h2>Historical Results</h2>
+  {% if source.stats.jobs_found_total > 0 %}
+  <p class="muted">Jobs already saved from this source in previous runs.</p>
+  <div class="grid">
+    <div class="stat"><span>Result history</span><strong>{{ source.stats.value_label }}</strong></div>
+    <div class="stat"><span>Saved jobs</span><strong>{{ source.stats.jobs_found_total }}</strong></div>
+    <div class="stat"><span>Strong matches</span><strong>{{ source.stats.strong_matches }}</strong></div>
+    <div class="stat"><span>Possible matches</span><strong>{{ source.stats.exploratory_matches }}</strong></div>
+    <div class="stat"><span>Weak/excluded</span><strong>{{ source.stats.weak_or_excluded_matches }}</strong></div>
+    <div class="stat"><span>Applied</span><strong>{{ source.stats.applied_count }}</strong></div>
+    <div class="stat"><span>Not interesting</span><strong>{{ source.stats.not_interesting_count }}</strong></div>
+    <div class="stat"><span>Unreviewed</span><strong>{{ source.stats.unreviewed_count }}</strong></div>
+  </div>
+  <p><strong>Summary:</strong> {{ source.stats.value_summary }}</p>
+  <p><strong>Best recent match:</strong>
+    {% if source.stats.best_recent_match_url %}
+    <a href="{{ source.stats.best_recent_match_url }}" target="_blank" rel="noreferrer">{{ source.stats.best_recent_match_title }}</a>
+    {% else %}
+    {{ source.stats.best_recent_match_title or "No historical package data yet." }}
+    {% endif %}
+  </p>
+  <p><strong>Last seen run:</strong> {{ source.stats.last_run_id or "Not tracked yet." }}</p>
+  {% else %}
+  <p class="muted">No jobs have been saved from this source yet. Results will appear here after the source is included in the daily run and runs successfully.</p>
+  {% endif %}
+</div>
+
+<details class="panel diagnostic-panel" id="source-settings">
+  <summary>Source settings</summary>
+  <form method="post" action="/sources/{{ source.id }}/registry/update">
+    <div class="form-grid" style="margin-top:14px;">
+      <div>
+        <label>Source name</label>
+        <input name="name" value="{{ source.name }}" required>
+      </div>
+      <div>
+        <label>Source URL</label>
+        <input name="url" value="{{ source.url }}" placeholder="https://example.com/jobs">
+      </div>
+      <div>
+        <label>Reading plan</label>
+        <select name="recipe_path">
+          <option value="">No reading plan</option>
+          {% for option in recipe_options %}
+          <option value="{{ option.value }}" {% if source.recipe_path == option.value %}selected{% endif %}>{{ option.label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+    </div>
+    <label>Notes</label>
+    <textarea name="notes" class="compact-textarea">{{ source.notes }}</textarea>
+    <details class="diagnostic-panel">
+      <summary>Advanced source state</summary>
+      <p class="muted">Most sources can leave these alone. Archive is handled by the button below.</p>
+      <div class="form-grid" style="margin-top:14px;">
+        <div>
+          <label>Source type</label>
+          <select name="kind">
+            {% for option in kind_options %}
+            <option value="{{ option.value }}" {% if source.kind == option.value %}selected{% endif %}>{{ option.label }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div>
+          <label>Setup state</label>
+          <select name="status">
+            {% for option in status_options %}
+            <option value="{{ option.value }}" {% if source.status == option.value %}selected{% endif %}>{{ option.label }}</option>
+            {% endfor %}
+          </select>
+        </div>
+      </div>
+    </details>
+    <div class="form-actions"><button type="submit">Save source settings</button></div>
+  </form>
+  <div class="danger-zone">
+    {% if source.status == "archived" %}
+    <form method="post" action="/sources/{{ source.id }}/restore" class="inline-form">
+      <button type="submit" class="button light">Restore source</button>
+    </form>
+    {% else %}
+    <form method="post" action="/sources/{{ source.id }}/archive" class="inline-form">
+      <button type="submit" class="button danger">Archive source</button>
+    </form>
+    {% endif %}
+  </div>
+</details>
+{% endblock %}

@@ -6,9 +6,7 @@ from pathlib import Path
 from job_agent.io.atomic import atomic_write_text
 
 
-def test_atomic_write_text_retries_transient_replace_permission_error(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_atomic_write_text_retries_transient_replace_permission_error(tmp_path: Path, monkeypatch) -> None:
     path = tmp_path / "run.json"
     calls = {"count": 0}
     original_replace = os.replace

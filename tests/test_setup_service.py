@@ -281,7 +281,12 @@ class SetupServiceTests(unittest.TestCase):
 
             service.save_ai_policy_from_form(
                 FakeForm(
-                    {"ai_min_score": "40", "language_penalty": "-20", "min_core_matches": "2", "high_rate_threshold": "900"},
+                    {
+                        "ai_min_score": "40",
+                        "language_penalty": "-20",
+                        "min_core_matches": "2",
+                        "high_rate_threshold": "900",
+                    },
                     {
                         "evaluate_category": ["strong", "exploratory"],
                     },
