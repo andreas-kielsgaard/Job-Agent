@@ -269,6 +269,140 @@ def test_blueprint_detects_job_role_listing_urls() -> None:
     assert jobs[0].rate == "$140/hr"
 
 
+def test_blueprint_detects_we_work_remotely_remote_jobs_urls() -> None:
+    html = """
+    <!doctype html>
+    <html><body>
+      <section class="jobs">
+        <ul>
+          <li class="feature">
+            <a href="/remote-jobs/acme-sap-product-manager">
+              <span class="title">SAP Product Manager</span>
+              <span class="company">Acme</span>
+              <span class="region">Remote</span>
+              <span class="type">Full-Time</span>
+            </a>
+          </li>
+          <li class="feature">
+            <a href="/remote-jobs/example-sap-solution-architect">
+              <span class="title">SAP Solution Architect</span>
+              <span class="company">Example Co</span>
+              <span class="region">Anywhere in the World</span>
+              <span class="type">Full-Time</span>
+            </a>
+          </li>
+          <li class="feature">
+            <a href="/remote-jobs/northwind-sap-data-lead">
+              <span class="title">SAP Data Lead</span>
+              <span class="company">Northwind</span>
+              <span class="region">Remote</span>
+              <span class="type">Contract</span>
+            </a>
+          </li>
+        </ul>
+        <a href="/categories/all-other-remote-jobs">View all 47 All Other Remote jobs</a>
+        <a href="/categories/all-other-remote-jobs.rss"></a>
+        <a href="/categories/remote-full-stack-programming-jobs">View all 55 Full-Stack Programming jobs</a>
+      </section>
+    </body></html>
+    """
+
+    blueprint = build_recipe_blueprint(html, "https://weworkremotely.com/remote-jobs/search")
+    recipe = blueprint["recipe"]
+
+    assert blueprint["status"] == "draft"
+    assert recipe["listing"]["card_selector"] == "li.feature"
+    assert recipe["accept"]["url_contains"] == ["/remote-jobs/"]
+    assert recipe["pagination"]["strategy"] == "url"
+    assert recipe["pagination"]["page_link_selector"] == 'a[href*="/categories/"]:not([href$=".rss"])'
+    assert recipe["pagination"]["max_pages"] == 3
+    jobs = extract_jobs_with_recipe(html, recipe["start_url"], job_board_recipe_from_mapping(recipe))
+    assert len(jobs) == 3
+    assert jobs[0].url == "https://weworkremotely.com/remote-jobs/acme-sap-product-manager"
+
+
+def test_calibration_detail_sample_skips_listing_page_self_links(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    listing_html = """
+    <!doctype html>
+    <html><body>
+      <a href="#">Find Jobs</a>
+      <section class="jobs">
+        <li class="feature"><a href="/remote-jobs/acme-sap-product-manager">SAP Product Manager Remote Full-Time</a></li>
+        <li class="feature"><a href="/remote-jobs/example-sap-architect">SAP Architect Remote Contract</a></li>
+        <li class="feature"><a href="/remote-jobs/northwind-sap-data-lead">SAP Data Lead Remote Contract</a></li>
+      </section>
+    </body></html>
+    """
+    detail_html = "<html><body><h1>SAP Product Manager</h1><main>Remote Full-Time product role.</main></body></html>"
+    calls = []
+
+    def fake_static(url: str, timeout_seconds: int):
+        calls.append(url)
+        if url.endswith("/remote-jobs/search"):
+            return listing_html, url, []
+        return detail_html, url, []
+
+    monkeypatch.setattr("job_agent.services.recipe_calibration_service._fetch_static_html", fake_static)
+
+    result = capture_recipe_calibration(
+        "https://weworkremotely.com/remote-jobs/search",
+        root=tmp_path,
+        rendered=False,
+        capture_detail=True,
+    )
+
+    assert result.detail_sample_url == "https://weworkremotely.com/remote-jobs/acme-sap-product-manager"
+    assert calls[1] == "https://weworkremotely.com/remote-jobs/acme-sap-product-manager"
+
+
+def test_blueprint_infers_unknown_repeated_detail_url_family() -> None:
+    html = """
+    <!doctype html>
+    <html><body>
+      <main>
+        <article class="role-card">
+          <a class="role-link" href="/open-positions/sap-solution-architect">SAP Solution Architect</a>
+          <span class="meta">Remote Full-Time</span>
+        </article>
+        <article class="role-card">
+          <a class="role-link" href="/open-positions/sap-btp-consultant">SAP BTP Consultant</a>
+          <span class="meta">Hybrid Contract</span>
+        </article>
+        <article class="role-card">
+          <a class="role-link" href="/open-positions/sap-data-lead">SAP Data Lead</a>
+          <span class="meta">Remote salary available</span>
+        </article>
+      </main>
+    </body></html>
+    """
+
+    blueprint = build_recipe_blueprint(html, "https://example.com/careers")
+    recipe = blueprint["recipe"]
+
+    assert blueprint["status"] == "draft"
+    assert recipe["listing"]["card_selector"] == "article.role-card"
+    assert recipe["accept"]["url_contains"] == ["/open-positions/"]
+
+
+def test_blueprint_does_not_infer_repeated_resource_links_as_jobs() -> None:
+    html = """
+    <!doctype html>
+    <html><body>
+      <section class="resources">
+        <article class="resource-card"><a href="/resources/remote-work-guide">Remote work guide</a></article>
+        <article class="resource-card"><a href="/resources/salary-report-2026">Salary report</a></article>
+        <article class="resource-card"><a href="/resources/hybrid-policy-guide">Hybrid policy guide</a></article>
+      </section>
+    </body></html>
+    """
+
+    blueprint = build_recipe_blueprint(html, "https://example.com/resources")
+
+    assert blueprint["status"] == "not_recommended"
+
+
 def test_selector_audit_reports_zero_card_matches() -> None:
     recipe = job_board_recipe_from_mapping(
         {
@@ -891,6 +1025,43 @@ def test_calibration_uses_recipe_rendered_mode_without_playwright_in_unit_test(
 
     assert calls == {"rendered": "https://example.com/jobs"}
     assert result.capture_mode == "rendered_html"
+
+
+def test_calibration_resolves_registry_recipe_path_in_new_project_layout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "project"
+    (root / "app").mkdir(parents=True)
+    (root / "setup").mkdir()
+    recipe_path = root / "user" / "sources" / "recipes" / "experimental" / "example.yaml"
+    recipe_path.parent.mkdir(parents=True)
+    recipe_path.write_text(
+        "source_name: Example\n"
+        "listing:\n"
+        "  card_selector: article.job-card\n"
+        "  title_selector: h2 a\n"
+        "  link_selector: h2 a\n"
+        "  description_selector: p\n"
+        "accept:\n"
+        "  url_contains:\n"
+        "    - /jobs/\n",
+        encoding="utf-8",
+    )
+
+    def fake_static(url: str, timeout_seconds: int):
+        return CALIBRATION_HTML, url, []
+
+    monkeypatch.setattr("job_agent.services.recipe_calibration_service._fetch_static_html", fake_static)
+
+    result = capture_recipe_calibration(
+        "https://example.com/jobs",
+        recipe_path="sources/recipes/experimental/example.yaml",
+        root=root,
+        capture_detail=False,
+    )
+
+    assert result.recipe_extracted_count == 1
+    assert result.card_selector_match_count == 1
 
 
 def _sthree_shell_html() -> str:

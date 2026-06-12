@@ -8,8 +8,10 @@ from job_agent.services.recipe_suggestion_service import (
     RecipeRefinementAttempt,
     RecipeRefinementResult,
     RecipeSuggestionResult,
+    build_batch_recipe_suggestion_prompt,
     build_recipe_suggestion_prompt,
     load_recipe_suggestion_evidence,
+    parse_batch_recipe_suggestion_response,
     suggest_recipe_from_artifact,
     suggest_recipe_with_refinement,
 )
@@ -497,6 +499,59 @@ def test_refinement_does_not_call_llm_when_capture_has_no_job_evidence(project_r
     assert "browser-rendered capture" in " ".join(result.final_result.warnings)
 
 
+def test_refinement_calls_llm_for_salvageable_not_recommended_capture(project_root: Path) -> None:
+    artifact = _write_salvageable_not_recommended_artifact(project_root)
+    client = FakeRecipeSuggestionClient(_llm_response(VALID_RECIPE_YAML))
+
+    result = suggest_recipe_with_refinement(artifact, llm_client=client, max_attempts=1)
+
+    assert client.prompts
+    assert "AI rescue task" in client.prompts[0]
+    assert result.accepted is True
+    assert result.final_result.selected_strategy == "selector_based"
+
+
+def test_batch_recipe_suggestion_prompt_and_parse(project_root: Path) -> None:
+    first = _write_artifact(project_root)
+    second = _write_salvageable_not_recommended_artifact(project_root)
+    evidences = [
+        load_recipe_suggestion_evidence(first, source_name="Example Jobs"),
+        load_recipe_suggestion_evidence(second, source_name="Example Jobs"),
+    ]
+
+    prompt = build_batch_recipe_suggestion_prompt(evidences)
+    response = json.dumps(
+        {
+            "items": [
+                {
+                    "artifact_dir": str(first),
+                    "suggested_recipe_yaml": VALID_RECIPE_YAML,
+                    "explanation": "Use card links.",
+                    "confidence": "high",
+                    "assumptions": [],
+                    "warnings": [],
+                    "selected_strategy": "selector_based",
+                },
+                {
+                    "artifact_dir": str(second),
+                    "suggested_recipe_yaml": VALID_RECIPE_YAML,
+                    "explanation": "Rescue from candidate links.",
+                    "confidence": "medium",
+                    "assumptions": [],
+                    "warnings": [],
+                    "selected_strategy": "selector_based",
+                },
+            ]
+        }
+    )
+
+    results = parse_batch_recipe_suggestion_response(evidences, response)
+
+    assert "items must be a list" in prompt
+    assert len(results) == 2
+    assert all(result.schema_valid for result in results)
+
+
 def test_invalid_suggested_recipe_yaml_returns_validation_errors(project_root: Path) -> None:
     client = FakeRecipeSuggestionClient(_llm_response("source_name: Broken\nlisting: {}\n"))
 
@@ -840,6 +895,67 @@ def _write_not_recommended_artifact(project_root: Path) -> Path:
                 "capture_mode": "static_html",
                 "candidates": [],
                 "detail_sample_captured": False,
+                "recipe_blueprint": {
+                    "status": "not_recommended",
+                    "warnings": ["No stable repeated listing card selector was found."],
+                    "recipe": {},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    return artifact
+
+
+def _write_salvageable_not_recommended_artifact(project_root: Path) -> Path:
+    artifact = project_root / "output" / "recipe-calibration" / "salvageable-capture"
+    artifact.mkdir(parents=True, exist_ok=True)
+    page_html = """
+    <!doctype html>
+    <html><body>
+      <article class="job-card">
+        <a class="job-link" href="/jobs/sap-abap">SAP ABAP Consultant</a>
+        <span class="location">Remote</span>
+        <p class="description">Contract SAP ABAP role with RAP, CDS, OData, integration, and delivery context.</p>
+      </article>
+      <article class="job-card">
+        <a class="job-link" href="/jobs/sap-basis">SAP Basis Consultant</a>
+        <span class="location">Copenhagen</span>
+        <p class="description">Contract SAP Basis role with S/4HANA upgrade and migration delivery context.</p>
+      </article>
+    </body></html>
+    """
+    (artifact / "summary.md").write_text("# Salvageable\nWarning: deterministic blueprint failed.\n", encoding="utf-8")
+    (artifact / "visible-text.txt").write_text(
+        "SAP ABAP Consultant Remote Contract SAP Basis Consultant Copenhagen Contract",
+        encoding="utf-8",
+    )
+    (artifact / "candidate-elements.html").write_text(
+        '<article class="job-card"><a class="job-link" href="/jobs/sap-abap">SAP ABAP Consultant</a></article>',
+        encoding="utf-8",
+    )
+    (artifact / "page.html").write_text(page_html, encoding="utf-8")
+    (artifact / "selector-report.json").write_text(
+        json.dumps(
+            {
+                "url": "https://example.com/jobs",
+                "capture_mode": "static_html",
+                "candidates": [
+                    {
+                        "selector": "article.job-card",
+                        "kind": "card",
+                        "text_preview": "SAP ABAP Consultant Remote Contract",
+                        "contains_sap_terms": True,
+                        "likely_noise": False,
+                        "links": [{"text": "SAP ABAP Consultant", "href": "/jobs/sap-abap"}],
+                    }
+                ],
+                "learning_exploration": {
+                    "known_detail_link_count": 0,
+                    "inferred_detail_link_family_count": 0,
+                    "inferred_detail_link_families": [],
+                    "not_findable": ["stable_listing_card_selector"],
+                },
                 "recipe_blueprint": {
                     "status": "not_recommended",
                     "warnings": ["No stable repeated listing card selector was found."],

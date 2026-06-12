@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
+from tests.helpers import seed_common_sources
 
 from job_agent.services.recipe_candidate_service import RecipeCandidateStore
 from job_agent.services.recipe_generation_run_service import RecipeGenerationRunService
@@ -16,7 +17,6 @@ from job_agent.services.recipe_suggestion_service import (
     RecipeSuggestionResult,
 )
 from job_agent.services.source_registry_service import SourceRegistryService
-from tests.helpers import seed_common_sources
 
 VALID_RECIPE_YAML = """source_name: Eursap Jobs
 start_url: https://eursap.eu/jobs
@@ -293,6 +293,49 @@ def test_source_detail_displays_relevant_pending_and_rejected_candidates(
     assert rejected.candidate_id in response.text
     assert "Generated plans" in response.text
     assert "rejected" in response.text
+
+
+def test_external_agent_batch_recipe_candidate_flow(client: TestClient, project_root: Path) -> None:
+    artifact = _write_artifact(project_root)
+    relative = artifact.relative_to(project_root).as_posix()
+
+    prepare = client.post(
+        "/sources/eursap-jobs/recipe-candidates/external-agent/prepare-batch",
+        data={"artifact_dirs": relative},
+    )
+    assert prepare.status_code == 200
+    prepared = prepare.json()
+    assert prepared["ok"] is True
+    assert "items must be a list" in prepared["prompt"]
+
+    apply = client.post(
+        "/sources/eursap-jobs/recipe-candidates/external-agent/apply-batch",
+        data={
+            "interaction_id": prepared["interaction_id"],
+            "response_text": json.dumps(
+                {
+                    "items": [
+                        {
+                            "artifact_dir": str(artifact.resolve()),
+                            "suggested_recipe_yaml": VALID_RECIPE_YAML,
+                            "explanation": "Use the local card links.",
+                            "confidence": "high",
+                            "assumptions": [],
+                            "warnings": [],
+                            "selected_strategy": "selector_based",
+                        }
+                    ]
+                }
+            ),
+        },
+    )
+
+    assert apply.status_code == 200
+    assert apply.json()["ok"] is True
+    candidates = RecipeCandidateStore(project_root).list_candidates()
+    assert len(candidates) == 1
+    candidate = RecipeCandidateStore(project_root).load_candidate(candidates[0].candidate_id)
+    assert candidate.schema_valid is True
 
 
 def test_source_detail_does_not_treat_unusable_attempt_as_reviewable_plan(

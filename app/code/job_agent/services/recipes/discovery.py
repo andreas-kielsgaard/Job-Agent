@@ -269,7 +269,16 @@ def _strings_containing_links(raw: str) -> list[str]:
 def _looks_like_pagination(label: str, href: str, haystack: str) -> bool:
     if re.fullmatch(r"\d+", label.strip()):
         return True
+    if _looks_like_listing_expansion_link(label, href):
+        return True
     return any(token in haystack for token in ["page-numbers", "pagenr=", "page=", "pagination", "paginator", "/page/"])
+
+
+def _looks_like_listing_expansion_link(label: str, href: str) -> bool:
+    normalized = " ".join(label.lower().split())
+    if not normalized or href.lower().split("?", 1)[0].endswith(".rss"):
+        return False
+    return bool(re.search(r"\bview all\s+\d+.+\bjobs?\b", normalized))
 
 
 def _looks_like_next_link(label: str, match: Tag) -> bool:

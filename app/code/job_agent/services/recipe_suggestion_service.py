@@ -448,6 +448,7 @@ def load_recipe_suggestion_evidence(
         "observed_application_entries": selector_report.get("observed_application_entries", [])[:10]
         if isinstance(selector_report, dict)
         else [],
+        "learning_exploration": selector_report.get("learning_exploration", {}) if isinstance(selector_report, dict) else {},
         "source_session_used": bool(selector_report.get("source_session_used"))
         if isinstance(selector_report, dict)
         else False,
@@ -499,6 +500,10 @@ def build_recipe_suggestion_prompt(evidence: RecipeSuggestionEvidence) -> str:
         "setup_hint.\n"
         "A deterministic recipe_blueprint may be included. Prefer preserving selectors from that blueprint when "
         "the local evidence supports them; revise only when the evidence contradicts it.\n"
+        "If the deterministic recipe_blueprint is not_recommended but learning_exploration, top_candidates, "
+        "visible text, pagination links, or API evidence show plausible job-list material, treat this as an AI "
+        "rescue task: infer conservative selectors only from the saved local artifacts, explain the failed "
+        "deterministic step, and still return valid recipe YAML when the evidence supports it.\n"
         "If source_test_insight is present, it is the latest live source-test diagnosis. Address it directly; "
         "preserve the tested strategy when pagination_working_with_unique_pages is true, do not preserve URL "
         "pagination when pagination_duplicate_postings is true or a failed capability proves duplicate pages, "
@@ -518,6 +523,52 @@ def build_recipe_suggestion_prompt(evidence: RecipeSuggestionEvidence) -> str:
         "choose selected_strategy not_recommended and explain why.\n\n"
         f"Evidence JSON:\n{json.dumps(evidence.prompt_payload, ensure_ascii=False, indent=2)}"
     )
+
+
+def build_batch_recipe_suggestion_prompt(evidences: list[RecipeSuggestionEvidence]) -> str:
+    bounded = evidences[:5]
+    payload = [
+        {
+            "artifact_dir": str(evidence.artifact_dir),
+            "source_name": evidence.source_name,
+            "start_url": evidence.start_url,
+            "evidence": evidence.prompt_payload,
+        }
+        for evidence in bounded
+    ]
+    return (
+        "You suggest constrained Job-Agent recipe YAML for multiple saved calibration artifacts.\n"
+        "Return only strict JSON with one key: items. items must be a list with one object for each artifact "
+        "that has enough local evidence. Each object must include artifact_dir, suggested_recipe_yaml, "
+        "explanation, confidence, assumptions, warnings, and selected_strategy.\n"
+        "Use only the saved local evidence for each item. Do not browse, add credentials, infer hidden APIs, "
+        "or combine selectors across different artifacts. If an artifact is not usable, return that artifact "
+        "with selected_strategy not_recommended and an empty suggested_recipe_yaml.\n"
+        "The YAML may use only this schema: source_name, start_url, mode, access, listing, pagination, accept, "
+        "listing_api, detail_api, reject, patterns, limits, detail. API recipes may use only exact public "
+        "page-declared request shapes in that artifact's evidence.\n\n"
+        f"Evidence items JSON:\n{json.dumps(payload, ensure_ascii=False, indent=2)}"
+    )
+
+
+def parse_batch_recipe_suggestion_response(
+    evidences: list[RecipeSuggestionEvidence],
+    raw_response: str,
+) -> list[RecipeSuggestionResult]:
+    parsed = _parse_llm_json(raw_response)
+    items = parsed.get("items")
+    if not isinstance(items, list):
+        raise ValueError('LLM response must be a JSON object with an "items" list.')
+    by_artifact = {_artifact_key(evidence.artifact_dir): evidence for evidence in evidences[:5]}
+    results: list[RecipeSuggestionResult] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        evidence = by_artifact.get(_artifact_key(Path(str(item.get("artifact_dir") or ""))))
+        if evidence is None:
+            continue
+        results.append(_suggestion_result_from_response(evidence, json.dumps(item, ensure_ascii=False)))
+    return results
 
 
 def build_recipe_refinement_prompt(evidence: RecipeSuggestionEvidence, attempt: RecipeRefinementAttempt) -> str:
@@ -631,6 +682,8 @@ def _no_recipe_evidence_result(evidence: RecipeSuggestionEvidence) -> RecipeSugg
         return None
     if blueprint.get("status") != "not_recommended":
         return None
+    if _evidence_is_salvageable(evidence):
+        return None
     warnings = list(evidence.warnings) + _list_value(blueprint.get("warnings"))
     warnings.append(
         "The captured page did not expose repeated job cards or a job-detail link. "
@@ -654,6 +707,57 @@ def _no_recipe_evidence_result(evidence: RecipeSuggestionEvidence) -> RecipeSugg
         schema_valid=False,
         source_test_insight=_source_test_insight_from_payload(evidence.prompt_payload),
     )
+
+
+def _evidence_is_salvageable(evidence: RecipeSuggestionEvidence) -> bool:
+    payload = evidence.prompt_payload if isinstance(evidence.prompt_payload, dict) else {}
+    blueprint = payload.get("recipe_blueprint") if isinstance(payload, dict) else {}
+    if not isinstance(blueprint, dict) or blueprint.get("status") != "not_recommended":
+        return False
+    learning = payload.get("learning_exploration") if isinstance(payload.get("learning_exploration"), dict) else {}
+    if int(learning.get("inferred_detail_link_family_count") or 0) > 0:
+        return True
+    if int(learning.get("known_detail_link_count") or 0) > 0:
+        return True
+    for key in ["observed_api_candidates", "observed_pagination_links", "observed_ajax_pagination_templates"]:
+        value = payload.get(key)
+        if isinstance(value, list) and value:
+            return True
+    candidates = payload.get("top_candidates")
+    if isinstance(candidates, list):
+        for candidate in candidates:
+            if not isinstance(candidate, dict) or candidate.get("likely_noise"):
+                continue
+            links = candidate.get("links")
+            if isinstance(links, list) and links:
+                return True
+    visible_text = str(payload.get("visible_text_sample") or "")
+    return _visible_text_has_job_like_evidence(visible_text)
+
+
+def _visible_text_has_job_like_evidence(value: str) -> bool:
+    normalized = value.lower()
+    terms = [
+        "remote",
+        "hybrid",
+        "contract",
+        "freelance",
+        "full-time",
+        "part-time",
+        "consultant",
+        "salary",
+        "posted",
+        "job id",
+        "reference",
+    ]
+    return sum(1 for term in terms if term in normalized) >= 2
+
+
+def _artifact_key(path: Path) -> str:
+    try:
+        return str(Path(path).resolve()).lower()
+    except OSError:
+        return str(path).replace("\\", "/").lower()
 
 
 def validate_suggested_recipe_yaml(value: str) -> list[str]:

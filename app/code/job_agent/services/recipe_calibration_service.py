@@ -2,18 +2,19 @@ from __future__ import annotations
 
 import json
 import re
+from collections import defaultdict
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from html import escape
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs, urljoin, urlparse
+from urllib.parse import parse_qs, urldefrag, urljoin, urlparse
 
 from bs4 import BeautifulSoup, NavigableString, Tag
 
 from job_agent.browser.playwright_probe import slugify_url
 from job_agent.config import ROOT
-from job_agent.paths import output_dir
+from job_agent.paths import output_dir, resolve_project_path
 from job_agent.services.extraction_quality import quality_as_dict
 from job_agent.services.job_board_check_service import validate_public_url
 from job_agent.services.job_board_recipe_service import (
@@ -75,8 +76,35 @@ META_PATTERNS = (
     r"\bposted\b",
     r"\b\d{4,6}\b",
     r"\b(remote|hybrid|onsite)\b",
-    r"\b(contract|freelance|permanent)\b",
+    r"\b(contract|freelance|permanent|full[- ]time|part[- ]time)\b",
+    r"\bsalary\b",
     r"(\bEUR\b|\bDKK\b|£|\$|/day|/hour)",
+)
+
+KNOWN_DETAIL_URL_TOKENS = (
+    "/freelance_projects/",
+    "/freelance-projects/",
+    "/contract-jobs/",
+    "/consultant-jobs/",
+    "/remote-jobs/",
+    "/job-role/",
+    "/vacancies/",
+    "/vacancy/",
+    "/careers/",
+    "/career/",
+    "/positions/",
+    "/position/",
+    "/opportunities/",
+    "/opportunity/",
+    "/openings/",
+    "/opening/",
+    "/projects/",
+    "/project/",
+    "/roles/",
+    "/role/",
+    "/jobs/",
+    "/job/",
+    "/jobb/",
 )
 
 UNSUPPORTED_FIELD_LABELS = {
@@ -109,6 +137,16 @@ class CandidateElement:
     links: list[dict[str, str]]
     contains_sap_terms: bool
     likely_noise: bool
+
+
+@dataclass
+class DetailLinkFamily:
+    token: str
+    unique_url_count: int
+    card_selector: str
+    card_match_count: int
+    sample_urls: list[str] = field(default_factory=list)
+    sample_texts: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -145,7 +183,9 @@ def capture_recipe_calibration(
     source_session_scope: str = "",
 ) -> RecipeCalibrationResult:
     normalized_url = validate_public_url(url)
-    recipe = load_job_board_recipe(Path(recipe_path)) if recipe_path else None
+    root = Path(root)
+    resolved_recipe_path = resolve_project_path(root, recipe_path) if recipe_path else None
+    recipe = load_job_board_recipe(resolved_recipe_path) if resolved_recipe_path else None
     html, final_url, fetch_warnings, use_rendered = _fetch_calibration_html(
         normalized_url,
         recipe=recipe,
@@ -156,7 +196,8 @@ def capture_recipe_calibration(
     capture_mode = "rendered_html" if use_rendered else "static_html"
     soup = BeautifulSoup(html, "html.parser")
     visible_text = soup.get_text("\n", strip=True)
-    candidates = discover_candidate_elements(html, max_candidates=max_candidates)
+    learning_exploration = explore_learning_material(html, final_url)
+    candidates = discover_candidate_elements(html, max_candidates=max_candidates, base_url=final_url)
     pagination_observations = discover_pagination_links(html, final_url)
     ajax_pagination_observations = discover_ajax_pagination_templates(html, final_url)
     interactive_pagination_observations = discover_interactive_pagination_controls(html)
@@ -193,6 +234,13 @@ def capture_recipe_calibration(
         recipe_blueprint.get("status") == "not_recommended" or api_blueprint.get("confidence") == "high"
     ):
         recipe_blueprint = api_blueprint
+    learning_exploration["not_findable"] = _learning_not_findable(
+        recipe_blueprint=recipe_blueprint,
+        pagination_observations=pagination_observations,
+        ajax_pagination_observations=ajax_pagination_observations,
+        api_observations=api_observations,
+        detail_sample_captured=bool(detail_html),
+    )
     (artifact_dir / "page.html").write_text(html, encoding="utf-8")
     (artifact_dir / "visible-text.txt").write_text(visible_text, encoding="utf-8")
     (artifact_dir / "candidate-elements.html").write_text(_candidate_html(candidates), encoding="utf-8")
@@ -210,6 +258,7 @@ def capture_recipe_calibration(
         "observed_api_candidates": api_observations,
         "observed_interactive_pagination_controls": interactive_pagination_observations,
         "observed_application_entries": [asdict(entry) for entry in application_entries],
+        "learning_exploration": learning_exploration,
         "source_session_used": bool(session_state_path),
         "source_session_scope": source_session_scope if session_state_path else "",
         "detail_sample_url": detail_final_url or detail_sample_url,
@@ -742,10 +791,32 @@ def _static_capture_has_listing_evidence(html: str, base_url: str) -> bool:
     return bool(isinstance(listing, dict) and listing.get("card_selector") and listing.get("title_selector"))
 
 
-def discover_candidate_elements(html: str, max_candidates: int = 30) -> list[CandidateElement]:
+def explore_learning_material(html: str, base_url: str) -> dict[str, Any]:
+    soup = BeautifulSoup(html, "html.parser")
+    known_links = _job_detail_links(soup, base_url, infer_families=False)
+    inferred_families = _inferred_detail_link_families(soup, base_url)
+    return {
+        "known_detail_link_count": len(known_links),
+        "inferred_detail_link_families": [asdict(family) for family in inferred_families[:10]],
+        "inferred_detail_link_family_count": len(inferred_families),
+        "not_findable": [],
+    }
+
+
+def discover_candidate_elements(
+    html: str,
+    max_candidates: int = 30,
+    *,
+    base_url: str = "",
+) -> list[CandidateElement]:
     soup = BeautifulSoup(html, "html.parser")
     scored: list[tuple[int, Tag]] = []
     seen: set[int] = set()
+
+    if base_url:
+        for link, _absolute_url, _token in _job_detail_links(soup, base_url, infer_families=True):
+            ancestor = _candidate_ancestor(link)
+            _add_candidate(scored, seen, ancestor, _score_candidate(ancestor) + 8)
 
     for link in soup.find_all("a", href=True):
         link_text = link.get_text(" ", strip=True)
@@ -767,6 +838,29 @@ def discover_candidate_elements(html: str, max_candidates: int = 30) -> list[Can
 
     scored.sort(key=lambda item: item[0], reverse=True)
     return [_candidate_element(tag) for _score, tag in scored[:max_candidates]]
+
+
+def _learning_not_findable(
+    *,
+    recipe_blueprint: dict[str, Any],
+    pagination_observations: list[Any],
+    ajax_pagination_observations: list[dict[str, Any]],
+    api_observations: list[dict[str, Any]],
+    detail_sample_captured: bool,
+) -> list[str]:
+    missing: list[str] = []
+    if recipe_blueprint.get("status") == "not_recommended":
+        missing.append("stable_listing_card_selector")
+    recipe = recipe_blueprint.get("recipe") if isinstance(recipe_blueprint, dict) else {}
+    if (not isinstance(recipe, dict) or not recipe.get("pagination")) and (
+        not pagination_observations and not ajax_pagination_observations
+    ):
+        missing.append("pagination_method")
+    if not api_observations:
+        missing.append("page_declared_api")
+    if not detail_sample_captured:
+        missing.append("detail_sample")
+    return missing
 
 
 def audit_recipe_selectors(html: str, base_url: str, recipe: JobBoardRecipe | None) -> SelectorAudit:
@@ -867,7 +961,9 @@ def _detail_sample_url(html: str, base_url: str, recipe: JobBoardRecipe | None) 
 
 def _best_listing_card(soup: BeautifulSoup, base_url: str) -> dict[str, Any] | None:
     scored: dict[str, dict[str, Any]] = {}
-    for link, absolute_url, token in _job_detail_links(soup, base_url):
+    detail_link_families = _inferred_detail_link_families(soup, base_url)
+    extra_tokens = [family.token for family in detail_link_families]
+    for link, absolute_url, token in _job_detail_links(soup, base_url, extra_tokens=extra_tokens):
         for ancestor in _candidate_ancestors_for_link(link):
             if _likely_noise(ancestor):
                 continue
@@ -877,22 +973,28 @@ def _best_listing_card(soup: BeautifulSoup, base_url: str) -> dict[str, Any] | N
             cards = soup.select(selector)
             if not cards or len(cards) > 150:
                 continue
-            matching_cards = [card for card in cards if not _likely_noise(card) and _job_detail_links(card, base_url)]
+            matching_cards = [
+                card
+                for card in cards
+                if not _likely_noise(card) and _job_detail_links(card, base_url, extra_tokens=extra_tokens)
+            ]
             if not matching_cards:
                 continue
             card_detail_urls = [
                 absolute_url
                 for card in matching_cards
-                for _link, absolute_url, link_token in _job_detail_links(card, base_url)
+                for _link, absolute_url, link_token in _job_detail_links(card, base_url, extra_tokens=extra_tokens)
                 if link_token == token
             ]
             unique_detail_url_count = len(set(card_detail_urls))
-            effective_match_count = unique_detail_url_count or len(matching_cards)
+            effective_match_count = min(unique_detail_url_count or len(matching_cards), len(matching_cards))
             average_links = sum(len(card.find_all("a", href=True)) for card in cards) / len(cards)
             average_text = sum(len(card.get_text(" ", strip=True)) for card in matching_cards) / len(matching_cards)
             score = effective_match_count * 8 + min(average_text, 250) / 20
             if len(matching_cards) > effective_match_count:
                 score -= (len(matching_cards) - effective_match_count) * 6
+            if unique_detail_url_count > max(len(matching_cards) * 2, 3):
+                score -= min(unique_detail_url_count - len(matching_cards), 50)
             selector_lower = selector.lower()
             if any(term in selector_lower for term in ["job", "project", "card", "item"]):
                 score += 18
@@ -967,16 +1069,163 @@ def _card_selector_for_tag(tag: Tag, soup: BeautifulSoup) -> str:
 
 
 def _class_is_stable(value: str) -> bool:
-    return bool(value) and not re.search(r"^[0-9]|reactrenderer|^css-|^js-|ng-|hydrated", value, re.I)
+    return bool(re.fullmatch(r"-?[_a-zA-Z][-_a-zA-Z0-9]*", value or "")) and not re.search(
+        r"^[0-9]|reactrenderer|^css-|^js-|ng-|hydrated", value, re.I
+    )
 
 
-def _job_detail_links(root: Tag | BeautifulSoup, base_url: str) -> list[tuple[Tag, str, str]]:
+def _inferred_detail_link_families(soup: BeautifulSoup, base_url: str) -> list[DetailLinkFamily]:
+    groups: dict[str, list[tuple[Tag, str, str]]] = defaultdict(list)
+    base_host = urlparse(base_url).netloc.lower()
+    for link in soup.find_all("a", href=True):
+        href = str(link.get("href") or "").strip()
+        absolute_url = urljoin(base_url, href)
+        parsed = urlparse(absolute_url)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            continue
+        if base_host and parsed.netloc.lower() != base_host:
+            continue
+        path = parsed.path.lower()
+        if not _url_is_probable_detail_url(path):
+            continue
+        token = _dynamic_detail_url_token(path)
+        if not token:
+            continue
+        text = link.get_text(" ", strip=True)
+        if _link_text_is_noise(text, href):
+            continue
+        groups[token].append((link, absolute_url, text))
+
+    families: list[DetailLinkFamily] = []
+    for token, links in groups.items():
+        unique_urls = _unique_preserve_order([url for _link, url, _text in links])
+        if len(unique_urls) < 3:
+            continue
+        selector_counts: dict[str, int] = defaultdict(int)
+        for link, _url, _text in links:
+            for ancestor in _candidate_ancestors_for_link(link):
+                if _likely_noise(ancestor):
+                    continue
+                selector = _card_selector_for_tag(ancestor, soup)
+                if selector:
+                    selector_counts[selector] += 1
+        if not selector_counts:
+            continue
+        best_selector, best_count = max(selector_counts.items(), key=lambda item: item[1])
+        cards = soup.select(best_selector)
+        if best_count < 3 or not cards or len(cards) > 150:
+            continue
+        matching_cards = [card for card in cards if _card_has_link_token(card, token, base_url)]
+        if len(matching_cards) < 3:
+            continue
+        if not _cards_have_job_like_evidence(matching_cards):
+            continue
+        families.append(
+            DetailLinkFamily(
+                token=token,
+                unique_url_count=len(unique_urls),
+                card_selector=best_selector,
+                card_match_count=len(matching_cards),
+                sample_urls=unique_urls[:5],
+                sample_texts=[
+                    _preview(card.get_text(" ", strip=True), 180)
+                    for card in matching_cards[:3]
+                    if card.get_text(" ", strip=True)
+                ],
+            )
+        )
+    return sorted(families, key=lambda family: (family.card_match_count, family.unique_url_count), reverse=True)
+
+
+def _dynamic_detail_url_token(path: str) -> str:
+    segments = [segment for segment in path.strip("/").split("/") if segment]
+    if len(segments) < 2:
+        return ""
+    leaf = segments[-1]
+    if not _slug_like_leaf(leaf):
+        return ""
+    prefix_segments = segments[:-1]
+    if any(_non_listing_prefix_segment(segment) for segment in prefix_segments):
+        return ""
+    return "/" + "/".join(prefix_segments) + "/"
+
+
+def _slug_like_leaf(value: str) -> bool:
+    normalized = value.strip().lower()
+    if not normalized or normalized in {"apply", "login", "search", "jobs", "job", "careers", "career"}:
+        return False
+    if "." in normalized:
+        return False
+    return bool(re.search(r"[a-z]", normalized)) and bool(re.search(r"[-0-9]", normalized))
+
+
+def _non_listing_prefix_segment(value: str) -> bool:
+    normalized = value.strip().lower()
+    return normalized in {
+        "about",
+        "blog",
+        "category",
+        "categories",
+        "company",
+        "companies",
+        "contact",
+        "legal",
+        "locations",
+        "location",
+        "privacy",
+        "resources",
+        "tag",
+        "tags",
+    }
+
+
+def _card_has_link_token(card: Tag, token: str, base_url: str) -> bool:
+    for link in card.find_all("a", href=True):
+        path = urlparse(urljoin(base_url, str(link.get("href") or ""))).path.lower()
+        if token in path and not _link_text_is_noise(link.get_text(" ", strip=True), str(link.get("href") or "")):
+            return True
+    return False
+
+
+def _cards_have_job_like_evidence(cards: list[Tag]) -> bool:
+    observed = 0
+    for card in cards[:5]:
+        text = card.get_text(" ", strip=True)
+        lowered = text.lower()
+        if any(term in lowered for term in TEXT_TERMS) or any(re.search(pattern, text, re.I) for pattern in META_PATTERNS):
+            observed += 1
+    return observed >= min(2, len(cards[:5]))
+
+
+def _unique_preserve_order(values: list[str]) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        result.append(value)
+    return result
+
+
+def _job_detail_links(
+    root: Tag | BeautifulSoup,
+    base_url: str,
+    *,
+    extra_tokens: list[str] | tuple[str, ...] | None = None,
+    infer_families: bool = False,
+) -> list[tuple[Tag, str, str]]:
     result: list[tuple[Tag, str, str]] = []
     seen: set[str] = set()
+    tokens = list(extra_tokens or [])
+    if infer_families and isinstance(root, BeautifulSoup):
+        tokens.extend(family.token for family in _inferred_detail_link_families(root, base_url))
     for link in root.find_all("a", href=True):
         href = str(link.get("href") or "").strip()
         absolute_url = urljoin(base_url, href)
-        token = _detail_url_token(absolute_url)
+        if _same_url_without_fragment(absolute_url, base_url):
+            continue
+        token = _detail_url_token(absolute_url, extra_tokens=tokens)
         if not token or absolute_url in seen:
             continue
         if _link_text_is_noise(link.get_text(" ", strip=True), href):
@@ -986,11 +1235,15 @@ def _job_detail_links(root: Tag | BeautifulSoup, base_url: str) -> list[tuple[Ta
     return result
 
 
-def _detail_url_token(url: str) -> str:
+def _same_url_without_fragment(left: str, right: str) -> bool:
+    return urldefrag(left).url.rstrip("/") == urldefrag(right).url.rstrip("/")
+
+
+def _detail_url_token(url: str, *, extra_tokens: list[str] | tuple[str, ...] | None = None) -> str:
     path = urlparse(url).path.lower()
     if not _url_is_probable_detail_url(path):
         return ""
-    for token in ["/job/", "/jobb/", "/job-role/", "/project/", "/freelance_projects/", "/jobs/"]:
+    for token in [*(extra_tokens or []), *KNOWN_DETAIL_URL_TOKENS]:
         if token in path:
             return token
     return ""
@@ -1005,7 +1258,11 @@ def _url_is_probable_detail_url(path: str) -> bool:
 
 
 def _link_selector_for_card(card: Tag, token: str) -> str:
-    links = [link for link, _url, link_token in _job_detail_links(card, "https://example.com") if link_token == token]
+    links = [
+        link
+        for link, _url, link_token in _job_detail_links(card, "https://example.com", extra_tokens=[token])
+        if link_token == token
+    ]
     if not links:
         return f'a[href*="{token}"]' if token else "a"
     link = links[0]
@@ -1125,19 +1382,69 @@ def _table_headers_for_row(row: Tag) -> list[str]:
 
 def _available_listing_field_selectors(cards: list[Tag]) -> dict[str, str]:
     selector_fields = {
-        "location_selector": [".job-location", ".location", '[data-testid="city"]', ".city"],
-        "remote_selector": ['[data-testid="remoteInPercent"]', ".job-arrangement", ".remote"],
-        "rate_selector": [".salary", ".rate", ".job-rate"],
-        "workload_selector": ['[data-testid="type"]', ".job_type", ".job-type", ".type"],
-        "posted_date_selector": ['[data-testid="created"]', "time", ".posted-date", ".date"],
-        "start_date_selector": ['[data-testid="beginningText"]', ".start_date"],
-        "description_selector": [".job-description", ".job-summary", ".summary", ".description", ".excerpt", ".left"],
+        "location_selector": [
+            ".job-location",
+            ".location",
+            '[data-testid="city"]',
+            '[data-testid*="location"]',
+            '[data-qa*="location"]',
+            '[aria-label*="Location"]',
+            '[class*="location"]',
+            '[id*="location"]',
+            ".city",
+        ],
+        "remote_selector": [
+            '[data-testid="remoteInPercent"]',
+            '[data-testid*="remote"]',
+            ".job-arrangement",
+            ".remote",
+        ],
+        "rate_selector": [
+            ".salary",
+            ".rate",
+            ".job-rate",
+            '[data-testid*="salary"]',
+            '[data-testid*="rate"]',
+            '[class*="salary"]',
+            '[class*="rate"]',
+        ],
+        "workload_selector": [
+            '[data-testid="type"]',
+            '[data-testid*="type"]',
+            ".job_type",
+            ".job-type",
+            ".type",
+            '[class*="employment"]',
+            '[class*="workload"]',
+        ],
+        "posted_date_selector": [
+            '[data-testid="created"]',
+            '[data-testid*="posted"]',
+            '[data-testid*="date"]',
+            "time",
+            ".posted-date",
+            ".date",
+        ],
+        "start_date_selector": ['[data-testid="beginningText"]', '[data-testid*="start"]', ".start_date"],
+        "description_selector": [
+            ".job-description",
+            ".job-summary",
+            ".summary",
+            ".description",
+            ".excerpt",
+            ".left",
+            '[data-testid*="description"]',
+            '[class*="description"]',
+            '[class*="summary"]',
+        ],
         "company_selector": [
             '[data-testid="company"]',
+            '[data-testid*="company"]',
             "div.project-info > div.mg-b-display-m:first-child",
             ".company",
             ".client",
             ".recruiter",
+            '[class*="company"]',
         ],
     }
     result: dict[str, str] = {}
@@ -1153,6 +1460,7 @@ def _pagination_recipe(html: str, base_url: str) -> dict[str, Any]:
     soup = BeautifulSoup(html, "html.parser")
     next_selector = 'link[rel="next"]' if soup.select('link[rel="next"][href*="pagenr="]') else ""
     page_query_selector = _page_query_link_selector(soup)
+    listing_expansion_selector = _listing_expansion_link_selector(soup)
     if soup.select("a.page-numbers"):
         return {
             "strategy": "url",
@@ -1184,6 +1492,16 @@ def _pagination_recipe(html: str, base_url: str) -> dict[str, Any]:
             "page_link_selector": page_query_selector,
             "next_selector": _page_query_next_selector(soup),
             "max_pages": _observed_max_page(soup, default=2),
+            "request_delay_seconds": 1.0,
+        }
+    if listing_expansion_selector:
+        observed_links = discover_pagination_links(html, base_url)
+        expansion_count = sum(1 for link in observed_links if _looks_like_listing_expansion_label(link.label))
+        return {
+            "strategy": "url",
+            "page_link_selector": listing_expansion_selector,
+            "next_selector": "",
+            "max_pages": max(2, min(expansion_count + 1, 12)),
             "request_delay_seconds": 1.0,
         }
     if next_selector:
@@ -1227,6 +1545,23 @@ def _page_query_next_selector(soup: BeautifulSoup) -> str:
     if soup.select('a[href*="page="][aria-label*="Next"]'):
         return 'a[href*="page="][aria-label*="Next"]'
     return ""
+
+
+def _listing_expansion_link_selector(soup: BeautifulSoup) -> str:
+    for link in soup.find_all("a", href=True):
+        if _looks_like_listing_expansion_label(link.get_text(" ", strip=True)):
+            href = str(link.get("href") or "")
+            if href.lower().split("?", 1)[0].endswith(".rss"):
+                continue
+            if "/categories/" in href:
+                return 'a[href*="/categories/"]:not([href$=".rss"])'
+            return "a"
+    return ""
+
+
+def _looks_like_listing_expansion_label(value: str) -> bool:
+    normalized = " ".join(value.lower().split())
+    return bool(re.search(r"\bview all\s+\d+.+\bjobs?\b", normalized))
 
 
 def discover_ajax_pagination_templates(html: str, base_url: str) -> list[dict[str, Any]]:

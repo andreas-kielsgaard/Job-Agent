@@ -46,7 +46,10 @@ NOISE_TEXT_TERMS = (
 NOISE_LINK_TERMS = (
     "apply now",
     "#job-application",
+    "find your plan",
+    "find-your-plan",
     "login",
+    "post a job",
     "sign up",
     "reporting violations",
     "terms of use",
@@ -63,6 +66,7 @@ NON_JOB_URL_FRAGMENTS = (
     "/media/",
     "/assets/",
     "/static/",
+    "/find-your-plan",
     "/privacy",
     "/cookie",
     "/terms",

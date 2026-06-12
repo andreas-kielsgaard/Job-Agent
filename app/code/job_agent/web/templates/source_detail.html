@@ -370,6 +370,22 @@
         >Use another AI</button>
       </div>
     </form>
+    <form method="post" action="/sources/{{ source.id }}/recipe-candidates/external-agent/prepare-batch">
+      {% for artifact in recipe_artifacts[:5] %}
+      <input type="hidden" name="artifact_dirs" value="{{ artifact.artifact_dir }}">
+      {% endfor %}
+      <div class="row">
+        <button
+          class="button light"
+          type="button"
+          onclick="openExternalAgent(this)"
+          data-title="Generate multiple reading plans in another AI"
+          data-prepare-url="/sources/{{ source.id }}/recipe-candidates/external-agent/prepare-batch"
+          data-apply-url="/sources/{{ source.id }}/recipe-candidates/external-agent/apply-batch"
+        >Use another AI for saved samples</button>
+        <span class="muted">Bundles up to five saved samples into one prompt.</span>
+      </div>
+    </form>
     <details class="diagnostic-panel">
       <summary>Saved samples</summary>
       {% for artifact in recipe_artifacts %}

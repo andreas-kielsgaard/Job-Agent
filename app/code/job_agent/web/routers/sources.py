@@ -13,8 +13,10 @@ from job_agent.paths import resolve_project_path
 from job_agent.services.recipe_artifact_service import RecipeArtifactService
 from job_agent.services.recipe_candidate_service import RecipeCandidateStore
 from job_agent.services.recipe_suggestion_service import (
+    build_batch_recipe_suggestion_prompt,
     build_recipe_suggestion_prompt,
     load_recipe_suggestion_evidence,
+    parse_batch_recipe_suggestion_response,
     parse_recipe_suggestion_response,
 )
 from job_agent.services.source_registry_service import SOURCE_KIND_DEFINITIONS, SOURCE_STATUS_DEFINITIONS
@@ -795,6 +797,94 @@ def apply_external_recipe_candidate(
         {
             "ok": True,
             "redirect_url": f"/recipe-candidates/{candidate.candidate_id}?{urlencode({'source_id': source_id})}",
+        }
+    )
+
+
+@router.post("/sources/{source_id}/recipe-candidates/external-agent/prepare-batch")
+def prepare_external_recipe_candidate_batch(
+    source_id: str,
+    artifact_dirs: list[str] = Form(default=[]),
+) -> JSONResponse:
+    root = _workflow_handler().root
+    source = _registry_source_or_404(source_id)
+    _require_not_archived(source)
+    try:
+        selected = [value for value in artifact_dirs if str(value).strip()][:5]
+        if not selected:
+            raise ValueError("Select at least one saved sample.")
+        evidences = []
+        resolved_artifacts = []
+        for artifact_dir in selected:
+            artifact_path = RecipeArtifactService(root).resolve_artifact_path(artifact_dir)
+            resolved_artifacts.append(str(artifact_path))
+            evidences.append(
+                load_recipe_suggestion_evidence(
+                    artifact_path,
+                    source_name=source.name,
+                    start_url=source.url,
+                    existing_recipe_path=resolve_project_path(root, source.recipe_path) if source.recipe_path else None,
+                )
+            )
+        prompt = build_batch_recipe_suggestion_prompt(evidences)
+        interaction = ExternalAgentService(root).prepare(
+            LlmRequest(prompt=prompt, max_tokens=5200, purpose="recipe_suggestion_batch", run_id="manual"),
+            title=f"Generate reading plans for {source.name}",
+            instructions=(
+                "Paste this prompt into an external agent. Paste back the full JSON response; "
+                "the app will validate each suggested YAML item independently."
+            ),
+            metadata={
+                "source_id": source_id,
+                "artifact_dirs": resolved_artifacts,
+                "source_name": source.name,
+                "start_url": source.url,
+                "existing_recipe_path": source.recipe_path,
+            },
+        )
+    except (RuntimeError, ValueError) as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+    return JSONResponse({"ok": True, **interaction.to_payload()})
+
+
+@router.post("/sources/{source_id}/recipe-candidates/external-agent/apply-batch")
+def apply_external_recipe_candidate_batch(
+    source_id: str,
+    interaction_id: str = Form(...),
+    response_text: str = Form(...),
+) -> JSONResponse:
+    root = _workflow_handler().root
+    source = _registry_source_or_404(source_id)
+    _require_not_archived(source)
+    try:
+        service = ExternalAgentService(root)
+        interaction = service.load(interaction_id)
+        if interaction.metadata.get("source_id") != source_id:
+            raise ValueError("External-agent response does not belong to this source.")
+        completion = service.complete(interaction_id, response_text)
+        artifact_dirs = interaction.metadata.get("artifact_dirs")
+        if not isinstance(artifact_dirs, list) or not artifact_dirs:
+            raise ValueError("External-agent batch interaction did not list calibration artifacts.")
+        evidences = [
+            load_recipe_suggestion_evidence(
+                RecipeArtifactService(root).resolve_artifact_path(str(artifact_dir)),
+                source_name=source.name,
+                start_url=source.url,
+                existing_recipe_path=resolve_project_path(root, source.recipe_path) if source.recipe_path else None,
+            )
+            for artifact_dir in artifact_dirs[:5]
+        ]
+        results = parse_batch_recipe_suggestion_response(evidences, completion.text)
+        if not results:
+            raise ValueError("External-agent response did not include any matching artifact items.")
+        store = RecipeCandidateStore(root)
+        candidates = [store.save_candidate_from_suggestion(result) for result in results]
+    except (KeyError, RuntimeError, ValueError) as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+    return JSONResponse(
+        {
+            "ok": True,
+            "redirect_url": f"/sources/{source_id}?{urlencode({'message': f'Saved {len(candidates)} generated plan(s).'})}",
         }
     )
 

@@ -33,6 +33,7 @@ from job_agent.services.job_board_recipe_service import (
     job_board_recipe_from_mapping,
     load_job_board_recipe,
 )
+from job_agent.services.recipes.discovery import discover_pagination_links
 from job_agent.sources import extract_generic_jobs_from_html
 
 FIXTURE_PATH = Path("tests/fixtures/synthetic-job-board.html")
@@ -711,6 +712,23 @@ def test_recipe_detects_pagination_links_without_fetching_pages() -> None:
     ]
     assert links[0].is_next is True
     assert links[1].is_next is False
+
+
+def test_pagination_discovery_detects_listing_expansion_links_without_rss() -> None:
+    html = """
+    <section class="jobs">
+      <a href="/categories/all-other-remote-jobs.rss"></a>
+      <a href="/categories/all-other-remote-jobs">View all 47 All Other Remote jobs</a>
+      <a href="/categories/remote-full-stack-programming-jobs">View all 55 Full-Stack Programming jobs</a>
+    </section>
+    """
+
+    links = discover_pagination_links(html, "https://weworkremotely.com/remote-jobs/search")
+
+    assert [link.url for link in links] == [
+        "https://weworkremotely.com/categories/all-other-remote-jobs",
+        "https://weworkremotely.com/categories/remote-full-stack-programming-jobs",
+    ]
 
 
 def test_recipe_can_proof_fetch_one_pagination_page(monkeypatch: pytest.MonkeyPatch) -> None:
