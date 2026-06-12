@@ -16,7 +16,8 @@ def build_setup_view(root: Path = ROOT) -> dict:
     setup = SetupService(root)
     setup.ensure_private_profile()
     cv_reference = CvReferenceService(root).get_cv_reference()
-    cv_profile_draft = CvProfileDraftService(root).active_draft()
+    cv_drafts = CvProfileDraftService(root)
+    cv_profile_draft = cv_drafts.active_draft()
     env = load_env(root)
     return {
         "title": "Setup",
@@ -33,6 +34,7 @@ def build_setup_view(root: Path = ROOT) -> dict:
         "cv_reference": cv_reference,
         "cv_profile_draft": cv_profile_draft,
         "cv_profile_draft_ready_targets": _ready_draft_targets(cv_profile_draft),
+        "cv_applied_sections": cv_drafts.applied_sections(),
     }
 
 

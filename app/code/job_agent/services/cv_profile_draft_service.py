@@ -17,6 +17,7 @@ class CvProfileDraftService:
         draft_dir = profile_dir(root) / "drafts"
         self.path = draft_dir / "cv-profile-draft.json"
         self.task_path = draft_dir / "cv-profile-task.json"
+        self.applied_path = draft_dir / "cv-profile-applied.json"
 
     def active_draft(self) -> dict[str, Any]:
         draft = read_json(self.path, {}, strict=False)
@@ -49,6 +50,43 @@ class CvProfileDraftService:
             return False
         self.path.unlink(missing_ok=True)
         return True
+
+    def applied_sections(self) -> dict[str, dict[str, Any]]:
+        data = read_json(self.applied_path, {}, strict=False)
+        sections = data.get("sections", {}) if isinstance(data, dict) else {}
+        if not isinstance(sections, dict):
+            return {}
+        normalized: dict[str, dict[str, Any]] = {}
+        for target, record in sections.items():
+            if not isinstance(record, dict):
+                continue
+            key = str(target or "").strip()
+            if not key:
+                continue
+            normalized[key] = {
+                "target": key,
+                "label": str(record.get("label") or _target_label(key)),
+                "source_label": str(record.get("source_label") or "CV"),
+                "applied_at": str(record.get("applied_at") or ""),
+            }
+        return normalized
+
+    def record_applied_sections(self, targets: list[str], *, source_label: str = "CV") -> dict[str, dict[str, Any]]:
+        cleaned = [str(target or "").strip() for target in targets if str(target or "").strip()]
+        if not cleaned:
+            return self.applied_sections()
+        now = utc_now()
+        sections = self.applied_sections()
+        for target in cleaned:
+            sections[target] = {
+                "target": target,
+                "label": _target_label(target),
+                "source_label": source_label or "CV",
+                "applied_at": now,
+            }
+        self.applied_path.parent.mkdir(parents=True, exist_ok=True)
+        write_json(self.applied_path, {"sections": sections, "updated_at": now})
+        return sections
 
     def has_active_draft(self, draft_id: str = "") -> bool:
         draft = self.active_draft()
@@ -131,6 +169,7 @@ class CvProfileDraftService:
             "data": data,
             "sections": sections,
             "targets": targets,
+            "section_details": _section_details(data, targets),
             "json": json.dumps(data, ensure_ascii=False),
             "url": "/setup#cv-profile-draft",
         }
@@ -139,3 +178,41 @@ class CvProfileDraftService:
 
 def utc_now() -> str:
     return datetime.now(UTC).isoformat()
+
+
+def _target_label(target: str) -> str:
+    labels = {
+        "contact": "Profile basics",
+        "canonical_cv": "CV narrative",
+        "skills": "Skill matrix",
+        "experience": "Case studies",
+        "preferences": "Availability and constraints",
+        "match_engine": "Matchmaking settings",
+    }
+    return labels.get(target, target.replace("_", " ").title())
+
+
+def _section_details(data: dict[str, Any], targets: list[str]) -> dict[str, str]:
+    details: dict[str, str] = {}
+    for target in targets:
+        value: Any
+        if target == "contact":
+            contact_yaml = data.get("contact_yaml") if isinstance(data.get("contact_yaml"), dict) else {}
+            value = contact_yaml.get("contact") if isinstance(contact_yaml.get("contact"), dict) else contact_yaml
+        elif target == "canonical_cv":
+            value = str(data.get("canonical_cv") or "")
+        elif target == "skills":
+            value = data.get("skills_yaml") if isinstance(data.get("skills_yaml"), dict) else {}
+        elif target == "experience":
+            value = data.get("experience_yaml") if isinstance(data.get("experience_yaml"), dict) else {}
+        elif target == "preferences":
+            value = data.get("preferences_yaml") if isinstance(data.get("preferences_yaml"), dict) else {}
+        elif target == "match_engine":
+            value = data.get("match_engine") if isinstance(data.get("match_engine"), dict) else {}
+        else:
+            value = data.get(target)
+        if isinstance(value, str):
+            details[target] = value.strip()
+        else:
+            details[target] = json.dumps(value, ensure_ascii=False, indent=2)
+    return details

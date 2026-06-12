@@ -383,12 +383,14 @@ class SetupService:
 
     def apply_profile_auto_configuration(self, data: dict[str, Any], targets: list[str]) -> dict[str, Any]:
         applied: list[str] = []
+        applied_targets: list[str] = []
         missing: list[str] = []
         if "contact" in targets:
             contact = _contact_patch_from_auto_config(data)
             if _has_any_value(contact):
                 self.save_contact(contact)
                 applied.append("profile basics")
+                applied_targets.append("contact")
             else:
                 missing.append("profile basics")
         if "canonical_cv" in targets:
@@ -396,6 +398,7 @@ class SetupService:
             if canonical:
                 atomic_write_text(profile_dir(self.root) / "canonical-cv.md", canonical + "\n", encoding="utf-8")
                 applied.append("canonical CV")
+                applied_targets.append("canonical_cv")
             else:
                 missing.append("canonical CV")
         if "skills" in targets:
@@ -403,6 +406,7 @@ class SetupService:
             if isinstance(skills, dict):
                 write_yaml(profile_dir(self.root) / "skills.yaml", skills)
                 applied.append("skills")
+                applied_targets.append("skills")
             else:
                 missing.append("skills")
         if "experience" in targets:
@@ -410,6 +414,7 @@ class SetupService:
             if isinstance(experience, dict):
                 write_yaml(profile_dir(self.root) / "experience.yaml", experience)
                 applied.append("experience")
+                applied_targets.append("experience")
             else:
                 missing.append("experience")
         if "preferences" in targets or "match_engine" in targets:
@@ -431,6 +436,7 @@ class SetupService:
                         if key in patch:
                             preferences[key] = patch[key]
                     applied.append("preferences")
+                    applied_targets.append("preferences")
                 else:
                     missing.append("preferences")
             if "match_engine" in targets:
@@ -438,10 +444,11 @@ class SetupService:
                 if isinstance(match_engine, dict):
                     preferences["match_engine"] = normalize_match_engine_config(match_engine)
                     applied.append("matchmaking settings")
+                    applied_targets.append("match_engine")
                 else:
                     missing.append("matchmaking settings")
             write_yaml(preferences_path, preferences)
-        return {"applied": applied, "missing": missing}
+        return {"applied": applied, "applied_targets": applied_targets, "missing": missing}
 
     def _auto_configure_prompt(self, cv_text: str, targets: list[str]) -> str:
         current_profile = load_profile(self.root)

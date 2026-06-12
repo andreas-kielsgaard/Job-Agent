@@ -38,6 +38,7 @@
   {% set index = card.index %}
   {% set detail = card.detail %}
   {% set lifecycle = card.lifecycle %}
+  {% set auto_setup = card.auto_setup %}
   <article class="source-card {{ lifecycle.state }}{% if source.status == 'archived' %} archived{% endif %}">
     <div class="source-card-main">
       <div class="source-title-row">
@@ -117,6 +118,17 @@
     </div>
     <div class="source-card-actions">
       <a class="button light" href="/sources/{{ source.id }}">Open</a>
+      {% if auto_setup and auto_setup.show %}
+      <form method="post" action="{{ auto_setup.action }}" class="inline-form">
+        <button type="submit" class="button" {% if not auto_setup.can_start %}disabled{% endif %}>{{ auto_setup.label }}</button>
+      </form>
+      {% if not auto_setup.configured %}
+      <a class="button light" href="/setup#ai-writing">Add API key</a>
+      {% endif %}
+      {% if auto_setup.disabled_reason %}
+      <p class="muted source-action-note">{{ auto_setup.disabled_reason }}</p>
+      {% endif %}
+      {% endif %}
       {% if source.status != "archived" and status.primary_action %}
         {% if status.primary_action.type == "post" %}
         <form method="post" action="{{ status.primary_action.action }}" class="inline-form">

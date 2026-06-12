@@ -322,6 +322,9 @@ class ProfileWorkflowHandler:
     def active_draft(self) -> dict[str, Any]:
         return self.drafts.active_draft()
 
+    def record_cv_applied_sections(self, targets: list[str], *, source_label: str = "CV") -> None:
+        self.drafts.record_applied_sections(targets, source_label=source_label)
+
     def cv_reference(self) -> dict[str, Any]:
         return self.references.get_cv_reference()
 

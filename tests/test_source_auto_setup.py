@@ -209,10 +209,19 @@ def test_auto_setup_ui_is_api_key_gated_and_offers_continue(
     button = re.search(r"<button[^>]*>Automatically set up</button>", no_key_detail.text)
     assert button and "disabled" in button.group(0)
 
+    no_key_overview = client.get("/sources")
+    assert no_key_overview.status_code == 200
+    assert "Automatically set up" in no_key_overview.text
+    assert "Add an Anthropic API key in Setup before using automatic source setup." in no_key_overview.text
+
     (project_root / ".env").write_text("ANTHROPIC_API_KEY=test-key\n", encoding="utf-8")
     new_source = client.get("/sources/new")
     checkbox = re.search(r'<input type="checkbox" name="auto_setup"[^>]*>', new_source.text)
     assert checkbox and "disabled" not in checkbox.group(0)
+
+    configured_overview = client.get("/sources")
+    overview_button = re.search(r'<form method="post" action="/sources/example-jobs/auto-setup/start"[\s\S]*?<button[^>]*>Automatically set up</button>', configured_overview.text)
+    assert overview_button and "disabled" not in overview_button.group(0)
 
     run = SourceAutoSetupWorkflowHandler(project_root).prepare(source.id)
     continue_detail = client.get(f"/sources/{source.id}")

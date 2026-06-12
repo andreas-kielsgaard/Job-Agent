@@ -363,6 +363,7 @@
             event.preventDefault();
             const taskId = ensureWorkTaskId(form);
             const title = form.dataset.workTitle || "Drafting profile from CV";
+            const workHref = form.dataset.workHref || "";
             localWorkStatusItems = [
               ...localWorkStatusItems.filter((item) => item.task_id !== taskId),
               {
@@ -373,6 +374,7 @@
                 stage: "Submitting",
                 message: "Sending CV data to the profile draft flow.",
                 progress_percent: 8,
+                href: workHref,
                 started_at_ms: Date.now()
               }
             ];
@@ -396,10 +398,18 @@
               }
               if (contentType.includes("text/html")) {
                 const html = await response.text();
+                localWorkStatusItems = localWorkStatusItems.map((item) => item.task_id === taskId
+                  ? { ...item, status: "completed", stage: "Ready for review", message: "A CV profile draft is waiting for you to apply or discard it.", progress_percent: 100, href: workHref || "/setup#cv-profile-draft", finished_at: Date.now() }
+                  : item
+                );
+                saveLocalWorkStatusItems();
                 document.open();
                 document.write(html);
                 document.close();
-                if (!window.location.hash) window.history.replaceState(null, "", "/setup#cv-profile-draft");
+                window.history.replaceState(null, "", workHref || "/setup#cv-profile-draft");
+                window.setTimeout(() => {
+                  document.getElementById("cv-profile-draft")?.scrollIntoView({ block: "start" });
+                }, 0);
                 return;
               }
               window.location.reload();
@@ -628,19 +638,51 @@
       function attachSetupGuideCompanion() {
         const companion = document.getElementById("setup-guide-companion");
         if (!companion) return;
+        const toggle = companion.querySelector("[data-setup-guide-toggle]");
         const selector = companion.dataset.targetSelector || "";
-        if (!selector) return;
         let target = null;
-        try {
-          target = document.querySelector(selector);
-        } catch {
-          target = null;
+        if (selector) {
+          try {
+            target = document.querySelector(selector);
+          } catch {
+            target = null;
+          }
         }
-        if (!target) return;
-        if (target.tagName === "DETAILS") target.open = true;
-        target.classList.add("setup-guide-target");
-        const summary = target.tagName === "DETAILS" ? target.querySelector("summary") : null;
-        if (summary) summary.classList.add("setup-guide-target-summary");
+        const summary = target?.tagName === "DETAILS" ? target.querySelector("summary") : null;
+        const minimizedKey = "job-agent:setup-guide-minimized";
+
+        function setTargetHighlight(active) {
+          if (!target) return;
+          if (active && target.tagName === "DETAILS") target.open = true;
+          target.classList.toggle("setup-guide-target", active);
+          summary?.classList.toggle("setup-guide-target-summary", active);
+        }
+
+        function setMinimized(minimized, persist = true) {
+          companion.classList.toggle("minimized", minimized);
+          toggle?.setAttribute("aria-expanded", String(!minimized));
+          toggle?.setAttribute("aria-label", minimized ? "Show next setup step" : "Minimize setup hint");
+          setTargetHighlight(!minimized);
+          if (persist) {
+            try {
+              localStorage.setItem(minimizedKey, minimized ? "1" : "0");
+            } catch {
+              // Ignore storage failures; the guide still toggles for this page.
+            }
+          }
+        }
+
+        toggle?.addEventListener("click", () => {
+          setMinimized(!companion.classList.contains("minimized"));
+        });
+
+        let minimized = false;
+        try {
+          minimized = localStorage.getItem(minimizedKey) === "1";
+        } catch {
+          minimized = false;
+        }
+        setMinimized(minimized, false);
       }
 
       document.addEventListener("DOMContentLoaded", () => {
@@ -702,10 +744,11 @@
     {% if setup_guide and setup_guide.show_companion and setup_guide.active_step %}
     {% set setup_guide_return_to = request.url.path ~ (('?' ~ request.url.query) if request.url.query else '') %}
     <aside class="setup-guide-companion" id="setup-guide-companion" data-target-selector="{{ setup_guide.active_step.target_selector }}" aria-live="polite">
-      <div class="setup-guide-avatar" aria-hidden="true">
+      <button class="setup-guide-avatar" type="button" data-setup-guide-toggle aria-expanded="true" aria-label="Minimize setup hint">
         <img src="/static/icons/job-agent-folio-character-avatar.svg?v={{ asset_version }}" width="54" height="54" alt="">
-      </div>
-      <div class="setup-guide-bubble">
+        <span class="setup-guide-activity-dot" aria-hidden="true"></span>
+      </button>
+      <div class="setup-guide-bubble" data-setup-guide-bubble>
         <div class="setup-guide-bubble-top">
           <strong>{{ setup_guide.active_step.companion_title }}</strong>
           <span class="badge {{ setup_guide.active_step.badge_class }}">{{ setup_guide.progress_label }}</span>
@@ -716,10 +759,6 @@
           <form method="post" action="/api/setup-guide/steps/{{ setup_guide.active_step.id }}/dismiss" class="inline-form">
             <input type="hidden" name="return_to" value="{{ setup_guide_return_to }}">
             <button class="light" type="submit">Skip</button>
-          </form>
-          <form method="post" action="/api/setup-guide/dismiss" class="inline-form">
-            <input type="hidden" name="return_to" value="{{ setup_guide_return_to }}">
-            <button class="light" type="submit">Hide entire guide</button>
           </form>
         </div>
         <a class="setup-guide-map-link" href="/setup-guide">Open guide</a>

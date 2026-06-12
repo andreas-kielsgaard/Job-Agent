@@ -83,6 +83,18 @@ class SetupGuideService:
             steps.append(
                 {
                     **definition,
+                    **{
+                        key: observed_step[key]
+                        for key in (
+                            "summary",
+                            "href",
+                            "action_label",
+                            "target_selector",
+                            "companion_title",
+                            "companion_message",
+                        )
+                        if key in observed_step and str(observed_step[key]).strip()
+                    },
                     "complete": complete,
                     "dismissed": dismissed,
                     "state": "complete" if complete else "dismissed" if dismissed else "pending",
@@ -97,19 +109,20 @@ class SetupGuideService:
             active_step["state"] = "active"
             active_step["badge"] = "Next"
             active_step["badge_class"] = "medium"
-            active_step["companion_title"] = (
+            active_step["companion_title"] = active_step.get("companion_title") or (
                 "Welcome. I'll guide you through setup." if active_step["id"] == steps[0]["id"] else "Next setup step"
             )
-            active_step["companion_message"] = self._companion_message(active_step["id"])
+            active_step["companion_message"] = active_step.get("companion_message") or self._companion_message(
+                active_step["id"]
+            )
 
         complete_count = sum(1 for step in steps if step["complete"])
         dismissed_count = sum(1 for step in steps if step["dismissed"] and not step["complete"])
         all_complete = complete_count == len(steps)
-        guide_dismissed = bool(state.get("guide_dismissed"))
         return {
             "version": GUIDE_VERSION,
             "state_path": STATE_PATH.as_posix(),
-            "guide_dismissed": guide_dismissed,
+            "guide_dismissed": False,
             "steps": steps,
             "active_step": active_step,
             "complete_count": complete_count,
@@ -117,8 +130,8 @@ class SetupGuideService:
             "total_count": len(steps),
             "progress_label": f"{complete_count}/{len(steps)} complete",
             "all_complete": all_complete,
-            "show_companion": bool(active_step and not guide_dismissed),
-            "show_entry_panel": bool(not guide_dismissed and not all_complete),
+            "show_companion": bool(active_step),
+            "show_entry_panel": bool(not all_complete),
             "current_path": current_path,
             "observed": observed,
         }
@@ -133,9 +146,9 @@ class SetupGuideService:
 
     def dismiss_guide(self) -> dict[str, Any]:
         state = self.load_state()
-        state["guide_dismissed"] = True
-        state["dismissed_at"] = _utc_now()
-        state["updated_at"] = state["dismissed_at"]
+        state["guide_dismissed"] = False
+        state["dismissed_at"] = ""
+        state["updated_at"] = _utc_now()
         self._write_state(state)
         return state
 
@@ -248,17 +261,54 @@ class SetupGuideService:
             if str(source.get("source_id") or "").strip() in ready_source_ids
             or str(source.get("type") or "").strip() in {"local_yaml", "manual"}
         )
+        active_registry_sources = [
+            source for source in registry_sources if isinstance(source, dict) and source.get("status") != "archived"
+        ]
         if enabled_ready_count:
             detail = f"{enabled_ready_count} tested daily-run source(s) ready."
-        elif enabled_execution:
+            return {"complete": True, "detail": detail}
+        if enabled_execution:
             detail = "Daily-run sources exist, but none have passed safe testing yet."
         elif ready_count:
             detail = f"{ready_count} source test(s) ready; include a source in the daily run."
-        elif registry_sources or enabled_registry_sources:
-            detail = "Sources exist, but none are tested and included in the daily run yet."
+        elif active_registry_sources or enabled_registry_sources:
+            detail = "Sources are saved for setup. Open Sources and set them up before adding them to the daily run."
+            return {
+                "complete": False,
+                "detail": detail,
+                "summary": "Set up a saved source, then include it in the daily run when it passes the safe test.",
+                "href": "/sources",
+                "action_label": "Set up saved sources",
+                "target_selector": ".source-card.setup",
+                "companion_title": "Next setup step",
+                "companion_message": (
+                    "You have a source saved. Go back to Sources and start setup from the source card or detail page "
+                    "before it can join daily runs."
+                ),
+            }
         else:
             detail = "No sources configured yet."
-        return {"complete": enabled_ready_count > 0, "detail": detail}
+            return {
+                "complete": False,
+                "detail": detail,
+                "summary": "Add a source manually, or use suggested sources if you do not already know where to start.",
+                "href": "/sources/suggest",
+                "action_label": "Suggest sources",
+                "target_selector": 'a[href="/sources/suggest"]',
+                "companion_title": "Next setup step",
+                "companion_message": (
+                    "Add a source to check for jobs. If you do not already have one in mind, use Suggest sources "
+                    "to get broad starting points from your profile."
+                ),
+            }
+        return {
+            "complete": False,
+            "detail": detail,
+            "summary": "Finish source setup from the source overview before starting regular checks.",
+            "href": "/sources",
+            "action_label": "Open sources",
+            "target_selector": ".source-card.setup",
+        }
 
     def _run_observed(self) -> dict[str, Any]:
         runs = read_json(output_dir(self.root) / "runs" / "runs.json", [])

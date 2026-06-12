@@ -373,8 +373,11 @@ def test_cv_upload_preview_does_not_apply_profile_sections(
     assert "Review CV Profile Draft" in response.text
     assert "Apply selected draft sections" in response.text
     assert "Discard draft" in response.text
+    assert "Review drafted values" in response.text
     assert "nav-profile-button has-alert" in response.text
     assert "Draft ready" in response.text
+    assert 'data-cv-mode-panel="upload" hidden' in response.text
+    assert "Upload changed CV" in response.text
     assert "Preview only" not in (project_root / "profile" / "canonical-cv.md").read_text(encoding="utf-8")
 
     refreshed = client.get("/setup")
@@ -432,6 +435,7 @@ def test_cv_profile_draft_apply_clears_unreviewed_state(client: TestClient, proj
     setup_page = client.get("/setup").text
     assert "Review CV Profile Draft" not in setup_page
     assert "nav-profile-button has-alert" not in setup_page
+    assert "Enhanced from CV" in setup_page
 
 
 def test_persisted_profile_draft_task_survives_work_status_refresh(client: TestClient, project_root: Path) -> None:

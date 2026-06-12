@@ -6,6 +6,7 @@ from typing import Any
 from urllib.parse import urlencode, urlparse
 
 from job_agent.config import ROOT
+from job_agent.llm import LlmService
 from job_agent.paths import resolve_project_path
 from job_agent.services.execution_source_service import ExecutionSourceService
 from job_agent.services.recipe_artifact_service import RecipeArtifactService
@@ -125,6 +126,7 @@ class SourceWorkflowHandler:
         readiness_by_source = self.readiness.load_all()
         index_by_source = self.index_store.summaries_by_source()
         seen_records = self.jobs.list_seen_records()
+        auto_setup_configured = self._auto_setup_configured()
         source_cards = [
             self.overview_card_for_source(
                 source,
@@ -132,6 +134,7 @@ class SourceWorkflowHandler:
                 readiness_by_source.get(source.id, SourceExecutionReadiness(source_id=source.id)),
                 index_by_source.get(source.id, SourceListingIndexSummary(source_id=source.id, source_name=source.name)),
                 seen_records,
+                auto_setup_configured=auto_setup_configured,
             )
             for source in sources
         ]
@@ -142,6 +145,7 @@ class SourceWorkflowHandler:
                 readiness_by_source.get(source.id, SourceExecutionReadiness(source_id=source.id)),
                 index_by_source.get(source.id, SourceListingIndexSummary(source_id=source.id, source_name=source.name)),
                 seen_records,
+                auto_setup_configured=auto_setup_configured,
             )
             for source in archived_sources
         ]
@@ -217,6 +221,8 @@ class SourceWorkflowHandler:
         readiness,
         index_summary,
         seen_records,
+        *,
+        auto_setup_configured: bool | None = None,
     ) -> dict[str, Any]:
         index = self.index_status(index_summary)
         detail = self.detail_status_from_seen_records(source, index_summary, seen_records)
@@ -245,6 +251,40 @@ class SourceWorkflowHandler:
             "detail": detail,
             "session": None,
             "status": status,
+            "auto_setup": self._auto_setup_card(source, lifecycle, auto_setup_configured=auto_setup_configured),
+        }
+
+    def _auto_setup_configured(self) -> bool:
+        try:
+            return LlmService(self.root).is_configured()
+        except (RuntimeError, ValueError):
+            return False
+
+    def _auto_setup_card(
+        self,
+        source,
+        lifecycle: dict[str, str],
+        *,
+        auto_setup_configured: bool | None = None,
+    ) -> dict[str, Any]:
+        show = (
+            source.status != "archived"
+            and source.kind not in {"manual", "local_yaml"}
+            and lifecycle.get("state") != "implemented"
+        )
+        configured = self._auto_setup_configured() if auto_setup_configured is None else auto_setup_configured
+        disabled_reason = ""
+        if not configured:
+            disabled_reason = "Add an Anthropic API key in Setup before using automatic source setup."
+        elif not source.url:
+            disabled_reason = "Save a source URL before using automatic source setup."
+        return {
+            "show": show,
+            "configured": configured,
+            "can_start": bool(show and configured and source.url),
+            "action": f"/sources/{source.id}/auto-setup/start",
+            "label": "Automatically set up",
+            "disabled_reason": disabled_reason,
         }
 
     def require_source(self, source_id: str):

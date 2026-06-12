@@ -21,14 +21,15 @@ def test_dashboard_loads(client: TestClient) -> None:
     assert "job-agent-folio-character-avatar.svg" in response.text
 
 
-def test_setup_guide_page_and_dismissal_state(client: TestClient, project_root) -> None:
+def test_setup_guide_page_and_minimized_companion_state(client: TestClient, project_root) -> None:
     response = client.get("/setup-guide")
 
     assert response.status_code == 200
     assert "<title>Setup Guide - Job Agent</title>" in response.text
     assert "Get To The First Run" in response.text
     assert "Connect Claude" in response.text
-    assert "Hide guide companion" in response.text
+    assert "can be minimized from the agent icon" in response.text
+    assert "Hide guide" not in response.text
     assert "profile/setup-guide.json" in response.text
     assert "job-agent-folio-character-transparent.svg" in response.text
 
@@ -44,7 +45,7 @@ def test_setup_guide_page_and_dismissal_state(client: TestClient, project_root) 
 
     dashboard = client.get("/")
     assert dashboard.status_code == 200
-    assert "Open sources" in dashboard.text
+    assert "Suggest sources" in dashboard.text
 
     dismiss = client.post(
         "/api/setup-guide/dismiss",
@@ -52,8 +53,8 @@ def test_setup_guide_page_and_dismissal_state(client: TestClient, project_root) 
         follow_redirects=False,
     )
     assert dismiss.status_code == 303
-    assert '"guide_dismissed": true' in (project_root / "profile" / "setup-guide.json").read_text(encoding="utf-8")
-    assert 'id="setup-guide-companion"' not in client.get("/").text
+    assert '"guide_dismissed": false' in (project_root / "profile" / "setup-guide.json").read_text(encoding="utf-8")
+    assert 'id="setup-guide-companion"' in client.get("/").text
 
 
 def test_setup_loads_friendly_sections(client: TestClient) -> None:
@@ -62,7 +63,7 @@ def test_setup_loads_friendly_sections(client: TestClient) -> None:
     assert response.status_code == 200
     assert "Worker Profile" in response.text
     assert "CV Reference" in response.text
-    assert "Upload or Replace CV" in response.text
+    assert "Upload CV" in response.text
     assert "Enhance profile draft with Claude" in response.text
     assert "Store CV and extract plain text" in response.text
     assert 'name="configure_contact" checked' in response.text

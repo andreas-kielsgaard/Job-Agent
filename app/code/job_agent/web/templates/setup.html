@@ -79,6 +79,13 @@
 {% endfor %}
 {%- endmacro %}
 
+{% macro cv_applied_badge(target) -%}
+{% set record = cv_applied_sections.get(target) if cv_applied_sections else None %}
+{% if record %}
+<span class="badge generated cv-applied-badge" title="Applied from {{ record.source_label }}{% if record.applied_at %} on {{ record.applied_at }}{% endif %}">Enhanced from CV</span>
+{% endif %}
+{%- endmacro %}
+
 <div class="setup-layout">
   <aside class="setup-sidebar" aria-label="Profile page outline">
     <nav class="setup-outline">
@@ -161,18 +168,21 @@
         </div>
 
         {% if cv_reference %}
-        <form method="post" action="/setup/cv-reference/configure" class="profile-configure-form cv-action-card" data-work-status-form data-work-title="Drafting profile from CV">
-          <h3>Enhance Profile From Stored CV</h3>
+        <form method="post" action="/setup/cv-reference/configure" class="profile-configure-form cv-action-card" data-cv-mode-panel="enhance" data-work-status-form data-work-title="Drafting profile from CV" data-work-href="/setup#cv-profile-draft">
+          <div class="source-title-row">
+            <h3>Enhance Profile From Stored CV</h3>
+            <button class="light" type="button" data-cv-mode-button="upload">Upload changed CV</button>
+          </div>
           <p class="muted">Claude drafts editable profile sections from the extracted CV text. Nothing changes until you review and apply the draft.</p>
           <div class="grid">
             <label class="check"><input type="checkbox" name="preview_profile_configuration" checked> Preview before applying</label>
             <label class="check"><input type="checkbox" name="enhance_from_professional_links"> Include public professional links as extra evidence</label>
-            <label class="check"><input type="checkbox" name="configure_contact" checked> Profile basics and professional links</label>
-            <label class="check"><input type="checkbox" name="configure_canonical_cv" checked> CV narrative</label>
-            <label class="check"><input type="checkbox" name="configure_skills" checked> Skill matrix and caveats</label>
-            <label class="check"><input type="checkbox" name="configure_experience" checked> Case studies</label>
-            <label class="check"><input type="checkbox" name="configure_preferences" checked> Availability and constraints</label>
-            <label class="check"><input type="checkbox" name="configure_match_engine" checked> Matchmaking settings</label>
+            <label class="check"><input type="checkbox" name="configure_contact" checked> Profile basics and professional links {{ cv_applied_badge("contact") }}</label>
+            <label class="check"><input type="checkbox" name="configure_canonical_cv" checked> CV narrative {{ cv_applied_badge("canonical_cv") }}</label>
+            <label class="check"><input type="checkbox" name="configure_skills" checked> Skill matrix and caveats {{ cv_applied_badge("skills") }}</label>
+            <label class="check"><input type="checkbox" name="configure_experience" checked> Case studies {{ cv_applied_badge("experience") }}</label>
+            <label class="check"><input type="checkbox" name="configure_preferences" checked> Availability and constraints {{ cv_applied_badge("preferences") }}</label>
+            <label class="check"><input type="checkbox" name="configure_match_engine" checked> Matchmaking settings {{ cv_applied_badge("match_engine") }}</label>
           </div>
           <div class="action-row">
             <button type="submit">Enhance profile draft with Claude</button>
@@ -189,8 +199,11 @@
         </form>
         {% endif %}
 
-        <form method="post" action="/setup/cv-reference" enctype="multipart/form-data" class="profile-configure-form cv-action-card" data-work-status-form data-work-requires="auto_configure_profile" data-work-title="Drafting profile from uploaded CV">
-          <h3>Upload or Replace CV</h3>
+        <form method="post" action="/setup/cv-reference" enctype="multipart/form-data" class="profile-configure-form cv-action-card" data-cv-mode-panel="upload" {% if cv_reference %}hidden{% endif %} data-work-status-form data-work-requires="auto_configure_profile" data-work-title="Drafting profile from uploaded CV" data-work-href="/setup#cv-profile-draft">
+          <div class="source-title-row">
+            <h3>{{ "Upload Changed CV" if cv_reference else "Upload CV" }}</h3>
+            {% if cv_reference %}<button class="light" type="button" data-cv-mode-button="enhance">Use stored CV</button>{% endif %}
+          </div>
           <p class="muted">The app stores the CV locally and extracts text first. Claude can then enhance a profile draft for your review.</p>
           <div class="grid">
             <div><label>CV file</label><input type="file" name="cv_file" accept=".pdf,.docx,.txt,.md"></div>
@@ -200,12 +213,12 @@
             <label class="check"><input type="checkbox" name="enhance_from_professional_links"> Include public professional links as extra evidence</label>
           </div>
           <div class="grid">
-            <label class="check"><input type="checkbox" name="configure_contact" checked> Profile basics and professional links</label>
-            <label class="check"><input type="checkbox" name="configure_canonical_cv" checked> CV narrative</label>
-            <label class="check"><input type="checkbox" name="configure_skills" checked> Skill matrix and caveats</label>
-            <label class="check"><input type="checkbox" name="configure_experience" checked> Case studies</label>
-            <label class="check"><input type="checkbox" name="configure_preferences" checked> Availability and constraints</label>
-            <label class="check"><input type="checkbox" name="configure_match_engine" checked> Matchmaking settings</label>
+            <label class="check"><input type="checkbox" name="configure_contact" checked> Profile basics and professional links {{ cv_applied_badge("contact") }}</label>
+            <label class="check"><input type="checkbox" name="configure_canonical_cv" checked> CV narrative {{ cv_applied_badge("canonical_cv") }}</label>
+            <label class="check"><input type="checkbox" name="configure_skills" checked> Skill matrix and caveats {{ cv_applied_badge("skills") }}</label>
+            <label class="check"><input type="checkbox" name="configure_experience" checked> Case studies {{ cv_applied_badge("experience") }}</label>
+            <label class="check"><input type="checkbox" name="configure_preferences" checked> Availability and constraints {{ cv_applied_badge("preferences") }}</label>
+            <label class="check"><input type="checkbox" name="configure_match_engine" checked> Matchmaking settings {{ cv_applied_badge("match_engine") }}</label>
           </div>
           <button type="submit">Upload CV reference</button>
         </form>
@@ -246,6 +259,13 @@
         <span class="badge {{ 'generated' if section.status == 'Ready' else 'missing' }}">{{ section.status }}</span>
       </div>
       <p>{{ section.summary }}</p>
+      {% set section_detail = cv_profile_draft.section_details.get(section.key) if cv_profile_draft.section_details else "" %}
+      {% if section_detail %}
+      <details class="draft-section-detail">
+        <summary>Review drafted values</summary>
+        <pre class="copy-source">{{ section_detail }}</pre>
+      </details>
+      {% endif %}
     </div>
     {% endfor %}
   </div>
@@ -859,6 +879,12 @@
       else dialog.removeAttribute("open");
     }
 
+    window.showCvMode = function(mode) {
+      document.querySelectorAll("[data-cv-mode-panel]").forEach((panel) => {
+        panel.hidden = panel.dataset.cvModePanel !== mode;
+      });
+    };
+
     function appendHidden(container, name, value) {
       const input = document.createElement("input");
       input.type = "hidden";
@@ -1299,6 +1325,10 @@
 
     document.querySelector('form[action="/setup/case-studies"]')?.addEventListener("submit", (event) => {
       syncCaseForm(event.currentTarget);
+    });
+
+    document.querySelectorAll("[data-cv-mode-button]").forEach((button) => {
+      button.addEventListener("click", () => window.showCvMode(button.dataset.cvModeButton || "enhance"));
     });
 
     const links = Array.from(document.querySelectorAll("[data-setup-outline-link]"));

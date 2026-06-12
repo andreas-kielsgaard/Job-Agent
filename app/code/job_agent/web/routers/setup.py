@@ -176,7 +176,7 @@ async def upload_cv_reference(
                 task_id,
                 source_label="uploaded CV",
             )
-        return await _auto_configure_from_cv_text(extracted_text, form, task_id)
+        return await _auto_configure_from_cv_text(extracted_text, form, task_id, source_label="uploaded CV")
     return _setup_redirect(message="CV reference uploaded.", anchor="cv-reference")
 
 
@@ -198,7 +198,7 @@ async def configure_from_existing_cv(request: Request) -> HTMLResponse | Redirec
             task_id,
             source_label="current reference CV",
         )
-    return await _auto_configure_from_cv_text(cv_text, form, task_id)
+    return await _auto_configure_from_cv_text(cv_text, form, task_id, source_label="current reference CV")
 
 
 @router.post("/setup/cv-reference/apply-draft")
@@ -220,6 +220,10 @@ async def apply_cv_profile_draft(request: Request) -> RedirectResponse:
         result = profile.apply_profile_auto_configuration(data, targets)
     except (json.JSONDecodeError, ValueError) as exc:
         return _setup_redirect(warning=f"Could not apply CV draft: {exc}", anchor="cv-reference")
+    profile.record_cv_applied_sections(
+        result.get("applied_targets", []),
+        source_label=str(active_draft.get("source_label") or "CV") if active_draft else "CV",
+    )
     if str(form.get("draft_id") or ""):
         profile.clear_profile_draft_task()
         profile.clear_active_draft(str(form.get("draft_id") or ""))
@@ -302,7 +306,13 @@ async def _store_uploaded_cv(cv_file: UploadFile, extract_to_canonical: bool) ->
     )
 
 
-async def _auto_configure_from_cv_text(cv_text: str, form, task_id: str = "") -> RedirectResponse:
+async def _auto_configure_from_cv_text(
+    cv_text: str,
+    form,
+    task_id: str = "",
+    *,
+    source_label: str = "CV",
+) -> RedirectResponse:
     try:
         result = await run_in_threadpool(
             workflow_handler().profile.auto_configure_profile_from_cv,
@@ -314,6 +324,7 @@ async def _auto_configure_from_cv_text(cv_text: str, form, task_id: str = "") ->
         if task_id:
             runtime.finish_profile_draft_task(task_id, status="failed", message=str(exc), error_message=str(exc))
         return _setup_redirect(warning=str(exc), anchor="cv-reference")
+    workflow_handler().profile.record_cv_applied_sections(result.get("applied_targets", []), source_label=source_label)
     applied = ", ".join(result["applied"]) or "no sections"
     missing = "; missing AI output for " + ", ".join(result["missing"]) if result["missing"] else ""
     if task_id:
