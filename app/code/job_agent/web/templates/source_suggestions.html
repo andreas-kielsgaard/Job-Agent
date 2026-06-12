@@ -26,9 +26,9 @@
   </div>
   <form method="post" action="/sources/suggest/generate" class="source-suggestion-focus">
     <label>Extra focus</label>
-    <textarea name="focus" class="compact-textarea" placeholder="Example: prioritize Danish or EU contract sources with SAP ABAP, RAP, CDS, OData, and hybrid/remote options.">{{ focus }}</textarea>
+    <textarea name="focus" class="compact-textarea" placeholder="Example: prioritize Danish or EU contract sources, remote-friendly roles, or a particular industry you want to explore.">{{ focus }}</textarea>
     <div class="action-row">
-      <button type="submit" class="button light" formmethod="get" formaction="/sources/suggest">Update prompt</button>
+      <button type="submit" class="button light" formmethod="get" formaction="/sources/suggest">Refresh prompt preview</button>
       {% if llm_configured %}
       <button type="submit" class="button">Generate with Claude</button>
       {% else %}
@@ -80,6 +80,9 @@
           {% endif %}
         </div>
         <div class="badge-row">
+          {% if suggestion.existing_source_id %}
+          <span class="badge high">Already added</span>
+          {% endif %}
           <span class="badge {% if suggestion.priority <= 2 %}high{% elif suggestion.priority >= 5 %}low{% else %}medium{% endif %}">{{ suggestion.priority_label }}</span>
         </div>
       </div>
@@ -108,18 +111,22 @@
       </div>
       {% endif %}
 
-      <form method="post" action="/sources/new" class="source-suggestion-save">
+      <form method="post" action="/sources/suggest/save" class="source-suggestion-save" data-suggestion-save>
         <input type="hidden" name="name" value="{{ suggestion.name }}">
-        <input type="hidden" name="recipe_path" value="">
         <label>Source URL to save</label>
-        <input name="url" value="{{ suggestion.source_url }}" required>
+        <input name="url" value="{{ suggestion.source_url }}" required {% if suggestion.existing_source_id %}readonly{% endif %}>
         <label>Notes</label>
-        <textarea name="notes" class="compact-textarea">{{ suggestion.notes_for_source }}</textarea>
+        <textarea name="notes" class="compact-textarea" {% if suggestion.existing_source_id %}readonly{% endif %}>{{ suggestion.notes_for_source }}</textarea>
+        <p class="muted" data-suggestion-save-status>
+          {% if suggestion.existing_source_id %}
+          Already added to pending setup as <a href="/sources/{{ suggestion.existing_source_id }}">{{ suggestion.existing_source_name }}</a>.
+          {% endif %}
+        </p>
         <div class="form-actions action-row">
           {% if suggestion.source_url %}
           <a class="button light" href="{{ suggestion.source_url }}" target="_blank" rel="noreferrer">Visit board</a>
           {% endif %}
-          <button type="submit" class="button">Save source</button>
+          <button type="submit" class="button" {% if suggestion.existing_source_id %}disabled{% endif %}>{{ "Already added" if suggestion.existing_source_id else "Save source" }}</button>
         </div>
       </form>
     </div>
@@ -132,4 +139,41 @@
   <p class="muted">Use connected Claude, another AI, or paste a JSON response.</p>
 </div>
 {% endif %}
+<script>
+  document.querySelectorAll("[data-suggestion-save]").forEach((form) => {
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const button = form.querySelector('button[type="submit"]');
+      const status = form.querySelector("[data-suggestion-save-status]");
+      const original = button?.textContent || "Save source";
+      if (button) {
+        button.disabled = true;
+        button.textContent = "Saving...";
+      }
+      if (status) status.textContent = "";
+      try {
+        const response = await fetch(form.action, { method: "POST", body: new FormData(form), cache: "no-store" });
+        const data = await response.json();
+        if (!response.ok || !data.ok) throw new Error(data.error || "Could not save source.");
+        const link = data.source_url ? `<a href="${escapeHtml(data.source_url)}">${escapeHtml(data.source_name || "source")}</a>` : escapeHtml(data.source_name || "source");
+        if (status) status.innerHTML = `${escapeHtml(data.message || "Added to pending setup.")} ${link}`;
+        const card = form.closest(".source-suggestion-card");
+        const badgeRow = card?.querySelector(".badge-row");
+        if (badgeRow && !badgeRow.querySelector("[data-added-badge]")) {
+          badgeRow.insertAdjacentHTML("afterbegin", '<span class="badge high" data-added-badge>Already added</span>');
+        }
+        form.querySelectorAll("input, textarea").forEach((field) => {
+          if (field.name !== "name") field.readOnly = true;
+        });
+        if (button) button.textContent = data.status === "already_added" ? "Already added" : "Added";
+      } catch (error) {
+        if (status) status.textContent = error.message || "Could not save source.";
+        if (button) {
+          button.disabled = false;
+          button.textContent = original;
+        }
+      }
+    });
+  });
+</script>
 {% endblock %}

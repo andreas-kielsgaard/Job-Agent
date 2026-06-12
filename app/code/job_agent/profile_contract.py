@@ -18,6 +18,7 @@ def build_profile_contract(root: Path = ROOT, cv_reference: dict[str, Any] | Non
     canonical_cv = _read_text(profile / "canonical-cv.md")
     writing_style = _read_text(profile / "writing-style.md")
     cv_reference = cv_reference or {}
+    professional_links = _list_of_dicts(contact.get("professional_links", []))
 
     availability = _dict(preferences.get("availability", {}))
     location_policy = _dict(preferences.get("location_policy", {}))
@@ -41,6 +42,7 @@ def build_profile_contract(root: Path = ROOT, cv_reference: dict[str, Any] | Non
                 _signal("Name", contact.get("name")),
                 _signal("Email", contact.get("email")),
                 _signal("Location", contact.get("location") or contact.get("city")),
+                _signal("Professional links", _count(professional_links)),
             ],
         ),
         _section(

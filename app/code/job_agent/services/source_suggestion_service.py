@@ -23,6 +23,8 @@ class SourceSuggestion:
     search_terms: list[str] = field(default_factory=list)
     caveats: str = ""
     priority: int = 3
+    existing_source_id: str = ""
+    existing_source_name: str = ""
 
     @property
     def source_url(self) -> str:
@@ -73,6 +75,12 @@ class SourceSuggestionResult:
     focus: str = ""
 
 
+class SourceSuggestionParseError(ValueError):
+    def __init__(self, message: str, raw_response: str = "") -> None:
+        super().__init__(message)
+        self.raw_response = raw_response
+
+
 class SourceSuggestionService:
     def __init__(self, root: Path = ROOT) -> None:
         self.root = Path(root)
@@ -109,7 +117,9 @@ class SourceSuggestionService:
             "or bot protection, upload CVs, send emails, inspect hidden endpoints, or automate protected pages.\n\n"
             "Task:\n"
             "- Suggest 6 to 10 job boards, recruiter job pages, or company career search pages that fit the profile.\n"
-            "- Prefer recurring SAP freelance, contract, consultant, or project pages over one-off postings.\n"
+            "- Prefer recurring job-result pages over one-off postings.\n"
+            "- Prefer broad source URLs that can reveal adjacent or unexpected good-fit roles; use optional filters and "
+            "search terms as guidance instead of saving a URL so narrow that profile matching never sees nearby roles.\n"
             "- Avoid duplicates of the existing sources.\n"
             "- For each source, guide a non-technical user to visit the site and find the actual job listing page.\n"
             "- If useful filters can be pre-applied in the browser, describe the exact filters or search terms to try.\n"
@@ -122,12 +132,12 @@ class SourceSuggestionService:
             "    {\n"
             '      "name": "Board or recruiter name",\n'
             '      "homepage_url": "https://example.com",\n'
-            '      "recommended_listing_url": "https://example.com/jobs?keyword=SAP",\n'
+            '      "recommended_listing_url": "https://example.com/jobs",\n'
             '      "why_relevant": "Short profile-specific reason",\n'
             '      "expected_signal": "What useful roles this source is likely to contain",\n'
             '      "visit_instructions": "Human steps to reach the filtered job posting page",\n'
-            '      "suggested_filters": ["Contract", "SAP ABAP", "Remote or Denmark"],\n'
-            '      "search_terms": ["SAP ABAP contract", "SAP RAP freelance"],\n'
+            '      "suggested_filters": ["Contract", "Remote", "Target role"],\n'
+            '      "search_terms": ["profile-derived role", "profile-derived skill"],\n'
             '      "caveats": "Any login, region, seniority, freshness, or automation caution",\n'
             '      "priority": 1\n'
             "    }\n"
@@ -142,7 +152,18 @@ class SourceSuggestionService:
         if not self.llm.is_configured():
             raise RuntimeError("ANTHROPIC_API_KEY is missing or placeholder. Use the other-AI prompt instead.")
         completion = self.llm.complete(prompt, max_tokens=3600, purpose="source_suggestion", run_id="manual")
-        suggestions = self.parse_response(completion.text)
+        try:
+            suggestions = self.parse_response(
+                completion.text,
+                repair_callback=lambda raw_json, error: self.llm.complete(
+                    _json_repair_prompt(raw_json, error),
+                    max_tokens=4200,
+                    purpose="source_suggestion_repair",
+                    run_id="manual",
+                ).text,
+            )
+        except ValueError as exc:
+            raise SourceSuggestionParseError(str(exc), completion.text) from exc
         return SourceSuggestionResult(
             prompt=prompt,
             raw_response=completion.text,
@@ -192,8 +213,8 @@ class SourceSuggestionService:
             focus=str(interaction.metadata.get("focus") or ""),
         )
 
-    def parse_response(self, raw_response: str) -> list[SourceSuggestion]:
-        data = _load_json_response(raw_response)
+    def parse_response(self, raw_response: str, *, repair_callback=None) -> list[SourceSuggestion]:
+        data = _load_json_response(raw_response, repair_callback=repair_callback)
         items = data.get("sources") if isinstance(data, dict) else data
         if not isinstance(items, list):
             raise ValueError('LLM response must be a JSON object with a "sources" list.')
@@ -203,10 +224,21 @@ class SourceSuggestionService:
             raise ValueError("No usable source suggestions were found in the response.")
         return suggestions
 
+    def annotate_existing(self, suggestions: list[SourceSuggestion]) -> list[SourceSuggestion]:
+        for suggestion in suggestions:
+            existing = self.registry.find_source_by_url(suggestion.source_url)
+            if existing:
+                suggestion.existing_source_id = existing.id
+                suggestion.existing_source_name = existing.name
+        return suggestions
+
 
 def _profile_for_prompt(profile: dict[str, Any]) -> dict[str, Any]:
     return {
-        "contact": _pick_mapping(profile.get("contact"), ["title", "location", "city", "country"]),
+        "contact": _pick_mapping(
+            profile.get("contact"),
+            ["title", "location", "city", "country", "linkedin", "professional_links"],
+        ),
         "availability": profile.get("availability", {}),
         "location_policy": profile.get("location_policy", {}),
         "thresholds": profile.get("thresholds", {}),
@@ -250,30 +282,65 @@ def _truncate(value: str, max_length: int) -> str:
     return f"{text[:max_length].rstrip()}\n...[truncated]"
 
 
-def _load_json_response(raw_response: str) -> Any:
+def _load_json_response(raw_response: str, *, repair_callback=None) -> Any:
     text = raw_response.strip()
     if not text:
         raise ValueError("Paste a JSON response before parsing suggestions.")
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        pass
+    last_error: json.JSONDecodeError | None = None
+    last_candidate = ""
+    for candidate in _json_candidates(text):
+        try:
+            return json.loads(candidate)
+        except json.JSONDecodeError as exc:
+            last_error = exc
+            last_candidate = candidate
+    if repair_callback and last_candidate and last_error:
+        repaired = repair_callback(last_candidate, last_error)
+        try:
+            return _load_json_response(repaired)
+        except ValueError as exc:
+            raise ValueError(
+                "Could not parse JSON source suggestions after repair: "
+                f"{_json_error_message(last_error)}; repair result: {exc}"
+            ) from exc
+    if last_error:
+        raise ValueError(f"Could not parse JSON source suggestions: {_json_error_message(last_error)}") from last_error
+    raise ValueError("Could not find JSON in the LLM response.")
 
+
+def _json_candidates(text: str) -> list[str]:
+    candidates = [text]
     fenced = _extract_fenced_json(text)
     if fenced:
-        try:
-            return json.loads(fenced)
-        except json.JSONDecodeError:
-            pass
-
+        candidates.append(fenced)
     start = min([index for index in [text.find("{"), text.find("[")] if index >= 0], default=-1)
     end = max(text.rfind("}"), text.rfind("]"))
     if start >= 0 and end > start:
-        try:
-            return json.loads(text[start : end + 1])
-        except json.JSONDecodeError as exc:
-            raise ValueError(f"Could not parse JSON source suggestions: {exc}") from exc
-    raise ValueError("Could not find JSON in the LLM response.")
+        candidates.append(text[start : end + 1])
+    unique: list[str] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        candidate = candidate.strip()
+        if candidate and candidate not in seen:
+            seen.add(candidate)
+            unique.append(candidate)
+    return unique
+
+
+def _json_error_message(error: json.JSONDecodeError) -> str:
+    return f"{error.msg} at line {error.lineno}, column {error.colno}"
+
+
+def _json_repair_prompt(raw_json: str, error: json.JSONDecodeError) -> str:
+    return f"""Return only corrected valid JSON.
+
+Fix JSON syntax only. Preserve the same source suggestions, field names, values, and ordering. Do not add new sources. Do not explain.
+
+Original parser error: {_json_error_message(error)}.
+
+Malformed JSON:
+{raw_json}
+"""
 
 
 def _extract_fenced_json(text: str) -> str:

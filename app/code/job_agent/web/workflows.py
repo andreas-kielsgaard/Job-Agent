@@ -334,6 +334,9 @@ class ProfileWorkflowHandler:
     def save_contact(self, data: dict[str, Any]) -> None:
         self.setup.save_contact(data)
 
+    def cv_text_with_professional_link_evidence(self, cv_text: str, *, enabled: bool) -> str:
+        return self.setup.cv_text_with_professional_link_evidence(cv_text, enabled=enabled)
+
     def save_preferences(self, **kwargs: Any) -> None:
         self.setup.save_preferences(**kwargs)
 

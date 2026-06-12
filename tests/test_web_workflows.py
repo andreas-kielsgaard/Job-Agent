@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 from job_agent.services.source_test_service import SourceTestResult
 from job_agent.web.workflows import AppWorkflowHandler
+from tests.helpers import EURSAP_SOURCE, seed_source_registry
 
 
 def test_app_workflow_map_connects_core_handlers(project_root: Path) -> None:
@@ -35,6 +36,21 @@ def test_source_workflow_overview_uses_source_state(project_root: Path) -> None:
     assert card["lifecycle"]["state"] == "setup"
     assert card["index"]["complete"] is False
     assert card["detail"]["complete"] is False
+
+
+def test_source_workflow_overview_does_not_treat_registry_enabled_as_daily_run(project_root: Path) -> None:
+    seed_source_registry(project_root, {**EURSAP_SOURCE, "enabled": True})
+    handler = AppWorkflowHandler(project_root)
+
+    overview = handler.source.overview_context()
+
+    source_cards = [card for card in overview["source_cards"] if card["source"].id == "eursap-jobs"]
+    assert source_cards
+    card = source_cards[0]
+    assert overview["daily_run_enabled_count"] == 0
+    assert card["execution"] is None
+    assert card["lifecycle"]["state"] == "setup"
+    assert card["status"]["automation_label"] == "Not included"
 
 
 def test_source_workflow_overview_uses_saved_state_only(monkeypatch, project_root: Path) -> None:

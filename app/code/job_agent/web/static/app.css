@@ -1891,6 +1891,16 @@ tr.clickable-row:hover td {
   background: #fbfcfd;
 }
 
+.profile-link-grid {
+  display: grid;
+  grid-template-columns: minmax(140px, 220px) minmax(0, 1fr);
+  gap: 12px;
+}
+
+.profile-link-grid input {
+  min-width: 0;
+}
+
 .profile-edit-table {
   overflow-x: auto;
 }

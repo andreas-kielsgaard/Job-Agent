@@ -676,7 +676,7 @@ def _fetch_calibration_html(
             timeout_seconds,
             session_state_path=session_state_path,
         )
-    except RuntimeError as exc:
+    except (RuntimeError, ValueError) as exc:
         return (
             html,
             final_url,

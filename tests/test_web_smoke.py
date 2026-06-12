@@ -883,6 +883,8 @@ def test_source_overview_and_detail_routes_render(client: TestClient) -> None:
     assert 'class="source-card' in overview.text
     assert "/sources/new" in overview.text
     assert "/sources/suggest" in overview.text
+    assert "Daily-run sources" in overview.text
+    assert "Saved sources" in overview.text
     assert "Implemented" in overview.text
     assert "Setup status" in overview.text
     assert "Indexing" in overview.text
@@ -1051,10 +1053,11 @@ def test_source_suggestions_copy_paste_flow_renders_save_forms(client: TestClien
     assert page.status_code == 200
     assert "Suggest Sources" in page.text
     assert "Claude not connected" in page.text
-    assert "Update prompt" in page.text
+    assert "Refresh prompt preview" in page.text
     assert "Use another AI" in page.text
     assert "Copy prompt" in page.text
     assert "SAP ABAP" in page.text
+    assert "Prefer broad source URLs" in page.text
 
     response = client.post(
         "/sources/suggest/parse",
@@ -1079,8 +1082,48 @@ def test_source_suggestions_copy_paste_flow_renders_save_forms(client: TestClien
     assert "Parsed 1 source suggestions" in response.text
     assert "Nordic SAP Contracts" in response.text
     assert "Open jobs, search SAP ABAP, then choose Contract." in response.text
-    assert 'action="/sources/new"' in response.text
+    assert 'action="/sources/suggest/save"' in response.text
     assert 'value="https://example.com/jobs?keyword=SAP"' in response.text
+
+    saved = client.post(
+        "/sources/suggest/save",
+        data={
+            "name": "Nordic SAP Contracts",
+            "url": "https://example.com/jobs?keyword=SAP",
+            "notes": "Pending setup",
+        },
+    )
+    assert saved.status_code == 200
+    saved_payload = saved.json()
+    assert saved_payload["ok"] is True
+    assert saved_payload["status"] == "added"
+    assert saved_payload["source_url"].startswith("/sources/")
+
+    duplicate = client.post(
+        "/sources/suggest/save",
+        data={
+            "name": "Nordic SAP Contracts Again",
+            "url": "https://example.com/jobs?keyword=SAP",
+            "notes": "Duplicate",
+        },
+    )
+    assert duplicate.status_code == 200
+    duplicate_payload = duplicate.json()
+    assert duplicate_payload["status"] == "already_added"
+
+    duplicate_page = client.post(
+        "/sources/suggest/parse",
+        data={
+            "focus": "Nordic contracts",
+            "llm_response": (
+                '{"sources":[{"name":"Nordic SAP Contracts",'
+                '"homepage_url":"https://example.com",'
+                '"recommended_listing_url":"https://example.com/jobs?keyword=SAP",'
+                '"why_relevant":"Good SAP contract signal","priority":1}]}'
+            ),
+        },
+    )
+    assert "Already added" in duplicate_page.text
 
 
 def test_source_suggestions_generate_and_external_agent_flows(

@@ -28,6 +28,7 @@ def test_setup_guide_page_and_dismissal_state(client: TestClient, project_root) 
     assert "<title>Setup Guide - Job Agent</title>" in response.text
     assert "Get To The First Run" in response.text
     assert "Connect Claude" in response.text
+    assert "Hide guide companion" in response.text
     assert "profile/setup-guide.json" in response.text
     assert "job-agent-folio-character-transparent.svg" in response.text
 
@@ -62,6 +63,12 @@ def test_setup_loads_friendly_sections(client: TestClient) -> None:
     assert "Worker Profile" in response.text
     assert "CV Reference" in response.text
     assert "Upload or Replace CV" in response.text
+    assert "Enhance profile draft with Claude" in response.text
+    assert "Store CV and extract plain text" in response.text
+    assert 'name="configure_contact" checked' in response.text
+    assert 'name="configure_preferences" checked' in response.text
+    assert 'name="configure_match_engine" checked' in response.text
+    assert "Professional links" in response.text
     assert "Profile Checklist" not in response.text
     assert "Profile Map" not in response.text
     assert "profile-checklist-panel" not in response.text

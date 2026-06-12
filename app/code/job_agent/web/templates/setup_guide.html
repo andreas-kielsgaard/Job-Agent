@@ -5,7 +5,7 @@
   <div>
     <p class="eyebrow">Setup Guide</p>
     <h1>Get To The First Run</h1>
-    <p class="muted">A short guided path from empty local setup to scored job results. The companion follows the next unfinished step unless you skip it or dismiss the guide.</p>
+    <p class="muted">A short guided path from empty local setup to scored job results. The companion follows the next unfinished step unless you skip it or hide the full guide.</p>
   </div>
   <form method="post" action="/api/setup-guide/reset" class="inline-form">
     <input type="hidden" name="return_to" value="/setup-guide">
@@ -17,7 +17,7 @@
   <img class="setup-guide-character" src="/static/icons/job-agent-folio-character-transparent.svg?v={{ asset_version }}" width="112" height="112" alt="" aria-hidden="true">
   <div>
     <h2>Suggested path</h2>
-    <p class="muted">Connect Claude, bring in your CV, review the local profile and matching preferences, enable sources, then start a daily run.</p>
+    <p class="muted">Connect Claude for assisted setup, bring in your CV, review the local profile and matching preferences, enable sources, then start a daily run.</p>
   </div>
   <div class="setup-guide-meter">
     <strong>{{ guide.progress_label }}</strong>
@@ -58,7 +58,7 @@
   {% if not guide.guide_dismissed %}
   <form method="post" action="/api/setup-guide/dismiss" class="inline-form">
     <input type="hidden" name="return_to" value="/setup-guide">
-    <button class="light" type="submit">Dismiss companion</button>
+    <button class="light" type="submit">Hide guide companion</button>
   </form>
   {% endif %}
 </div>

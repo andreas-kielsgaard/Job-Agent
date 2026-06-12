@@ -6,7 +6,7 @@ import pytest
 
 from job_agent.services.execution_source_service import ExecutionSourceService
 from job_agent.services.source_registry_service import SourceRegistryService
-from tests.helpers import MANUAL_SOURCE, seed_common_sources, seed_source_registry
+from tests.helpers import EURSAP_SOURCE, MANUAL_SOURCE, seed_common_sources, seed_source_registry
 
 
 def test_execution_service_loads_existing_sources(project_root: Path) -> None:
@@ -20,6 +20,15 @@ def test_execution_service_loads_existing_sources(project_root: Path) -> None:
 
     assert sources[0]["name"] == "Local Sample"
     assert sources[0]["type"] == "local_yaml"
+
+
+def test_registry_enabled_source_is_not_execution_source_without_daily_run_entry(project_root: Path) -> None:
+    seed_source_registry(project_root, {**EURSAP_SOURCE, "enabled": True})
+
+    service = ExecutionSourceService(project_root)
+
+    assert service.list_sources() == []
+    assert service.find_by_source_id("eursap-jobs") is None
 
 
 def test_create_disabled_recipe_execution_entry_from_registry_source(project_root: Path) -> None:

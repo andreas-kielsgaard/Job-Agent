@@ -194,6 +194,15 @@ class SourceRegistryService:
     def get_source(self, source_id: str) -> SourceRegistryEntry | None:
         return next((source for source in self.list_sources() if source.id == source_id), None)
 
+    def find_source_by_url(self, url: str) -> SourceRegistryEntry | None:
+        normalized = _normalize_url(url)
+        if not normalized:
+            return None
+        for source in self.list_sources():
+            if source.url and _normalize_url(source.url) == normalized:
+                return source
+        return None
+
     def add_source(
         self,
         *,
@@ -207,9 +216,9 @@ class SourceRegistryService:
         source_name = name.strip() or _name_from_url(normalized_url)
         source_id = self._unique_source_id(_slug(source_name) or "source")
 
-        for existing in self.list_sources():
-            if existing.url and _normalize_url(existing.url) == _normalize_url(normalized_url):
-                raise ValueError(f"Source already exists: {existing.name}")
+        existing = self.find_source_by_url(normalized_url)
+        if existing:
+            raise ValueError(f"Source already exists: {existing.name}")
 
         self.ensure_registry()
         data = read_yaml(self.path, {"sources": []})

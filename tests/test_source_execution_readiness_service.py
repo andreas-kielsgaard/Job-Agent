@@ -280,16 +280,16 @@ def test_go_live_status_reports_health_execution_path_and_readiness(project_root
     assert readiness.dry_run_status == "success"
 
 
-def test_enablement_uses_registry_projection_without_manual_execution_entry(project_root: Path) -> None:
+def test_enablement_requires_explicit_daily_run_projection(project_root: Path) -> None:
     _save_good_health(project_root)
     service = SourceExecutionReadinessService(project_root)
     service.save_from_source_test(_source_test_result())
 
     check = service.can_enable("eursap-jobs")
 
-    assert check.can_enable is True
-    assert check.readiness.checks["execution_entry_exists"] is True
-    assert check.readiness.checks["execution_entry_recipe_path_matches_registry"] is True
+    assert check.can_enable is False
+    assert check.readiness.checks["execution_entry_exists"] is False
+    assert "No daily-run projection exists." in check.blockers
 
 
 def test_enablement_uses_source_test_instead_of_legacy_preview_health(project_root: Path) -> None:
@@ -306,7 +306,7 @@ def test_enablement_uses_source_test_instead_of_legacy_preview_health(project_ro
     assert not any("Source health must be good" in blocker for blocker in check.blockers)
 
 
-def test_enablement_uses_registry_recipe_path_over_stale_execution_entry(project_root: Path) -> None:
+def test_enablement_refuses_stale_daily_run_projection(project_root: Path) -> None:
     _save_good_health(project_root)
     _write_mismatched_execution(project_root)
     service = SourceExecutionReadinessService(project_root)
@@ -314,8 +314,9 @@ def test_enablement_uses_registry_recipe_path_over_stale_execution_entry(project
 
     check = service.can_enable("eursap-jobs")
 
-    assert check.can_enable is True
-    assert check.readiness.checks["execution_entry_recipe_path_matches_registry"] is True
+    assert check.can_enable is False
+    assert check.readiness.checks["execution_entry_recipe_path_matches_registry"] is False
+    assert "Daily-run projection recipe_path does not match source registry recipe_path." in check.blockers
 
 
 def test_enablement_refuses_without_saved_source_test_readiness(project_root: Path) -> None:

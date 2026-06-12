@@ -50,11 +50,22 @@ class SetupServiceTests(unittest.TestCase):
             root = Path(directory)
             service = SetupService(root)
 
-            service.save_contact({"name": "Andreas Kielsgaard", "city": "Aarhus", "country": "Denmark"})
+            service.save_contact(
+                {
+                    "name": "Andreas Kielsgaard",
+                    "city": "Aarhus",
+                    "country": "Denmark",
+                    "professional_links": [
+                        {"label": "Portfolio", "url": "https://andreas.example"},
+                        {"label": "", "url": "not-a-url"},
+                    ],
+                }
+            )
             contact = yaml.safe_load((root / "profile" / "contact.yaml").read_text(encoding="utf-8"))["contact"]
             self.assertEqual(contact["first_name"], "Andreas")
             self.assertEqual(contact["last_name"], "Kielsgaard")
             self.assertEqual(contact["city"], "Aarhus")
+            self.assertEqual(contact["professional_links"], [{"label": "Portfolio", "url": "https://andreas.example"}])
 
             service.save_preferences(
                 available_from="Immediate",
@@ -382,6 +393,41 @@ class SetupServiceTests(unittest.TestCase):
             preferences = yaml.safe_load((root / "profile" / "preferences.yaml").read_text(encoding="utf-8"))
             self.assertEqual(preferences["match_engine"]["remote_policy"], "required")
             self.assertEqual(preferences["match_engine"]["technical_keyword_groups"][0]["mode"], "required")
+
+    def test_auto_configure_profile_from_cv_applies_contact_section(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            service = SetupService(root)
+
+            class FakeLlmService:
+                def __init__(self, root):
+                    pass
+
+                def is_configured(self):
+                    return True
+
+                def complete(self, prompt, **kwargs):
+                    assert "Requested sections: contact" in prompt
+                    return type(
+                        "Completion",
+                        (),
+                        {
+                            "text": (
+                                '{"contact_yaml":{"contact":{"name":"Ada Lovelace",'
+                                '"title":"Research Engineer","email":"ada@example.com",'
+                                '"professional_links":[{"label":"Portfolio","url":"https://ada.example"}]}}}'
+                            )
+                        },
+                    )()
+
+            with patch("job_agent.services.setup_service.LlmService", FakeLlmService):
+                result = service.auto_configure_profile_from_cv("Ada CV text", ["contact"])
+
+            self.assertEqual(result["applied"], ["profile basics"])
+            contact = yaml.safe_load((root / "profile" / "contact.yaml").read_text(encoding="utf-8"))["contact"]
+            self.assertEqual(contact["name"], "Ada Lovelace")
+            self.assertEqual(contact["first_name"], "Ada")
+            self.assertEqual(contact["professional_links"][0]["url"], "https://ada.example")
 
     def test_cv_profile_draft_does_not_write_profile_files(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

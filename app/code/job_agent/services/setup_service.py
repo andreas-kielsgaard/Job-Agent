@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 from collections.abc import Callable
 from dataclasses import asdict
 from datetime import date
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
+
+import requests
 
 from job_agent.config import ROOT, load_profile
 from job_agent.env import load_env
@@ -26,6 +30,7 @@ from job_agent.services.application_examples_service import ApplicationExamplesS
 from job_agent.services.package_index_service import PackageIndexService
 
 AUTO_CONFIG_TARGETS = (
+    "contact",
     "canonical_cv",
     "skills",
     "experience",
@@ -58,8 +63,11 @@ class SetupService:
         self.ensure_private_profile()
         skills_yaml = self.load_yaml_file("profile/skills.yaml")
         experience_yaml = self.load_yaml_file("profile/experience.yaml")
+        contact = self.load_yaml_file("profile/contact.yaml").get("contact", {})
+        contact = contact if isinstance(contact, dict) else {}
+        contact["professional_links"] = _normalize_professional_links(contact.get("professional_links"))
         return {
-            "contact": self.load_yaml_file("profile/contact.yaml").get("contact", {}),
+            "contact": contact,
             "preferences": self.load_yaml_file("profile/preferences.yaml"),
             "skills_yaml": skills_yaml,
             "skills": skills_yaml.get("skills", {}) if isinstance(skills_yaml.get("skills", {}), dict) else {},
@@ -192,6 +200,20 @@ class SetupService:
     def auto_config_targets_from_form(self, form: Any) -> list[str]:
         return [target for target in AUTO_CONFIG_TARGETS if _truthy(form.get(f"configure_{target}"))]
 
+    def cv_text_with_professional_link_evidence(self, cv_text: str, *, enabled: bool) -> str:
+        if not enabled:
+            return cv_text
+        urls = _professional_urls_from_cv_and_profile(cv_text, load_profile(self.root))
+        evidence = _fetch_professional_link_evidence(urls)
+        if not evidence:
+            return cv_text
+        return (
+            cv_text.rstrip()
+            + "\n\n## Public professional link evidence\n"
+            + "\n\n".join(evidence)
+            + "\n"
+        )
+
     def auto_configure_profile_from_cv(
         self,
         cv_text: str,
@@ -284,6 +306,25 @@ class SetupService:
 
     def profile_auto_configuration_preview(self, data: dict[str, Any], targets: list[str]) -> list[dict[str, str]]:
         sections: list[dict[str, str]] = []
+        if "contact" in targets:
+            contact = _contact_patch_from_auto_config(data)
+            ready_values = [
+                contact.get("name"),
+                contact.get("title"),
+                contact.get("email"),
+                contact.get("phone"),
+                contact.get("location"),
+                contact.get("linkedin"),
+                contact.get("professional_links"),
+            ]
+            sections.append(
+                {
+                    "key": "contact",
+                    "label": "Profile basics",
+                    "status": "Ready" if _has_any_value(ready_values) else "Missing",
+                    "summary": _contact_summary(contact) or "No profile basics were returned.",
+                }
+            )
         if "canonical_cv" in targets:
             canonical = str(data.get("canonical_cv", "")).strip()
             sections.append(
@@ -343,6 +384,13 @@ class SetupService:
     def apply_profile_auto_configuration(self, data: dict[str, Any], targets: list[str]) -> dict[str, Any]:
         applied: list[str] = []
         missing: list[str] = []
+        if "contact" in targets:
+            contact = _contact_patch_from_auto_config(data)
+            if _has_any_value(contact):
+                self.save_contact(contact)
+                applied.append("profile basics")
+            else:
+                missing.append("profile basics")
         if "canonical_cv" in targets:
             canonical = str(data.get("canonical_cv", "")).strip()
             if canonical:
@@ -410,6 +458,21 @@ Requested sections: {requested}
 
 Output schema:
 {{
+  "contact_yaml": {{
+    "contact": {{
+      "name": "...",
+      "title": "...",
+      "phone": "...",
+      "email": "...",
+      "linkedin": "https://...",
+      "location": "City, country",
+      "city": "...",
+      "country": "...",
+      "professional_links": [
+        {{"label": "Portfolio", "url": "https://..."}}
+      ]
+    }}
+  }},
   "canonical_cv": "Markdown CV narrative evidence when requested.",
   "skills_yaml": {{
     "experience_level": {{"years_experience": "...", "current_status": "..."}},
@@ -675,14 +738,20 @@ CV text:
         values["CLAUDE_USE_BY_DEFAULT"] = "true" if claude_use_by_default else "false"
         self.write_env(values)
 
-    def save_contact(self, contact_update: dict[str, str]) -> None:
+    def save_contact(self, contact_update: dict[str, Any]) -> None:
         path = profile_dir(self.root) / "contact.yaml"
         data = read_yaml(path, {})
         contact = data.get("contact", {})
+        contact_update = dict(contact_update)
+        if "professional_links" in contact_update:
+            contact_update["professional_links"] = _normalize_professional_links(
+                contact_update.get("professional_links")
+            )
         contact.update(contact_update)
         name = contact_update.get("name", "")
-        contact["first_name"] = name.split(" ")[0] if name else ""
-        contact["last_name"] = name.split(" ")[-1] if name else ""
+        if name:
+            contact["first_name"] = name.split(" ")[0]
+            contact["last_name"] = name.split(" ")[-1]
         data["contact"] = contact
         write_yaml(path, data)
 
@@ -1012,6 +1081,145 @@ def _list_summary(values: Any, label: str) -> str:
     preview = ", ".join(str(item) for item in items[:5])
     suffix = "" if len(items) <= 5 else f" + {len(items) - 5} more"
     return f"{len(items)} {label}: {preview}{suffix}."
+
+
+def _contact_patch_from_auto_config(data: dict[str, Any]) -> dict[str, Any]:
+    contact_yaml = data.get("contact_yaml") if isinstance(data.get("contact_yaml"), dict) else {}
+    contact = contact_yaml.get("contact") if isinstance(contact_yaml.get("contact"), dict) else data.get("contact")
+    if not isinstance(contact, dict):
+        return {}
+    allowed = {
+        "name",
+        "title",
+        "phone",
+        "email",
+        "linkedin",
+        "location",
+        "address",
+        "post_code",
+        "city",
+        "country",
+        "kommune",
+    }
+    patch = {key: str(contact.get(key) or "").strip() for key in allowed if str(contact.get(key) or "").strip()}
+    links = _normalize_professional_links(contact.get("professional_links"))
+    linkedin = patch.get("linkedin")
+    if linkedin and not any(link["url"].lower() == linkedin.lower() for link in links):
+        links.insert(0, {"label": "LinkedIn", "url": linkedin})
+    if links:
+        patch["professional_links"] = links
+    return patch
+
+
+def _contact_summary(contact: dict[str, Any]) -> str:
+    parts = []
+    for key in ["name", "title", "email", "location"]:
+        value = str(contact.get(key) or "").strip()
+        if value:
+            parts.append(value)
+    links = _normalize_professional_links(contact.get("professional_links"))
+    if links:
+        parts.append(f"{len(links)} professional link(s)")
+    return ", ".join(parts)
+
+
+def _normalize_professional_links(value: Any) -> list[dict[str, str]]:
+    rows = value if isinstance(value, list) else []
+    links: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for item in rows:
+        if not isinstance(item, dict):
+            continue
+        url = str(item.get("url") or "").strip()
+        if not _is_public_http_url(url):
+            continue
+        normalized = url.rstrip("/")
+        key = normalized.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        label = str(item.get("label") or "").strip() or _label_from_url(normalized)
+        links.append({"label": label, "url": normalized})
+    return links
+
+
+def _professional_urls_from_cv_and_profile(cv_text: str, profile: dict[str, Any]) -> list[str]:
+    urls = [match.rstrip(".,);]") for match in re.findall(r"https?://[^\s<>()\"']+", cv_text or "")]
+    contact = profile.get("contact") if isinstance(profile.get("contact"), dict) else {}
+    if isinstance(contact, dict):
+        urls.append(str(contact.get("linkedin") or ""))
+        for link in _normalize_professional_links(contact.get("professional_links")):
+            urls.append(link["url"])
+    result: list[str] = []
+    seen: set[str] = set()
+    for url in urls:
+        url = str(url or "").strip()
+        if not _is_public_http_url(url):
+            continue
+        key = url.rstrip("/").lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(url.rstrip("/"))
+        if len(result) >= 4:
+            break
+    return result
+
+
+def _fetch_professional_link_evidence(urls: list[str]) -> list[str]:
+    evidence: list[str] = []
+    for url in urls:
+        try:
+            response = requests.get(
+                url,
+                timeout=8,
+                headers={"User-Agent": "Job-Agent profile setup (explicit user-provided public link)"},
+            )
+            response.raise_for_status()
+        except requests.RequestException:
+            continue
+        text = _html_to_text(response.text)
+        if text:
+            evidence.append(f"Source: {url}\n{text[:2500].strip()}")
+    return evidence
+
+
+def _html_to_text(html: str) -> str:
+    text = re.sub(r"(?is)<(script|style).*?>.*?</\1>", " ", html or "")
+    text = re.sub(r"(?s)<[^>]+>", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
+def _is_public_http_url(value: str) -> bool:
+    parsed = urlparse(str(value or "").strip())
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return False
+    hostname = (parsed.hostname or "").lower()
+    if hostname in {"localhost", "127.0.0.1", "::1"} or hostname.endswith(".local"):
+        return False
+    if hostname.startswith("10.") or hostname.startswith("192.168.") or re.match(r"^172\.(1[6-9]|2\d|3[01])\.", hostname):
+        return False
+    return True
+
+
+def _label_from_url(value: str) -> str:
+    host = (urlparse(value).hostname or "Link").removeprefix("www.")
+    if "linkedin." in host:
+        return "LinkedIn"
+    if "github." in host:
+        return "GitHub"
+    if "substack." in host:
+        return "Substack"
+    return host.split(".")[0].replace("-", " ").title() or "Link"
+
+
+def _has_any_value(value: Any) -> bool:
+    if isinstance(value, dict):
+        return any(_has_any_value(item) for item in value.values())
+    if isinstance(value, list):
+        return any(_has_any_value(item) for item in value)
+    return bool(str(value or "").strip())
 
 
 def _dict(value: Any) -> dict[str, Any]:

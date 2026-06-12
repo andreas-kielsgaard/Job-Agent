@@ -16,6 +16,7 @@
 {% endif %}
 
 {% set contact = profile.contact %}
+{% set professional_links = contact.get('professional_links', []) %}
 {% set prefs = profile.preferences %}
 {% set skills_yaml = profile.get('skills_yaml', {}) %}
 {% set skills = profile.get('skills', {}) %}
@@ -161,17 +162,20 @@
 
         {% if cv_reference %}
         <form method="post" action="/setup/cv-reference/configure" class="profile-configure-form cv-action-card" data-work-status-form data-work-title="Drafting profile from CV">
-          <h3>Draft Settings From Stored CV</h3>
+          <h3>Enhance Profile From Stored CV</h3>
+          <p class="muted">Claude drafts editable profile sections from the extracted CV text. Nothing changes until you review and apply the draft.</p>
           <div class="grid">
             <label class="check"><input type="checkbox" name="preview_profile_configuration" checked> Preview before applying</label>
+            <label class="check"><input type="checkbox" name="enhance_from_professional_links"> Include public professional links as extra evidence</label>
+            <label class="check"><input type="checkbox" name="configure_contact" checked> Profile basics and professional links</label>
             <label class="check"><input type="checkbox" name="configure_canonical_cv" checked> CV narrative</label>
             <label class="check"><input type="checkbox" name="configure_skills" checked> Skill matrix and caveats</label>
             <label class="check"><input type="checkbox" name="configure_experience" checked> Case studies</label>
-            <label class="check"><input type="checkbox" name="configure_preferences"> Availability and constraints</label>
-            <label class="check"><input type="checkbox" name="configure_match_engine"> Matchmaking settings</label>
+            <label class="check"><input type="checkbox" name="configure_preferences" checked> Availability and constraints</label>
+            <label class="check"><input type="checkbox" name="configure_match_engine" checked> Matchmaking settings</label>
           </div>
           <div class="action-row">
-            <button type="submit">Draft profile settings from CV</button>
+            <button type="submit">Enhance profile draft with Claude</button>
             <button
               class="light"
               type="button"
@@ -187,18 +191,21 @@
 
         <form method="post" action="/setup/cv-reference" enctype="multipart/form-data" class="profile-configure-form cv-action-card" data-work-status-form data-work-requires="auto_configure_profile" data-work-title="Drafting profile from uploaded CV">
           <h3>Upload or Replace CV</h3>
+          <p class="muted">The app stores the CV locally and extracts text first. Claude can then enhance a profile draft for your review.</p>
           <div class="grid">
             <div><label>CV file</label><input type="file" name="cv_file" accept=".pdf,.docx,.txt,.md"></div>
-            <label class="check"><input type="checkbox" name="extract_to_canonical"> Replace CV narrative without AI</label>
-            <label class="check"><input type="checkbox" name="auto_configure_profile"> Draft selected sections with Claude</label>
+            <label class="check"><input type="checkbox" checked disabled> Store CV and extract plain text</label>
+            <label class="check"><input type="checkbox" name="auto_configure_profile" checked> Enhance profile draft with Claude</label>
             <label class="check"><input type="checkbox" name="preview_profile_configuration" checked> Preview before applying</label>
+            <label class="check"><input type="checkbox" name="enhance_from_professional_links"> Include public professional links as extra evidence</label>
           </div>
           <div class="grid">
+            <label class="check"><input type="checkbox" name="configure_contact" checked> Profile basics and professional links</label>
             <label class="check"><input type="checkbox" name="configure_canonical_cv" checked> CV narrative</label>
             <label class="check"><input type="checkbox" name="configure_skills" checked> Skill matrix and caveats</label>
             <label class="check"><input type="checkbox" name="configure_experience" checked> Case studies</label>
-            <label class="check"><input type="checkbox" name="configure_preferences"> Availability and constraints</label>
-            <label class="check"><input type="checkbox" name="configure_match_engine"> Matchmaking settings</label>
+            <label class="check"><input type="checkbox" name="configure_preferences" checked> Availability and constraints</label>
+            <label class="check"><input type="checkbox" name="configure_match_engine" checked> Matchmaking settings</label>
           </div>
           <button type="submit">Upload CV reference</button>
         </form>
@@ -227,7 +234,7 @@
   <div class="source-title-row">
     <div>
       <h2>Review CV Profile Draft</h2>
-      <p class="muted">Apply only the sections you want to update, or discard it.</p>
+      <p class="muted">Review and apply this draft before it changes your profile. Apply only the sections you want to update, or discard it.</p>
     </div>
     <span class="badge draft">Unreviewed</span>
   </div>
@@ -245,7 +252,12 @@
   <form method="post" action="/setup/cv-reference/apply-draft" class="profile-configure-form">
     <input type="hidden" name="draft_id" value="{{ cv_profile_draft.id }}">
     <textarea class="hidden" name="draft_json">{{ cv_profile_draft.json | e }}</textarea>
+    <div class="action-row">
+      <button type="submit">Apply ready draft sections</button>
+      <span class="muted">Checked sections below will be applied.</span>
+    </div>
     <div class="grid">
+      {% if "contact" in cv_profile_draft.targets %}<label class="check"><input type="checkbox" name="configure_contact" {% if "contact" in cv_profile_draft_ready_targets %}checked{% endif %}> Apply profile basics and professional links</label>{% endif %}
       {% if "canonical_cv" in cv_profile_draft.targets %}<label class="check"><input type="checkbox" name="configure_canonical_cv" {% if "canonical_cv" in cv_profile_draft_ready_targets %}checked{% endif %}> Apply CV narrative</label>{% endif %}
       {% if "skills" in cv_profile_draft.targets %}<label class="check"><input type="checkbox" name="configure_skills" {% if "skills" in cv_profile_draft_ready_targets %}checked{% endif %}> Apply skill matrix and caveats</label>{% endif %}
       {% if "experience" in cv_profile_draft.targets %}<label class="check"><input type="checkbox" name="configure_experience" {% if "experience" in cv_profile_draft_ready_targets %}checked{% endif %}> Apply case studies</label>{% endif %}
@@ -270,7 +282,7 @@
   <p class="muted">These fields are referenced directly in generated CVs, applications, and form-answer packages.</p>
   <details class="diagnostic-panel">
     <summary>How these values are used</summary>
-    <p>Name, title, phone, email, LinkedIn, and current location appear in generated materials. Address is stored locally and only appears if a template references it.</p>
+    <p>Name, title, phone, email, LinkedIn, professional links, and current location appear in generated materials. Address is stored locally and only appears if a template references it.</p>
   </details>
   <form method="post" action="/setup/contact" class="grid">
     <div><label>Name</label><input name="name" value="{{ profile.contact.get('name', '') }}" placeholder="Your name"></div>
@@ -279,6 +291,20 @@
     <div><label>Email</label><input name="email" value="{{ profile.contact.get('email', '') }}" placeholder="name@example.com"></div>
     <div><label>LinkedIn</label><input name="linkedin" value="{{ profile.contact.get('linkedin', '') }}" placeholder="https://linkedin.com/in/..."></div>
     <div><label>Current location</label><input name="location" value="{{ profile.contact.get('location', '') }}" placeholder="City, country"></div>
+    <fieldset class="profile-editor-panel" style="grid-column: 1 / -1;">
+      <legend>Professional links</legend>
+      <p class="muted">Links you want profile drafting and generated material to know about, such as a portfolio, GitHub, Substack, or personal site.</p>
+      <div class="profile-link-grid">
+        {% for link in professional_links %}
+        <div><label>Label</label><input name="professional_link_label" value="{{ link.get('label', '') }}" placeholder="Portfolio"></div>
+        <div><label>URL</label><input name="professional_link_url" value="{{ link.get('url', '') }}" placeholder="https://..."></div>
+        {% endfor %}
+        {% for _ in range(3) %}
+        <div><label>Label</label><input name="professional_link_label" placeholder="{{ ['Portfolio', 'GitHub', 'Substack'][loop.index0] }}"></div>
+        <div><label>URL</label><input name="professional_link_url" placeholder="https://..."></div>
+        {% endfor %}
+      </div>
+    </fieldset>
     <div style="grid-column: 1 / -1;"><label>Street address</label><input name="address" value="{{ profile.contact.get('address', '') }}" placeholder="Optional"></div>
     <div><label>Post code</label><input name="post_code" value="{{ profile.contact.get('post_code', '') }}" placeholder="Optional"></div>
     <div><label>City</label><input name="city" value="{{ profile.contact.get('city', '') }}" placeholder="Optional"></div>

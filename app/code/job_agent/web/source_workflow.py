@@ -177,7 +177,7 @@ class SourceWorkflowHandler:
             "focus": focus,
             "prompt": self.suggestions.build_prompt(focus),
             "raw_response": raw_response,
-            "source_suggestions": suggestions or [],
+            "source_suggestions": self.suggestions.annotate_existing(suggestions or []),
             "llm_configured": self.suggestions.is_llm_configured(),
             "warning": warning,
             "message": message,
@@ -199,25 +199,16 @@ class SourceWorkflowHandler:
     def parse_source_suggestions(self, raw_response: str) -> list[Any]:
         return self.suggestions.parse_response(raw_response)
 
-    def saved_execution_by_source(self, sources: list[Any]) -> dict[str, dict[str, Any]]:
+    def existing_source_by_url(self, url: str):
+        return self.registry.find_source_by_url(url)
+
+    def saved_execution_by_source(self, _sources: list[Any]) -> dict[str, dict[str, Any]]:
         config_sources = self.execution.load_config().get("sources", [])
-        result = {
+        return {
             str(source.get("source_id") or ""): source
             for source in config_sources
             if isinstance(source, dict) and str(source.get("source_id") or "").strip()
         }
-        for source in sources:
-            if source.id in result or not source.enabled or not source.recipe_path:
-                continue
-            result[source.id] = {
-                "name": source.name,
-                "source_id": source.id,
-                "type": "recipe_html",
-                "url": source.url,
-                "recipe_path": source.recipe_path,
-                "enabled": True,
-            }
-        return result
 
     def overview_card_for_source(
         self,

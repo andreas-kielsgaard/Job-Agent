@@ -21,7 +21,7 @@ STEP_DEFINITIONS: tuple[dict[str, str], ...] = (
         "id": "claude",
         "title": "Connect Claude",
         "short_title": "Claude",
-        "summary": "Add an Anthropic key so CV drafting and AI review can help.",
+        "summary": "Add an Anthropic key so the app can draft profile settings from your CV, suggest job sources, and optionally review or write material.",
         "href": "/setup#ai-writing",
         "action_label": "Open AI setup",
         "target_selector": "#ai-writing",
@@ -291,8 +291,8 @@ class SetupGuideService:
     @staticmethod
     def _companion_message(step_id: str) -> str:
         messages = {
-            "claude": "Start by saving your Anthropic API key. You can skip this and still use deterministic matching.",
-            "cv": "Upload a CV, then either extract its text or ask Claude to draft profile sections.",
+            "claude": "Start by saving your Anthropic API key. Claude helps turn your CV into a profile, suggest sources, and draft review text; deterministic matching still works if you skip it.",
+            "cv": "Upload a CV. The app stores it locally, extracts text, and can use Claude to enhance a profile draft for your approval.",
             "profile": "Review the profile facts and matching preferences before searching for roles.",
             "sources": "Connect at least one source. Source tests keep untrusted pages out of daily runs.",
             "run": "Launch the first daily run from the dashboard when the setup pieces look ready.",

@@ -111,8 +111,10 @@ def generate_source_suggestions(
             model=result.model,
         )
     except (RuntimeError, ValueError) as exc:
+        raw_response = str(getattr(exc, "raw_response", "") or "")
         context = workflow_handler().source.suggestion_context(
             focus=focus,
+            raw_response=raw_response,
             warning=f"Could not generate with the connected LLM: {exc}",
         )
     return templates.TemplateResponse(
@@ -172,6 +174,53 @@ def apply_external_source_suggestions(
             "ok": True,
             "redirect_url": f"/sources/suggest?{urlencode({'interaction_id': interaction_id})}",
             "suggestion_count": len(result.suggestions),
+        }
+    )
+
+
+@router.post("/sources/suggest/save")
+def save_suggested_source(
+    name: str = Form(""),
+    url: str = Form(""),
+    notes: str = Form(""),
+) -> JSONResponse:
+    handler = workflow_handler().source
+    existing = handler.existing_source_by_url(url)
+    if existing:
+        return JSONResponse(
+            {
+                "ok": True,
+                "status": "already_added",
+                "source_id": existing.id,
+                "source_name": existing.name,
+                "source_url": f"/sources/{existing.id}",
+                "message": f"Already added to pending setup as {existing.name}.",
+            }
+        )
+    try:
+        created = handler.add_source(name=name, url=url, recipe_path="", notes=notes)
+    except ValueError as exc:
+        existing = handler.existing_source_by_url(url)
+        if existing:
+            return JSONResponse(
+                {
+                    "ok": True,
+                    "status": "already_added",
+                    "source_id": existing.id,
+                    "source_name": existing.name,
+                    "source_url": f"/sources/{existing.id}",
+                    "message": f"Already added to pending setup as {existing.name}.",
+                }
+            )
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+    return JSONResponse(
+        {
+            "ok": True,
+            "status": "added",
+            "source_id": created.id,
+            "source_name": created.name,
+            "source_url": f"/sources/{created.id}",
+            "message": "Added to pending setup. It is not included in daily runs yet.",
         }
     )
 

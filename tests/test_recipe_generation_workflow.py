@@ -94,8 +94,9 @@ def test_local_auto_recipe_workflow_end_to_end_without_execution_enablement(proj
     assert health.health_status == "good"
     assert status.latest_approved_recipe_path == "sources/recipes/experimental/eursap-jobs.yaml"
     assert status.approved_matches_source_recipe_path is True
-    assert status.execution_entry_exists is True
+    assert status.execution_entry_exists is False
     assert status.execution_enabled is False
+    assert "no daily-run projection exists yet" in " ".join(status.warnings)
     assert _read_optional(project_root / "sources" / "recruiting-sites.yaml") == before_execution_config
 
 

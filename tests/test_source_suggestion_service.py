@@ -8,14 +8,32 @@ from job_agent.services.source_suggestion_service import SourceSuggestionService
 
 
 def test_source_suggestion_prompt_uses_profile_existing_sources_and_safety_rules(project_root: Path) -> None:
-    prompt = SourceSuggestionService(project_root).build_prompt("Prioritize Nordic SAP contract boards.")
+    profile = project_root / "profile"
+    profile.mkdir(parents=True, exist_ok=True)
+    (profile / "contact.yaml").write_text("contact:\n  title: Data Platform Lead\n", encoding="utf-8")
+    (profile / "skills.yaml").write_text(
+        "skills:\n  strongest:\n    - Python\n    - Analytics engineering\n",
+        encoding="utf-8",
+    )
+    prompt = SourceSuggestionService(project_root).build_prompt("Prioritize Nordic contract boards.")
 
-    assert "SAP ABAP" in prompt
-    assert "Prioritize Nordic SAP contract boards." in prompt
+    assert "Data Platform Lead" in prompt
+    assert "Analytics engineering" in prompt
+    assert "Prioritize Nordic contract boards." in prompt
     assert '"existing_sources"' in prompt
     assert "must not submit applications" in prompt
     assert "bypass captcha" in prompt
     assert "Return only strict JSON" in prompt
+    assert "Prefer broad source URLs" in prompt
+
+
+def test_source_suggestion_prompt_has_no_fixed_sap_language_for_empty_profile(tmp_path: Path) -> None:
+    prompt = SourceSuggestionService(tmp_path).build_prompt("")
+
+    assert "SAP" not in prompt
+    assert "ABAP" not in prompt
+    assert "freelance" not in prompt.lower()
+    assert "profile-derived role" in prompt
 
 
 def test_source_suggestion_parser_accepts_fenced_json_response(project_root: Path) -> None:
@@ -46,6 +64,29 @@ def test_source_suggestion_parser_accepts_fenced_json_response(project_root: Pat
     assert suggestion.source_url == "https://example.com/jobs?keyword=SAP"
     assert suggestion.priority_label == "High"
     assert "Suggested filters: Contract, SAP ABAP" in suggestion.notes_for_source
+
+
+def test_source_suggestion_parser_repairs_invalid_json_response(
+    project_root: Path,
+) -> None:
+    broken = (
+        '{"sources":[{"name":"Example Jobs",'
+        '"homepage_url":"https://example.com",'
+        '"recommended_listing_url":"https://example.com/jobs" '
+        '"why_relevant":"Useful broad board"}]}'
+    )
+
+    suggestions = SourceSuggestionService(project_root).parse_response(
+        broken,
+        repair_callback=lambda raw, error: (
+            '{"sources":[{"name":"Example Jobs",'
+            '"homepage_url":"https://example.com",'
+            '"recommended_listing_url":"https://example.com/jobs",'
+            '"why_relevant":"Useful broad board"}]}'
+        ),
+    )
+
+    assert suggestions[0].name == "Example Jobs"
 
 
 def test_source_suggestion_llm_generation_uses_gateway(monkeypatch, project_root: Path) -> None:

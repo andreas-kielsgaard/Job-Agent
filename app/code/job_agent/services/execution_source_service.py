@@ -34,33 +34,7 @@ class ExecutionSourceService:
         return data
 
     def list_sources(self) -> list[dict[str, Any]]:
-        config_sources = [source for source in self.load_config().get("sources", []) if isinstance(source, dict)]
-        config_by_id = {
-            str(source.get("source_id") or ""): source
-            for source in config_sources
-            if str(source.get("source_id") or "").strip()
-        }
-        projected_sources: list[dict[str, Any]] = []
-        projected_ids: set[str] = set()
-        for registry_source in SourceRegistryService(self.root).list_sources():
-            if (
-                registry_source.kind != "recipe"
-                or not registry_source.recipe_path
-                or registry_source.status == "archived"
-            ):
-                continue
-            existing = config_by_id.get(registry_source.id, {})
-            projected = {
-                **existing,
-                **self._recipe_entry(registry_source, enabled=registry_source.enabled),
-                "enabled": registry_source.enabled,
-            }
-            projected_sources.append(projected)
-            projected_ids.add(registry_source.id)
-        config_only_sources = [
-            source for source in config_sources if str(source.get("source_id") or "") not in projected_ids
-        ]
-        return config_only_sources + projected_sources
+        return [source for source in self.load_config().get("sources", []) if isinstance(source, dict)]
 
     def find_by_source_id(self, source_id: str) -> dict[str, Any] | None:
         source_id = source_id.strip()

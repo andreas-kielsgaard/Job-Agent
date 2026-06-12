@@ -32,32 +32,27 @@ def save_env(
 
 
 @router.post("/setup/contact")
-def save_contact(
-    name: str = Form(""),
-    title: str = Form(""),
-    phone: str = Form(""),
-    email: str = Form(""),
-    linkedin: str = Form(""),
-    location: str = Form(""),
-    address: str = Form(""),
-    post_code: str = Form(""),
-    city: str = Form(""),
-    country: str = Form(""),
-    kommune: str = Form(""),
-) -> RedirectResponse:
+async def save_contact(request: Request) -> RedirectResponse:
+    form = await request.form()
+    professional_links = [
+        {"label": label, "url": url}
+        for label, url in zip(form.getlist("professional_link_label"), form.getlist("professional_link_url"))
+        if str(url or "").strip()
+    ]
     workflow_handler().profile.save_contact(
         {
-            "name": name,
-            "title": title,
-            "phone": phone,
-            "email": email,
-            "linkedin": linkedin,
-            "location": location,
-            "address": address,
-            "post_code": post_code,
-            "city": city,
-            "country": country,
-            "kommune": kommune,
+            "name": str(form.get("name") or ""),
+            "title": str(form.get("title") or ""),
+            "phone": str(form.get("phone") or ""),
+            "email": str(form.get("email") or ""),
+            "linkedin": str(form.get("linkedin") or ""),
+            "location": str(form.get("location") or ""),
+            "address": str(form.get("address") or ""),
+            "post_code": str(form.get("post_code") or ""),
+            "city": str(form.get("city") or ""),
+            "country": str(form.get("country") or ""),
+            "kommune": str(form.get("kommune") or ""),
+            "professional_links": professional_links,
         }
     )
     return RedirectResponse(url="/setup#profile", status_code=303)
@@ -141,6 +136,8 @@ async def upload_cv_reference(
     extract_to_canonical: bool = Form(False),
     auto_configure_profile: bool = Form(False),
     preview_profile_configuration: bool = Form(False),
+    enhance_from_professional_links: bool = Form(False),
+    configure_contact: bool = Form(False),
     configure_canonical_cv: bool = Form(False),
     configure_skills: bool = Form(False),
     configure_experience: bool = Form(False),
@@ -159,7 +156,12 @@ async def upload_cv_reference(
             runtime.finish_profile_draft_task(task_id, status="failed", message=str(exc), error_message=str(exc))
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if auto_configure_profile:
+        extracted_text = workflow_handler().profile.cv_text_with_professional_link_evidence(
+            extracted_text,
+            enabled=enhance_from_professional_links,
+        )
         form = {
+            "configure_contact": configure_contact,
             "configure_canonical_cv": configure_canonical_cv,
             "configure_skills": configure_skills,
             "configure_experience": configure_experience,
@@ -184,15 +186,19 @@ async def configure_from_existing_cv(request: Request) -> HTMLResponse | Redirec
     form = await request.form()
     task_id = _start_profile_draft_task(str(form.get("work_task_id") or ""), "Drafting profile from CV")
     _update_profile_draft_task(task_id, "Reading CV", "Using the extracted text from the uploaded CV.", 12)
+    cv_text = workflow_handler().profile.cv_text_with_professional_link_evidence(
+        reference.get("extracted_text", ""),
+        enabled=_truthy(form.get("enhance_from_professional_links")),
+    )
     if _truthy(form.get("preview_profile_configuration")):
         return await _preview_auto_configure_from_cv_text(
             request,
-            reference.get("extracted_text", ""),
+            cv_text,
             form,
             task_id,
             source_label="current reference CV",
         )
-    return await _auto_configure_from_cv_text(reference.get("extracted_text", ""), form, task_id)
+    return await _auto_configure_from_cv_text(cv_text, form, task_id)
 
 
 @router.post("/setup/cv-reference/apply-draft")
@@ -240,7 +246,11 @@ async def prepare_external_profile_draft(request: Request) -> JSONResponse:
     targets = profile.auto_config_targets_from_form(form)
     reference = profile.cv_reference()
     try:
-        prompt = profile.profile_auto_configuration_prompt(reference.get("extracted_text", ""), targets)
+        cv_text = profile.cv_text_with_professional_link_evidence(
+            reference.get("extracted_text", ""),
+            enabled=_truthy(form.get("enhance_from_professional_links")),
+        )
+        prompt = profile.profile_auto_configuration_prompt(cv_text, targets)
         interaction = ExternalAgentService(profile.root).prepare(
             LlmRequest(prompt=prompt, max_tokens=3000, purpose="profile_auto_configuration"),
             title="Draft profile settings from CV",

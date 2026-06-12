@@ -452,6 +452,30 @@ def test_calibration_auto_mode_falls_back_to_rendered_when_static_has_no_jobs(
     assert "rendered_html" in (result.artifact_dir / "selector-report.json").read_text(encoding="utf-8")
 
 
+def test_calibration_auto_mode_warns_when_rendered_dependency_is_unavailable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fake_static(url: str, timeout_seconds: int):
+        return "<html><body><div id='app'></div></body></html>", url, []
+
+    def fake_rendered(url: str, timeout_seconds: int):
+        raise ValueError("Rendered mode requested but Playwright is unavailable.")
+
+    monkeypatch.setattr("job_agent.services.recipe_calibration_service._fetch_static_html", fake_static)
+    monkeypatch.setattr("job_agent.services.recipe_calibration_service._fetch_rendered_html", fake_rendered)
+
+    result = capture_recipe_calibration(
+        "https://example.com/jobs",
+        root=tmp_path,
+        rendered=None,
+        max_candidates=5,
+        capture_detail=False,
+    )
+
+    assert result.capture_mode == "static_html"
+    assert any("browser-rendered capture was unavailable" in warning for warning in result.warnings)
+
+
 def test_calibration_warns_for_client_rendered_job_search_with_default_country_and_blocked_render(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
