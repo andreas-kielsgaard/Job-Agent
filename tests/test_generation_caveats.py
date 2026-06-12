@@ -37,7 +37,24 @@ def test_language_risk_caveat_and_no_internal_score_in_cv(template_project: Path
     package = generate_materials(job, match, profile, use_llm=False, root=template_project)
 
     assert "Language requirements should be confirmed" in package.application
+    assert "Weak match; review gaps manually before applying." in package.match_analysis
     assert "match score" not in package.cv.lower()
+
+
+def test_blank_available_from_does_not_leave_stray_period(template_project: Path) -> None:
+    profile = load_profile(template_project)
+    profile["availability"] = {"available_from": "", "logistics": "Can start after agreement."}
+
+    package = generate_materials(
+        Job(title="SAP ABAP Consultant", description="ABAP delivery"),
+        MatchResult(total_score=80, category="strong"),
+        profile,
+        use_llm=False,
+        root=template_project,
+    )
+
+    assert "Availability: . " not in package.application
+    assert "Availability: Can start after agreement." in package.application
 
 
 def test_selected_experience_prefers_keyword_relevance(template_project: Path) -> None:

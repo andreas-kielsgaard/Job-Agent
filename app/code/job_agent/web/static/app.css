@@ -1205,6 +1205,22 @@ form.cv-action-card {
   border-left: 6px solid var(--accent);
 }
 
+.auto-setup-panel {
+  border-left: 6px solid rgba(91, 125, 108, 0.55);
+}
+
+.auto-setup-choice {
+  margin-top: 1rem;
+  padding: 0.9rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfd;
+}
+
+.auto-setup-choice p {
+  margin: 0.35rem 0 0;
+}
+
 .source-status-main h2 {
   margin: 10px 0 6px;
   font-size: 28px;
@@ -2082,6 +2098,42 @@ td {
   width: 100%;
 }
 
+.source-suggestion-workspace {
+  display: grid;
+  gap: 14px;
+}
+
+.source-suggestion-focus {
+  display: grid;
+  gap: 10px;
+}
+
+.prompt-textarea {
+  min-height: 360px;
+}
+
+.source-suggestion-card {
+  grid-template-columns: 1fr;
+}
+
+.source-visit-guide {
+  margin-top: 14px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfd;
+}
+
+.source-visit-guide p {
+  margin-bottom: 0;
+}
+
+.source-suggestion-save {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
 .run-summary-panel {
   border-left: 6px solid var(--accent);
 }
@@ -2573,9 +2625,41 @@ td {
   color: var(--muted);
 }
 
+.badge.positive {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.badge.negative {
+  background: #fee2e2;
+  color: var(--bad);
+}
+
+.badge.neutral {
+  background: #eef2f6;
+  color: #344054;
+}
+
 .badge.deferred {
   background: #e2e8f0;
   color: #334155;
+}
+
+.score-detail-block {
+  display: grid;
+  gap: 8px;
+  margin: 14px 0;
+}
+
+.score-detail-block h2 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.component-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 
 .markdown {

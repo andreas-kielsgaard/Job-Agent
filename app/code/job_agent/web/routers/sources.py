@@ -60,7 +60,119 @@ def new_source_form(
             "notes": notes,
             "warning": warning,
             "recipe_options": recipe_options(workflow_handler().source.root),
+            "source_auto_setup_configured": workflow_handler().auto_setup.is_configured(),
         },
+    )
+
+
+@router.get("/sources/suggest", response_class=HTMLResponse)
+def suggest_sources_form(
+    request: Request,
+    focus: str = "",
+    interaction_id: str = "",
+    message: str = "",
+    warning: str = "",
+) -> HTMLResponse:
+    context = workflow_handler().source.suggestion_context(focus=focus, message=message, warning=warning)
+    if interaction_id:
+        try:
+            result = workflow_handler().source.load_external_source_suggestion_result(interaction_id)
+            context = workflow_handler().source.suggestion_context(
+                focus=result.focus,
+                raw_response=result.raw_response,
+                suggestions=result.suggestions,
+                message=f"Parsed {len(result.suggestions)} source suggestions from the external agent.",
+                model=result.model,
+            )
+        except (KeyError, ValueError) as exc:
+            context = workflow_handler().source.suggestion_context(
+                focus=focus,
+                warning=f"Could not load external-agent suggestions: {exc}",
+            )
+    return templates.TemplateResponse(
+        request,
+        "source_suggestions.html",
+        {"request": request, **context},
+    )
+
+
+@router.post("/sources/suggest/generate", response_class=HTMLResponse)
+def generate_source_suggestions(
+    request: Request,
+    focus: str = Form(""),
+) -> HTMLResponse:
+    try:
+        result = workflow_handler().source.suggest_sources_with_llm(focus=focus)
+        context = workflow_handler().source.suggestion_context(
+            focus=focus,
+            raw_response=result.raw_response,
+            suggestions=result.suggestions,
+            message=f"Generated {len(result.suggestions)} source suggestions.",
+            model=result.model,
+        )
+    except (RuntimeError, ValueError) as exc:
+        context = workflow_handler().source.suggestion_context(
+            focus=focus,
+            warning=f"Could not generate with the connected LLM: {exc}",
+        )
+    return templates.TemplateResponse(
+        request,
+        "source_suggestions.html",
+        {"request": request, **context},
+    )
+
+
+@router.post("/sources/suggest/parse", response_class=HTMLResponse)
+def parse_source_suggestions(
+    request: Request,
+    focus: str = Form(""),
+    llm_response: str = Form(""),
+) -> HTMLResponse:
+    try:
+        suggestions = workflow_handler().source.parse_source_suggestions(llm_response)
+        context = workflow_handler().source.suggestion_context(
+            focus=focus,
+            raw_response=llm_response,
+            suggestions=suggestions,
+            message=f"Parsed {len(suggestions)} source suggestions.",
+        )
+    except ValueError as exc:
+        context = workflow_handler().source.suggestion_context(
+            focus=focus,
+            raw_response=llm_response,
+            warning=str(exc),
+        )
+    return templates.TemplateResponse(
+        request,
+        "source_suggestions.html",
+        {"request": request, **context},
+    )
+
+
+@router.post("/sources/suggest/external-agent/prepare")
+def prepare_external_source_suggestions(focus: str = Form("")) -> JSONResponse:
+    try:
+        interaction = workflow_handler().source.prepare_external_source_suggestions(focus=focus)
+    except (RuntimeError, ValueError) as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+    return JSONResponse({"ok": True, **interaction.to_payload()})
+
+
+@router.post("/sources/suggest/external-agent/apply")
+def apply_external_source_suggestions(
+    interaction_id: str = Form(...),
+    response_text: str = Form(...),
+) -> JSONResponse:
+    try:
+        result = workflow_handler().source.apply_external_source_suggestions(interaction_id, response_text)
+    except (KeyError, RuntimeError, ValueError) as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+    return JSONResponse(
+        {
+            "ok": True,
+            "redirect_url": f"/sources/suggest?{urlencode({'interaction_id': interaction_id})}",
+            "suggestion_count": len(result.suggestions),
+        }
     )
 
 
@@ -71,6 +183,7 @@ def create_source(
     url: str = Form(""),
     recipe_path: str = Form(""),
     notes: str = Form(""),
+    auto_setup: str = Form(""),
 ):
     try:
         created = workflow_handler().source.add_source(
@@ -92,8 +205,19 @@ def create_source(
                 "notes": notes,
                 "warning": str(exc),
                 "recipe_options": recipe_options(workflow_handler().source.root),
+                "source_auto_setup_configured": workflow_handler().auto_setup.is_configured(),
             },
             status_code=400,
+        )
+    if auto_setup:
+        try:
+            task = runtime.launch_source_auto_setup(created.id)
+        except (RuntimeError, ValueError) as exc:
+            return _redirect_to_source(created.id, warning=f"Source saved, but automatic setup could not start: {exc}")
+        return _redirect_to_source(
+            created.id,
+            message=f"Source added and automatic setup started for {task.source_name}.",
+            fragment="auto-setup",
         )
     message = "Source added. It is saved only for setup and is not included in the daily run yet."
     if created.recipe_path:
@@ -105,7 +229,8 @@ def create_source(
 
 @router.get("/sources/{source_id}", response_class=HTMLResponse)
 def source_detail(request: Request, source_id: str, message: str = "", warning: str = "") -> HTMLResponse:
-    workflow = _source_workflow(source_id)
+    handler = workflow_handler()
+    workflow = handler.source.build(source_id)
     if not workflow:
         raise HTTPException(status_code=404, detail="Source not found.")
     response = templates.TemplateResponse(
@@ -115,14 +240,43 @@ def source_detail(request: Request, source_id: str, message: str = "", warning: 
             "request": request,
             "execution_message": message,
             "execution_warning": warning,
-            "recipe_options": recipe_options(workflow_handler().source.root),
+            "recipe_options": recipe_options(handler.source.root),
             "kind_options": SOURCE_KIND_DEFINITIONS,
             "status_options": SOURCE_STATUS_DEFINITIONS,
+            "source_auto_setup": handler.auto_setup.context_for_state(workflow),
             **workflow.template_context(),
         },
     )
     response.headers["Cache-Control"] = "no-store"
     return response
+
+
+@router.post("/sources/{source_id}/auto-setup/start")
+def start_source_auto_setup(source_id: str) -> RedirectResponse:
+    try:
+        task = runtime.launch_source_auto_setup(source_id)
+    except (RuntimeError, ValueError) as exc:
+        return _redirect_to_source(source_id, warning=f"Automatic setup could not start: {exc}", fragment="auto-setup")
+    return _redirect_to_source(
+        source_id,
+        message=f"Automatic setup started for {task.source_name}.",
+        fragment="auto-setup",
+    )
+
+
+@router.post("/sources/{source_id}/auto-setup/continue")
+def continue_source_auto_setup(source_id: str, run_id: str = Form("")) -> RedirectResponse:
+    try:
+        task = runtime.launch_source_auto_setup(source_id, run_id=run_id)
+    except (RuntimeError, ValueError) as exc:
+        return _redirect_to_source(
+            source_id, warning=f"Automatic setup could not continue: {exc}", fragment="auto-setup"
+        )
+    return _redirect_to_source(
+        source_id,
+        message=f"Automatic setup continuing for {task.source_name}.",
+        fragment="auto-setup",
+    )
 
 
 @router.post("/sources/{source_id}/registry/update")

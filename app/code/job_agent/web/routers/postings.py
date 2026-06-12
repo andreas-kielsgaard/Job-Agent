@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
+from job_agent.llm import LlmService
 from job_agent.services.manual_posting_service import ManualPostingInput, ManualPostingService
 from job_agent.web.dependencies import current_root, templates
 
@@ -11,7 +12,12 @@ router = APIRouter()
 
 @router.get("/postings/new", response_class=HTMLResponse)
 def new_posting(request: Request) -> HTMLResponse:
-    return templates.TemplateResponse(request, "posting_new.html", {"request": request, "title": "Add Posting"})
+    root = current_root()
+    return templates.TemplateResponse(
+        request,
+        "posting_new.html",
+        {"request": request, "title": "Add Posting", "llm_configured": LlmService(root).is_configured()},
+    )
 
 
 @router.post("/postings/new")

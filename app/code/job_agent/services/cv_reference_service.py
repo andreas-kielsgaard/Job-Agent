@@ -76,19 +76,37 @@ class CvReferenceService:
         suffix = path.suffix.lower()
         try:
             if suffix in {".txt", ".md"}:
-                return path.read_text(encoding="utf-8", errors="ignore"), ""
+                return _repair_mojibake(path.read_text(encoding="utf-8", errors="ignore")), ""
             if suffix == ".pdf":
                 from pypdf import PdfReader
 
                 reader = PdfReader(str(path))
-                return "\n".join(page.extract_text() or "" for page in reader.pages).strip(), ""
+                return _repair_mojibake("\n".join(page.extract_text() or "" for page in reader.pages).strip()), ""
             if suffix == ".docx":
                 from docx import Document
 
                 document = Document(str(path))
-                return "\n".join(
-                    paragraph.text for paragraph in document.paragraphs if paragraph.text.strip()
-                ).strip(), ""
+                return _repair_mojibake(
+                    "\n".join(paragraph.text for paragraph in document.paragraphs if paragraph.text.strip()).strip()
+                ), ""
         except Exception as exc:
             return "", f"Text extraction failed for {path.name}: {exc}"
         return "", ""
+
+
+def _repair_mojibake(text: str) -> str:
+    if not text or not any(marker in text for marker in ("Ã", "Â", "â")):
+        return text
+    candidates = []
+    for encoding in ("latin1", "cp1252"):
+        try:
+            candidates.append(text.encode(encoding).decode("utf-8"))
+        except UnicodeError:
+            continue
+    original_score = _mojibake_score(text)
+    repaired = min(candidates, key=_mojibake_score, default=text)
+    return repaired if _mojibake_score(repaired) < original_score else text
+
+
+def _mojibake_score(text: str) -> int:
+    return sum(text.count(marker) for marker in ("Ã", "Â", "â€™", "â€œ", "â€", "�"))

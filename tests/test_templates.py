@@ -30,6 +30,8 @@ def test_material_templates_render_with_minimal_context(template_project) -> Non
         "keyword_line": "ABAP, RAP",
         "opening": "I am contacting you regarding the role.",
         "caveat_text": "Accurate caveat.",
+        "availability_line": "Immediate. Can travel.",
+        "material_concerns": [],
         "generation_notes": [],
     }
 

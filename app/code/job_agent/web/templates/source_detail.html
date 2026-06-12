@@ -24,6 +24,66 @@
 <div class="panel"><span class="badge low">{{ execution_warning }}</span></div>
 {% endif %}
 
+{% if source_auto_setup.show %}
+<div class="panel auto-setup-panel" id="auto-setup">
+  <div class="section-heading-row">
+    <div>
+      <h2>Automatic Setup</h2>
+      <p class="muted">Use the connected LLM to learn a reading plan, run the safe source test, and keep the source out of daily runs until you explicitly include it.</p>
+    </div>
+    {% if source_auto_setup.latest_run %}
+    {% set auto_status = source_auto_setup.latest_run.status %}
+    <span class="badge {% if auto_status == 'completed' %}high{% elif auto_status in ['failed', 'blocked'] %}low{% else %}medium{% endif %}">
+      {{ auto_status|replace("_", " ")|title }}
+    </span>
+    {% endif %}
+  </div>
+  {% if source_auto_setup.latest_run %}
+  <div class="source-proof-grid">
+    <div>
+      <span>Stage</span>
+      <strong>{{ source_auto_setup.latest_run.stage or "Queued" }}</strong>
+      <p>{{ source_auto_setup.latest_run.message }}</p>
+    </div>
+    <div>
+      <span>Recipe attempts</span>
+      <strong>{{ source_auto_setup.latest_run.recipe_attempts }}/{{ source_auto_setup.latest_run.max_recipe_attempts }}</strong>
+      <p>{% if source_auto_setup.latest_run.last_recipe_path %}Selected {{ source_auto_setup.latest_run.last_recipe_path }}{% else %}No generated plan selected yet.{% endif %}</p>
+    </div>
+    <div>
+      <span>Safe source test</span>
+      <strong>{{ source_auto_setup.latest_run.readiness_status or "Not tested" }}</strong>
+      <p>{{ source_auto_setup.latest_run.readiness_summary or "Waiting for test evidence." }}</p>
+    </div>
+  </div>
+  {% if source_auto_setup.latest_events %}
+  <details class="diagnostic-panel">
+    <summary>Automatic setup log</summary>
+    <ul>
+      {% for event in source_auto_setup.latest_events %}
+      <li><strong>{{ event.stage }}:</strong> {{ event.message }}</li>
+      {% endfor %}
+    </ul>
+  </details>
+  {% endif %}
+  {% endif %}
+  <div class="action-row">
+    <form method="post" action="/sources/{{ source.id }}/auto-setup/{% if source_auto_setup.resume_run_id %}continue{% else %}start{% endif %}" class="inline-form">
+      {% if source_auto_setup.resume_run_id %}
+      <input type="hidden" name="run_id" value="{{ source_auto_setup.resume_run_id }}">
+      {% endif %}
+      <button type="submit" class="button" {% if not source_auto_setup.can_start %}disabled{% endif %}>{{ source_auto_setup.action_label }}</button>
+    </form>
+    {% if not source_auto_setup.configured %}
+    <a class="button light" href="/setup#ai-writing">Add API key</a>
+    {% endif %}
+  </div>
+  {% if source_auto_setup.disabled_reason %}
+  <p class="muted">{{ source_auto_setup.disabled_reason }}</p>
+  {% endif %}
+</div>
+{% endif %}
+
 <div class="panel source-status-panel">
   <div class="source-status-main">
     {% if source_card.lifecycle.state == "implemented" %}
@@ -304,10 +364,10 @@
           class="button light"
           type="button"
           onclick="openExternalAgent(this)"
-          data-title="Generate reading plan externally"
+          data-title="Generate reading plan in another AI"
           data-prepare-url="/sources/{{ source.id }}/recipe-candidates/external-agent/prepare"
           data-apply-url="/sources/{{ source.id }}/recipe-candidates/external-agent/apply"
-        >Use external agent</button>
+        >Use another AI</button>
       </div>
     </form>
     <details class="diagnostic-panel">

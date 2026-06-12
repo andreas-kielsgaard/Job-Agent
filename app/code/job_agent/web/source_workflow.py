@@ -22,6 +22,7 @@ from job_agent.services.source_listing_index_service import SourceListingIndexSe
 from job_agent.services.source_listing_index_store import SourceListingIndexStore, SourceListingIndexSummary
 from job_agent.services.source_registry_service import SourceRegistryService
 from job_agent.services.source_session_service import SourceSessionService
+from job_agent.services.source_suggestion_service import SourceSuggestionService
 from job_agent.services.source_test_service import SourceTestService
 from job_agent.store import JobStore
 from job_agent.web.view_models.source_status import build_source_page_status, build_source_setup_steps
@@ -114,6 +115,7 @@ class SourceWorkflowHandler:
         self.index_store = SourceListingIndexStore(self.root)
         self.jobs = JobStore(self.root, create=False)
         self.source_tests = SourceTestService(self.root)
+        self.suggestions = SourceSuggestionService(self.root)
 
     def overview_context(self, *, message: str = "", warning: str = "") -> dict[str, Any]:
         all_sources = self.registry.list_saved_sources(include_stats=True)
@@ -159,6 +161,43 @@ class SourceWorkflowHandler:
             "indexed_source_count": sum(1 for card in source_cards if card["index"]["complete"]),
             "detail_complete_source_count": sum(1 for card in source_cards if card["detail"]["complete"]),
         }
+
+    def suggestion_context(
+        self,
+        *,
+        focus: str = "",
+        raw_response: str = "",
+        suggestions: list[Any] | None = None,
+        warning: str = "",
+        message: str = "",
+        model: str = "",
+    ) -> dict[str, Any]:
+        return {
+            "title": "Suggest Sources",
+            "focus": focus,
+            "prompt": self.suggestions.build_prompt(focus),
+            "raw_response": raw_response,
+            "source_suggestions": suggestions or [],
+            "llm_configured": self.suggestions.is_llm_configured(),
+            "warning": warning,
+            "message": message,
+            "model": model,
+        }
+
+    def suggest_sources_with_llm(self, *, focus: str = ""):
+        return self.suggestions.suggest_with_llm(focus)
+
+    def prepare_external_source_suggestions(self, *, focus: str = ""):
+        return self.suggestions.prepare_external(focus)
+
+    def apply_external_source_suggestions(self, interaction_id: str, response_text: str):
+        return self.suggestions.apply_external_response(interaction_id, response_text)
+
+    def load_external_source_suggestion_result(self, interaction_id: str):
+        return self.suggestions.load_external_result(interaction_id)
+
+    def parse_source_suggestions(self, raw_response: str) -> list[Any]:
+        return self.suggestions.parse_response(raw_response)
 
     def saved_execution_by_source(self, sources: list[Any]) -> dict[str, dict[str, Any]]:
         config_sources = self.execution.load_config().get("sources", [])

@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 from fastapi.testclient import TestClient
 
 from job_agent.cli import recipe_generation_status
@@ -20,6 +21,7 @@ from job_agent.services.recipe_suggestion_service import (
 )
 from job_agent.services.source_health_service import SourceHealthService
 from job_agent.services.source_session_service import SourceSessionService
+from tests.helpers import EURSAP_SOURCE, seed_source_registry
 
 VALID_RECIPE_YAML = """source_name: Eursap Jobs
 start_url: https://eursap.eu/jobs
@@ -35,6 +37,11 @@ accept:
 limits:
   max_cards: 10
 """
+
+
+@pytest.fixture(autouse=True)
+def configured_eursap_source(project_root: Path) -> None:
+    seed_source_registry(project_root, EURSAP_SOURCE)
 
 
 class FakeLlm(RecipeSuggestionLlmClient):

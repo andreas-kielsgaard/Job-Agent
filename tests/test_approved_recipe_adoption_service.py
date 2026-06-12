@@ -10,6 +10,7 @@ from job_agent.services.approved_recipe_adoption_service import ApprovedRecipeAd
 from job_agent.services.recipe_candidate_service import RecipeCandidateStore
 from job_agent.services.recipe_suggestion_service import RecipeSuggestionResult
 from job_agent.services.source_registry_service import SourceRegistryService
+from tests.helpers import EURSAP_SOURCE, seed_source_registry
 
 VALID_RECIPE_YAML = """source_name: Example Jobs
 mode: static_html
@@ -160,6 +161,7 @@ def test_cli_adopt_approved_recipe_prints_summary(capsys, project_root: Path) ->
 
 
 def _candidate(project_root: Path):
+    seed_source_registry(project_root, EURSAP_SOURCE)
     artifact = project_root / "output" / "recipe-calibration" / "eursap"
     artifact.mkdir(parents=True, exist_ok=True)
     result = RecipeSuggestionResult(

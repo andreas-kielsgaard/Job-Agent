@@ -15,6 +15,7 @@ from job_agent.services.source_listing_index_store import SourceListingIndexStor
 from job_agent.services.source_registry_service import SourceRegistryService
 from job_agent.services.source_session_service import SourceSessionService
 from job_agent.services.source_test_service import SourceTestJobPreview, SourceTestResult
+from tests.helpers import seed_common_sources
 
 
 def test_successful_source_test_saves_ready_readiness_with_samples(project_root: Path) -> None:
@@ -292,6 +293,7 @@ def test_enablement_uses_registry_projection_without_manual_execution_entry(proj
 
 
 def test_enablement_uses_source_test_instead_of_legacy_preview_health(project_root: Path) -> None:
+    seed_common_sources(project_root)
     source = SourceRegistryService(project_root).get_source("eursap-jobs")
     ExecutionSourceService(project_root).create_or_update_recipe_source(source, enabled=False)
     service = SourceExecutionReadinessService(project_root)
@@ -436,6 +438,7 @@ def test_cli_go_live_status_and_enable_when_ready(capsys, project_root: Path) ->
 
 
 def _prepare_good_source(project_root: Path) -> None:
+    seed_common_sources(project_root)
     source = SourceRegistryService(project_root).get_source("eursap-jobs")
     ExecutionSourceService(project_root).create_or_update_recipe_source(source, enabled=False)
     _save_good_health(project_root)
@@ -460,6 +463,7 @@ def _prepare_session_required_source(project_root: Path) -> None:
 
 
 def _save_good_health(project_root: Path) -> None:
+    seed_common_sources(project_root)
     SourceHealthService(project_root).save_preview(
         "eursap-jobs",
         RecipePreviewResult(

@@ -7,6 +7,13 @@ import pytest
 
 from job_agent.io.yaml_store import read_yaml
 from job_agent.services.source_registry_service import SourceRegistryService
+from tests.helpers import (
+    EURSAP_SOURCE,
+    MANUAL_SOURCE,
+    SAMPLE_SOURCE,
+    seed_common_sources,
+    seed_source_registry,
+)
 
 
 def test_default_source_registry_creation_and_listing(project_root: Path) -> None:
@@ -15,14 +22,10 @@ def test_default_source_registry_creation_and_listing(project_root: Path) -> Non
     sources = service.list_sources()
 
     assert (project_root / "sources" / "source-registry.yaml").exists()
-    names = {source.name for source in sources}
-    assert "Manual Intake" in names
-    assert "Eursap Jobs" in names
-    assert "Whitehall Resources SAP Jobs" in names
-    assert "Montreal Associates Job Search" in names
+    assert sources == []
 
 
-def test_existing_partial_registry_is_augmented_with_builtin_sources(project_root: Path) -> None:
+def test_existing_partial_registry_is_not_augmented_with_starter_sources(project_root: Path) -> None:
     registry = project_root / "sources" / "source-registry.yaml"
     registry.write_text(
         "sources:\n  - id: manual-intake\n    name: Manual Intake\n    kind: manual\n    status: active\n",
@@ -32,14 +35,10 @@ def test_existing_partial_registry_is_augmented_with_builtin_sources(project_roo
     sources = SourceRegistryService(project_root).list_sources()
 
     ids = {source.id for source in sources}
-    assert "manual-intake" in ids
-    assert "eursap-jobs" in ids
-    assert "whitehall-sap-contract" in ids
-    assert "montreal-associates-jobs" in ids
-    assert "eursap-jobs" not in registry.read_text(encoding="utf-8")
+    assert ids == {"manual-intake"}
 
 
-def test_registry_discovers_recipe_files_not_listed_in_registry(project_root: Path) -> None:
+def test_registry_does_not_discover_recipe_files_as_sources(project_root: Path) -> None:
     recipe = project_root / "sources" / "recipes" / "experimental" / "acme-jobs.yaml"
     recipe.parent.mkdir(parents=True, exist_ok=True)
     recipe.write_text(
@@ -54,12 +53,7 @@ def test_registry_discovers_recipe_files_not_listed_in_registry(project_root: Pa
 
     source = SourceRegistryService(project_root).get_source("acme-jobs")
 
-    assert source is not None
-    assert source.name == "Acme Jobs"
-    assert source.kind == "recipe"
-    assert source.status == "testing"
-    assert source.url == "https://example.com/jobs"
-    assert source.recipe_path == "sources/recipes/experimental/acme-jobs.yaml"
+    assert source is None
 
 
 def test_source_registry_normalizes_missing_and_invalid_fields(project_root: Path) -> None:
@@ -79,6 +73,7 @@ def test_source_registry_normalizes_missing_and_invalid_fields(project_root: Pat
 
 
 def test_get_source_by_id_and_recipe_status(project_root: Path) -> None:
+    seed_common_sources(project_root)
     service = SourceRegistryService(project_root)
 
     source = service.get_source("eursap-jobs")
@@ -90,6 +85,7 @@ def test_get_source_by_id_and_recipe_status(project_root: Path) -> None:
 
 
 def test_update_source_persists_default_source_edits(project_root: Path) -> None:
+    seed_common_sources(project_root)
     service = SourceRegistryService(project_root)
 
     updated = service.update_source(
@@ -155,6 +151,7 @@ def test_add_source_can_start_with_existing_recipe(project_root: Path) -> None:
 
 
 def test_add_source_rejects_duplicate_url(project_root: Path) -> None:
+    seed_source_registry(project_root, EURSAP_SOURCE)
     service = SourceRegistryService(project_root)
 
     with pytest.raises(ValueError, match="Source already exists"):
@@ -162,6 +159,7 @@ def test_add_source_rejects_duplicate_url(project_root: Path) -> None:
 
 
 def test_update_source_rejects_unknown_status(project_root: Path) -> None:
+    seed_common_sources(project_root)
     with pytest.raises(ValueError, match="Unsupported source status"):
         SourceRegistryService(project_root).update_source(
             "eursap-jobs",
@@ -175,6 +173,7 @@ def test_update_source_rejects_unknown_status(project_root: Path) -> None:
 
 
 def test_archive_and_restore_source_hide_without_deleting(project_root: Path) -> None:
+    seed_common_sources(project_root)
     service = SourceRegistryService(project_root)
 
     archived = service.archive_source("whitehall-sap-contract")
@@ -195,6 +194,7 @@ def test_archive_and_restore_source_hide_without_deleting(project_root: Path) ->
 def test_registry_includes_saved_source_health(project_root: Path) -> None:
     from job_agent.services.recipe_preview_service import RecipePreviewResult
     from job_agent.services.source_health_service import SourceHealthService
+    seed_common_sources(project_root)
 
     preview = RecipePreviewResult(
         recipe_source_name="Eursap Jobs (experimental)",
@@ -235,6 +235,7 @@ def test_registry_loading_does_not_change_daily_run_source_config(project_root: 
 
 
 def test_source_stats_with_no_packages_show_no_data(project_root: Path) -> None:
+    seed_common_sources(project_root)
     source = SourceRegistryService(project_root).get_source("eursap-jobs")
 
     assert source is not None
@@ -245,6 +246,7 @@ def test_source_stats_with_no_packages_show_no_data(project_root: Path) -> None:
 
 
 def test_source_stats_with_strong_and_exploratory_packages_are_promising(project_root: Path) -> None:
+    seed_source_registry(project_root, SAMPLE_SOURCE)
     _write_package(
         project_root,
         "run-20260509",
@@ -292,6 +294,7 @@ def test_source_stats_with_strong_and_exploratory_packages_are_promising(project
 
 
 def test_source_stats_with_not_interesting_low_score_packages_are_low_value(project_root: Path) -> None:
+    seed_source_registry(project_root, SAMPLE_SOURCE)
     _write_package(
         project_root,
         "run-20260509",
@@ -334,6 +337,7 @@ def test_source_stats_with_not_interesting_low_score_packages_are_low_value(proj
 
 
 def test_manual_intake_matches_manual_posting_packages(project_root: Path) -> None:
+    seed_source_registry(project_root, MANUAL_SOURCE)
     _write_package(
         project_root,
         "manual-20260509",
@@ -360,6 +364,7 @@ def test_manual_intake_matches_manual_posting_packages(project_root: Path) -> No
 
 
 def test_source_url_matching_uses_matching_domain_and_path(project_root: Path) -> None:
+    seed_source_registry(project_root, EURSAP_SOURCE)
     _write_package(
         project_root,
         "run-20260509",
@@ -399,6 +404,7 @@ def test_source_url_matching_uses_matching_domain_and_path(project_root: Path) -
 
 
 def test_source_value_matching_prefers_stable_source_id(project_root: Path) -> None:
+    seed_source_registry(project_root, EURSAP_SOURCE)
     _write_package(
         project_root,
         "run-20260509",

@@ -75,12 +75,22 @@
     <p class="muted">Settings are prefilled from the latest run when available.</p>
     <form method="post" action="/api/run" class="grid">
       <div>
-        <label class="check"><input type="checkbox" name="use_llm" {% if default_options.get("use_llm", true) or env.get("CLAUDE_USE_BY_DEFAULT", "true") == "true" %}checked{% endif %}> Use Claude for material generation</label>
+        {% if llm_configured %}
+        <label class="check"><input type="checkbox" name="use_llm" {% if default_options.get("use_llm") %}checked{% endif %}> Use Claude for material generation</label>
         <p class="muted">Only relevant when material generation is enabled.</p>
+        {% else %}
+        <label class="check"><input type="checkbox" disabled> Claude not connected for material generation</label>
+        <p class="muted">Connect Claude in setup to enable AI-written materials. Deterministic materials can still be generated without it.</p>
+        {% endif %}
       </div>
       <div>
+        {% if llm_configured %}
         <label class="check"><input type="checkbox" name="ai_enhanced_search" {% if default_options.get("ai_enhanced_search") %}checked{% endif %}> AI-enhanced search summaries</label>
         <p class="muted">Uses Claude to interpret promising postings against your profile and write short relevance summaries. Does not generate application materials.</p>
+        {% else %}
+        <label class="check"><input type="checkbox" disabled> Claude not connected for AI-enhanced search summaries</label>
+        <p class="muted"><a href="/setup#ai-writing">Connect Claude</a> to add AI relevance summaries. The daily run will still score jobs deterministically.</p>
+        {% endif %}
       </div>
       <label class="check"><input type="checkbox" name="include_seen" {% if default_options.get("include_seen") %}checked{% endif %}> Include seen</label>
       <label class="check"><input type="checkbox" name="include_weak" {% if default_options.get("include_weak") %}checked{% endif %}> Include weak</label>

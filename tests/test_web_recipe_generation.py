@@ -16,6 +16,7 @@ from job_agent.services.recipe_suggestion_service import (
     RecipeSuggestionResult,
 )
 from job_agent.services.source_registry_service import SourceRegistryService
+from tests.helpers import seed_common_sources
 
 VALID_RECIPE_YAML = """source_name: Eursap Jobs
 start_url: https://eursap.eu/jobs
@@ -27,6 +28,11 @@ listing:
 limits:
   max_cards: 10
 """
+
+
+@pytest.fixture(autouse=True)
+def configured_eursap_source(project_root: Path) -> None:
+    seed_common_sources(project_root)
 
 
 def test_source_detail_displays_recipe_generation_controls_and_artifacts(

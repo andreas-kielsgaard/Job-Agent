@@ -19,6 +19,7 @@ from job_agent.services.recipe_generation_run_service import RecipeGenerationRun
 from job_agent.services.recipe_generation_status_service import RecipeGenerationStatusService
 from job_agent.services.setup_guide_service import SetupGuideService
 from job_agent.services.setup_service import SetupService
+from job_agent.web.source_auto_setup import SourceAutoSetupWorkflowHandler
 from job_agent.web.source_workflow import SourceWorkflowHandler
 from job_agent.web.view_models.dashboard import build_dashboard_view
 from job_agent.web.view_models.runs import build_run_detail_view, build_run_list_view
@@ -39,6 +40,7 @@ class AppWorkflowHandler:
         self.root = Path(root)
         self.source = SourceWorkflowHandler(self.root)
         self.recipe = RecipeWorkflowHandler(self.root, self.source)
+        self.auto_setup = SourceAutoSetupWorkflowHandler(self.root, self.source)
         self.executor = ExecutorWorkflowHandler(self.root)
         self.profile = ProfileWorkflowHandler(self.root)
         self.guide = SetupGuideWorkflowHandler(self.root)

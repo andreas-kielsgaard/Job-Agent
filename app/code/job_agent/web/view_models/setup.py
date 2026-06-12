@@ -2,11 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from dotenv import dotenv_values
-
 from job_agent.config import ROOT
+from job_agent.env import load_env
 from job_agent.llm import DEFAULT_CLAUDE_MODEL, model_options, normalize_model
-from job_agent.paths import env_file
 from job_agent.profile_contract import build_profile_contract
 from job_agent.services.cv_profile_draft_service import CvProfileDraftService
 from job_agent.services.cv_reference_service import CvReferenceService
@@ -19,7 +17,7 @@ def build_setup_view(root: Path = ROOT) -> dict:
     setup.ensure_private_profile()
     cv_reference = CvReferenceService(root).get_cv_reference()
     cv_profile_draft = CvProfileDraftService(root).active_draft()
-    env = dotenv_values(env_file(root))
+    env = load_env(root)
     return {
         "title": "Setup",
         "env": env,
@@ -34,4 +32,20 @@ def build_setup_view(root: Path = ROOT) -> dict:
         "template_variables": TEMPLATE_VARIABLES,
         "cv_reference": cv_reference,
         "cv_profile_draft": cv_profile_draft,
+        "cv_profile_draft_ready_targets": _ready_draft_targets(cv_profile_draft),
     }
+
+
+def _ready_draft_targets(cv_profile_draft: dict | None) -> set[str]:
+    if not cv_profile_draft:
+        return set()
+    targets = {str(target) for target in cv_profile_draft.get("targets", [])}
+    sections = cv_profile_draft.get("sections", [])
+    ready_sections = {
+        str(section.get("key"))
+        for section in sections
+        if isinstance(section, dict) and str(section.get("status") or "").lower() == "ready"
+    }
+    if not ready_sections:
+        return set()
+    return targets.intersection(ready_sections) or ready_sections.intersection(targets)

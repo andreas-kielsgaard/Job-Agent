@@ -40,6 +40,18 @@
         {% endfor %}
       </select>
     </details>
+    <div class="auto-setup-choice">
+      <label class="check">
+        <input type="checkbox" name="auto_setup" value="1" {% if not source_auto_setup_configured %}disabled{% endif %}>
+        Automatically set up after saving
+      </label>
+      <p class="muted">
+        This uses the connected LLM to learn a reading plan, keeps the source out of daily runs, and stops after the safe source test.
+        {% if not source_auto_setup_configured %}
+        Add an Anthropic API key in <a href="/setup#ai-writing">Setup</a> to enable it.
+        {% endif %}
+      </p>
+    </div>
     <div class="form-actions action-row">
       <button type="submit" class="button">Save source</button>
       <a class="button light" href="/sources">Cancel</a>

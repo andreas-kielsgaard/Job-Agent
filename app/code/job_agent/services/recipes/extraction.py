@@ -60,6 +60,11 @@ def extract_jobs_with_recipe_with_stats(
 
         posted_date = select_text(card, recipe.listing.posted_date_selector)
         start_date = select_text(card, recipe.listing.start_date_selector) or pattern_values.get("start_date")
+        rate = _clean_rate_value(
+            select_text(card, recipe.listing.rate_selector) or pattern_values.get("rate") or "",
+            title=title,
+            url=url,
+        )
         job = Job(
             title=title,
             company=select_text(card, recipe.listing.company_selector) or "Unknown",
@@ -70,7 +75,7 @@ def extract_jobs_with_recipe_with_stats(
             or pattern_values.get("location")
             or "Not listed",
             remote=select_text(card, recipe.listing.remote_selector) or pattern_values.get("remote") or "Not listed",
-            rate=select_text(card, recipe.listing.rate_selector) or pattern_values.get("rate") or "Not listed",
+            rate=rate or "Not listed",
             start_date=start_date or "Not listed",
             workload=(
                 select_text(card, recipe.listing.workload_selector)
@@ -185,7 +190,7 @@ def job_from_api_record(
         application_url=_api_text(record, fields.application_url) or url,
         location=_api_text(record, fields.location) or "Not listed",
         remote=_api_text(record, fields.remote) or "Not listed",
-        rate=_api_text(record, fields.rate) or "Not listed",
+        rate=_clean_rate_value(_api_text(record, fields.rate), title=title, url=url) or "Not listed",
         contract_duration=_api_text(record, fields.contract_duration) or "Not listed",
         start_date=_api_text(record, fields.start_date) or "Not listed",
         posted_date=_api_text(record, fields.posted_date) or "Not listed",
@@ -209,13 +214,15 @@ def apply_detail_api_record(job: Job, record: Any, recipe: JobBoardRecipe) -> di
         "description": _api_description(record, fields),
         "location": _api_text(record, fields.location),
         "remote": _api_text(record, fields.remote),
-        "rate": _api_text(record, fields.rate),
+        "rate": _clean_rate_value(_api_text(record, fields.rate), title=job.title, url=job.url),
         "workload": _api_text(record, fields.workload),
         "posted_date": _api_text(record, fields.posted_date),
         "start_date": _api_text(record, fields.start_date),
         "languages": _api_text(record, fields.languages),
     }
     found_values = {field_name: value for field_name, value in found_values.items() if value}
+    if found_values.get("rate") == "Not listed":
+        found_values.pop("rate", None)
     if found_values.get("title"):
         job.title = found_values["title"]
     if found_values.get("description"):
@@ -312,6 +319,36 @@ def _string_value(value: Any) -> str:
     return re.sub(r"\s+", " ", str(value)).strip()
 
 
+def _clean_rate_value(value: str, *, title: str = "", url: str = "") -> str:
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    if not text:
+        return ""
+    lowered = text.lower()
+    rate_signals = (
+        "eur",
+        "dkk",
+        "usd",
+        "gbp",
+        "$",
+        "/",
+        "day",
+        "daily",
+        "hour",
+        "hourly",
+        "month",
+        "year",
+        "salary",
+        "rate",
+        "pay",
+    )
+    if any(signal in lowered for signal in rate_signals):
+        return text
+    digits_only = re.sub(r"\D", "", text)
+    if digits_only == text and 4 <= len(digits_only) <= 8:
+        return "Not listed"
+    return text
+
+
 def _int_value(value: Any) -> int:
     try:
         return int(value or 0)
@@ -354,6 +391,10 @@ def apply_detail_html(job: Job, html: str, recipe: JobBoardRecipe) -> dict[str, 
         or pattern_values.get("language", ""),
     }
     found_values = {field_name: value for field_name, value in found_values.items() if value}
+    if found_values.get("rate"):
+        found_values["rate"] = _clean_rate_value(found_values["rate"], title=job.title, url=job.url)
+        if found_values["rate"] == "Not listed":
+            found_values.pop("rate", None)
 
     if found_values.get("title"):
         job.title = found_values["title"]

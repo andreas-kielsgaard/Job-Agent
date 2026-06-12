@@ -8,9 +8,8 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
-from dotenv import dotenv_values
-
 from job_agent.config import ROOT, load_profile
+from job_agent.env import load_env
 from job_agent.io.atomic import atomic_write_text
 from job_agent.io.yaml_store import read_yaml, write_yaml
 from job_agent.llm import LlmService
@@ -669,7 +668,7 @@ CV text:
         )
 
     def save_env_settings(self, anthropic_api_key: str, claude_model: str, claude_use_by_default: bool) -> None:
-        values = dict(dotenv_values(env_file(self.root)))
+        values = load_env(self.root)
         if anthropic_api_key:
             values["ANTHROPIC_API_KEY"] = anthropic_api_key
         values["CLAUDE_MODEL"] = claude_model

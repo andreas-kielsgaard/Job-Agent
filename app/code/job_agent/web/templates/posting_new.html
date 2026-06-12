@@ -15,9 +15,17 @@
     <div><label>Workload</label><input name="workload" placeholder="Full-time, 80%, part-time"></div>
     <div><label>Posted date</label><input name="posted_date" placeholder="2026-05-07"></div>
     <div style="grid-column: 1 / -1;"><label>Raw job description / pasted posting text</label><textarea name="description" placeholder="Paste the full posting text here."></textarea></div>
+    {% if llm_configured %}
     <label class="check"><input type="checkbox" name="ai_enhanced_search"> Run AI-enhanced evaluation after import</label>
+    {% else %}
+    <label class="check"><input type="checkbox" disabled> Claude not connected for AI-enhanced evaluation</label>
+    {% endif %}
     <label class="check"><input type="checkbox" name="generate_materials"> Generate materials after import</label>
+    {% if llm_configured %}
     <label class="check"><input type="checkbox" name="use_llm"> Use Claude for material generation</label>
+    {% else %}
+    <label class="check"><input type="checkbox" disabled> Claude not connected for material generation</label>
+    {% endif %}
     <div><button type="submit">Import posting</button></div>
   </form>
 </div>

@@ -7,9 +7,41 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from tests.helpers import seed_common_sources
 
 from job_agent.run_store import RunEvent, RunOptions, RunStore
 from job_agent.services.cv_profile_draft_service import CvProfileDraftService
+
+_SOURCE_FIXTURE_TESTS = {
+    "test_configured_recipe_review_runs_source_test_workflow",
+    "test_configured_recipe_review_shows_latest_source_test_evidence",
+    "test_source_overview_and_detail_routes_render",
+    "test_source_session_route_records_storage_state",
+    "test_source_session_capture_route_starts_guided_browser_capture",
+    "test_source_detail_updates_selected_recipe",
+    "test_source_detail_updates_registry_fields",
+    "test_source_archive_hides_source_from_default_overview_and_disables_execution",
+    "test_source_detail_capture_calibration_action_is_bounded",
+    "test_source_routes_render_saved_health",
+    "test_source_detail_safe_test_panel_uses_session_cta_when_access_blocked",
+    "test_source_routes_render_value_metrics",
+    "test_viewing_source_pages_does_not_mutate_execution_config",
+    "test_source_execution_routes_create_guard_enable_and_disable",
+    "test_source_detail_shows_dry_run_link_when_execution_entry_exists",
+    "test_source_test_run_view_and_api_save_readiness",
+    "test_source_test_insight_can_rebuild_reading_plan_with_clues",
+    "test_source_test_insight_prioritizes_failed_source_access",
+    "test_rebuild_from_test_redirects_to_retest_when_plan_changed",
+    "test_source_detail_run_now_redirects_to_run_detail",
+    "test_source_detail_index_and_investigate_actions_redirect",
+    "test_source_detail_index_and_investigate_actions_require_ready_source",
+}
+
+
+@pytest.fixture(autouse=True)
+def seed_sources_for_configured_source_smoke_tests(request: pytest.FixtureRequest, project_root: Path) -> None:
+    if request.node.name in _SOURCE_FIXTURE_TESTS:
+        seed_common_sources(project_root)
 
 
 def test_app_creation_health_and_basic_routes_use_temp_root(client: TestClient, project_root: Path) -> None:
@@ -37,12 +69,19 @@ def test_app_creation_health_and_basic_routes_use_temp_root(client: TestClient, 
     assert (project_root / "output" / "runs" / "runs.json").exists()
     dashboard = client.get("/").text
     assert 'id="work-status-dock"' in dashboard
+    assert "Claude not connected for material generation" in dashboard
+    assert 'name="use_llm"' not in dashboard
     material_checkbox = re.search(r'<input[^>]+name="generate_materials_option"[^>]*>', dashboard)
     assert material_checkbox
     assert "checked" not in material_checkbox.group(0)
 
+    posting = client.get("/postings/new").text
+    assert "Claude not connected for AI-enhanced evaluation" in posting
+    assert "Claude not connected for material generation" in posting
 
-def test_browser_tab_titles_describe_current_page(client: TestClient) -> None:
+
+def test_browser_tab_titles_describe_current_page(client: TestClient, project_root: Path) -> None:
+    seed_common_sources(project_root)
     cases = [
         ("/", "Dashboard"),
         ("/jobs", "Jobs"),
@@ -50,6 +89,7 @@ def test_browser_tab_titles_describe_current_page(client: TestClient) -> None:
         ("/setup", "Setup"),
         ("/sources", "Sources"),
         ("/sources/new", "Add Source"),
+        ("/sources/suggest", "Suggest Sources"),
         ("/sources/eursap-jobs", "Source - Eursap Jobs"),
         ("/sources/eursap-jobs/session", "Source Session - Eursap Jobs"),
         ("/sources/eursap-jobs/test-run", "Source Test - Eursap Jobs"),
@@ -453,7 +493,9 @@ def test_run_detail_renders_source_progress(client: TestClient, project_root: Pa
     assert "Local" in response.text
     assert "Checking source 1/1: Local" in response.text
     assert "Highlighted match" in response.text
-    assert f"/jobs?run_id={run.run_id}&dedupe=0" in response.text
+    assert f"run_id={run.run_id}" in response.text
+    assert "category_include=weak" in response.text
+    assert "posting_status_include=no_longer_posted" in response.text
     assert "View jobs from this day" in response.text
 
 
@@ -840,6 +882,7 @@ def test_source_overview_and_detail_routes_render(client: TestClient) -> None:
     assert 'class="source-list"' in overview.text
     assert 'class="source-card' in overview.text
     assert "/sources/new" in overview.text
+    assert "/sources/suggest" in overview.text
     assert "Implemented" in overview.text
     assert "Setup status" in overview.text
     assert "Indexing" in overview.text
@@ -847,7 +890,6 @@ def test_source_overview_and_detail_routes_render(client: TestClient) -> None:
     assert "Manual Intake" in overview.text
     assert "Eursap Jobs" in overview.text
     assert "Whitehall Resources SAP Jobs" in overview.text
-    assert "Montreal Associates Job Search" in overview.text
 
     detail = client.get("/sources/eursap-jobs")
 
@@ -1001,6 +1043,106 @@ def test_add_source_workflow_creates_review_source(client: TestClient, project_r
     assert source.status == "needs_review"
     assert source.enabled is False
     assert source.url == "https://www.accuro.dk/freelance-projects"
+
+
+def test_source_suggestions_copy_paste_flow_renders_save_forms(client: TestClient) -> None:
+    page = client.get("/sources/suggest")
+
+    assert page.status_code == 200
+    assert "Suggest Sources" in page.text
+    assert "Claude not connected" in page.text
+    assert "Update prompt" in page.text
+    assert "Use another AI" in page.text
+    assert "Copy prompt" in page.text
+    assert "SAP ABAP" in page.text
+
+    response = client.post(
+        "/sources/suggest/parse",
+        data={
+            "focus": "Nordic contracts",
+            "llm_response": (
+                '{"sources":[{"name":"Nordic SAP Contracts",'
+                '"homepage_url":"https://example.com",'
+                '"recommended_listing_url":"https://example.com/jobs?keyword=SAP",'
+                '"why_relevant":"Good SAP contract signal",'
+                '"expected_signal":"ABAP and RAP roles",'
+                '"visit_instructions":"Open jobs, search SAP ABAP, then choose Contract.",'
+                '"suggested_filters":["Contract","SAP ABAP"],'
+                '"search_terms":["SAP RAP freelance"],'
+                '"caveats":"Check whether filters remain in the URL.",'
+                '"priority":1}]}'
+            ),
+        },
+    )
+
+    assert response.status_code == 200
+    assert "Parsed 1 source suggestions" in response.text
+    assert "Nordic SAP Contracts" in response.text
+    assert "Open jobs, search SAP ABAP, then choose Contract." in response.text
+    assert 'action="/sources/new"' in response.text
+    assert 'value="https://example.com/jobs?keyword=SAP"' in response.text
+
+
+def test_source_suggestions_generate_and_external_agent_flows(
+    monkeypatch: pytest.MonkeyPatch,
+    client: TestClient,
+) -> None:
+    class FakeLlmService:
+        def __init__(self, root):
+            self.root = root
+
+        def is_configured(self):
+            return True
+
+        def complete(self, prompt, **kwargs):
+            assert "EU contracts" in prompt
+            assert kwargs["purpose"] == "source_suggestion"
+            return type(
+                "Completion",
+                (),
+                {
+                    "text": (
+                        '{"sources":[{"name":"Example SAP Jobs",'
+                        '"homepage_url":"https://example.com",'
+                        '"recommended_listing_url":"https://example.com/jobs",'
+                        '"why_relevant":"Relevant SAP roles","priority":2}]}'
+                    ),
+                    "model": "fake-sonnet",
+                },
+            )()
+
+    monkeypatch.setattr("job_agent.services.source_suggestion_service.LlmService", FakeLlmService)
+
+    response = client.post("/sources/suggest/generate", data={"focus": "EU contracts"})
+
+    assert response.status_code == 200
+    assert "Generated 1 source suggestions" in response.text
+    assert "Example SAP Jobs" in response.text
+    assert "fake-sonnet" in response.text
+
+    prepared = client.post("/sources/suggest/external-agent/prepare", data={"focus": "Remote SAP"})
+    assert prepared.status_code == 200
+    payload = prepared.json()
+    assert payload["ok"] is True
+    assert payload["purpose"] == "source_suggestion"
+    assert "Remote SAP" in payload["prompt"]
+
+    applied = client.post(
+        "/sources/suggest/external-agent/apply",
+        data={
+            "interaction_id": payload["interaction_id"],
+            "response_text": (
+                '{"sources":[{"name":"External SAP Jobs",'
+                '"homepage_url":"https://example.com",'
+                '"recommended_listing_url":"https://example.com/sap"}]}'
+            ),
+        },
+    )
+    assert applied.status_code == 200
+    assert applied.json()["ok"] is True
+    redirected = client.get(applied.json()["redirect_url"])
+    assert redirected.status_code == 200
+    assert "External SAP Jobs" in redirected.text
 
 
 def test_source_detail_updates_selected_recipe(client: TestClient, project_root: Path) -> None:
@@ -1522,6 +1664,7 @@ def test_source_test_run_view_and_api_save_readiness(monkeypatch: pytest.MonkeyP
     assert "source-test-results" in view.text
     assert "?result=" in view.text
     assert "shouldStartImmediately" in view.text
+    assert "consumeImmediateStartFlag" in view.text
     assert "/sources/eursap-jobs/test-run/stream" in view.text
     assert response.status_code == 200
     payload = response.json()

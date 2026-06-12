@@ -2,12 +2,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from job_agent.services.recipe_candidate_service import RecipeCandidateStore
 from job_agent.services.recipe_suggestion_service import RecipeSuggestionResult
 from job_agent.services.source_health_service import SourceHealthService
 from job_agent.services.source_registry_service import SourceRegistryService
+from tests.helpers import seed_common_sources
 
 VALID_RECIPE_YAML = """source_name: Eursap Jobs
 start_url: https://eursap.eu/jobs
@@ -23,6 +25,11 @@ accept:
 limits:
   max_cards: 10
 """
+
+
+@pytest.fixture(autouse=True)
+def configured_eursap_source(project_root: Path) -> None:
+    seed_common_sources(project_root)
 
 
 def test_candidate_detail_shows_approval_form_for_pending_candidate(client: TestClient, project_root: Path) -> None:

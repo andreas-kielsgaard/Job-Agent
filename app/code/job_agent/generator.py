@@ -30,6 +30,8 @@ def generate_materials(
     role_summary = build_role_summary(job, top_skills, profile)
     caveat_text = build_caveat_text(job, match, profile)
     application_opening = build_application_opening(job, match)
+    material_concerns = build_material_concerns(match)
+    availability_line = build_availability_line(profile.get("availability", {}))
     generation_notes: list[str] = []
 
     llm_application = ""
@@ -73,6 +75,8 @@ def generate_materials(
         "keyword_line": ", ".join(_dedupe(match.matched_keywords + top_skills)),
         "opening": application_opening,
         "caveat_text": caveat_text,
+        "material_concerns": material_concerns,
+        "availability_line": availability_line,
         "generation_notes": generation_notes,
     }
 
@@ -171,9 +175,26 @@ def build_caveat_text(job: Job, match: MatchResult, profile: dict) -> str:
     ]
     if match.components.get("language_risk", 0) < 0:
         caveats.append("Language requirements should be confirmed before applying.")
+    if match.category == "weak":
+        caveats.append("This is a weak match; review the gaps manually before using this draft.")
     if caveats:
         return " ".join(_dedupe(caveats))
     return "The application keeps the focus on the parts of the role where the background is strongest."
+
+
+def build_material_concerns(match: MatchResult) -> list[str]:
+    concerns = list(match.concerns)
+    if match.category == "weak":
+        concerns.append("Weak match; review gaps manually before applying.")
+    return _dedupe(concerns)
+
+
+def build_availability_line(availability: dict[str, Any]) -> str:
+    available_from = str(availability.get("available_from") or "").strip()
+    logistics = str(availability.get("logistics") or "").strip()
+    parts = [_sentence(available_from), _sentence(logistics)]
+    line = " ".join(part for part in parts if part)
+    return line or "Manual confirmation recommended."
 
 
 def maybe_generate_application_with_llm(
@@ -308,6 +329,13 @@ def _dedupe(items: list[str]) -> list[str]:
             result.append(item)
             seen.add(item)
     return result
+
+
+def _sentence(value: str) -> str:
+    text = value.strip()
+    if not text:
+        return ""
+    return text if text[-1:] in {".", "!", "?"} else f"{text}."
 
 
 def _emit(progress_callback, run_id: str, event_type: str, message: str, phase: str, current_job: str) -> None:

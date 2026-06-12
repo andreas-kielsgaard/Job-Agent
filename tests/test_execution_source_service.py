@@ -6,6 +6,7 @@ import pytest
 
 from job_agent.services.execution_source_service import ExecutionSourceService
 from job_agent.services.source_registry_service import SourceRegistryService
+from tests.helpers import MANUAL_SOURCE, seed_common_sources, seed_source_registry
 
 
 def test_execution_service_loads_existing_sources(project_root: Path) -> None:
@@ -22,6 +23,7 @@ def test_execution_service_loads_existing_sources(project_root: Path) -> None:
 
 
 def test_create_disabled_recipe_execution_entry_from_registry_source(project_root: Path) -> None:
+    seed_common_sources(project_root)
     source = SourceRegistryService(project_root).get_source("eursap-jobs")
 
     result = ExecutionSourceService(project_root).create_or_update_recipe_source(source)
@@ -39,6 +41,7 @@ def test_create_disabled_recipe_execution_entry_from_registry_source(project_roo
 
 
 def test_update_execution_entry_does_not_duplicate_and_keeps_disabled(project_root: Path) -> None:
+    seed_common_sources(project_root)
     service = ExecutionSourceService(project_root)
     source = SourceRegistryService(project_root).get_source("eursap-jobs")
     service.create_or_update_recipe_source(source)
@@ -53,6 +56,7 @@ def test_update_execution_entry_does_not_duplicate_and_keeps_disabled(project_ro
 
 
 def test_enable_and_disable_execution_entry(project_root: Path) -> None:
+    seed_common_sources(project_root)
     service = ExecutionSourceService(project_root)
     source = SourceRegistryService(project_root).get_source("eursap-jobs")
     service.create_or_update_recipe_source(source)
@@ -65,6 +69,7 @@ def test_enable_and_disable_execution_entry(project_root: Path) -> None:
 
 
 def test_manual_source_cannot_create_recipe_execution_entry(project_root: Path) -> None:
+    seed_source_registry(project_root, MANUAL_SOURCE)
     source = SourceRegistryService(project_root).get_source("manual-intake")
 
     with pytest.raises(ValueError):
@@ -72,6 +77,7 @@ def test_manual_source_cannot_create_recipe_execution_entry(project_root: Path) 
 
 
 def test_enable_registry_recipe_source_materializes_execution_entry(project_root: Path) -> None:
+    seed_common_sources(project_root)
     enabled = ExecutionSourceService(project_root).enable("eursap-jobs")
     source = SourceRegistryService(project_root).get_source("eursap-jobs")
 

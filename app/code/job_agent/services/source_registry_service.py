@@ -401,14 +401,7 @@ class SourceRegistryService:
         )
 
     def _merged_source_mappings(self, raw_sources: list[Any]) -> list[dict[str, Any]]:
-        mappings, seen_ids = self._saved_source_mappings_with_seen_ids(raw_sources)
-
-        for item in _recipe_source_mappings(self.root, seen_ids):
-            source_id = _mapping_source_id(item)
-            if source_id in seen_ids:
-                continue
-            seen_ids.add(source_id)
-            mappings.append(item)
+        mappings, _seen_ids = self._saved_source_mappings_with_seen_ids(raw_sources)
         return mappings
 
     def _saved_source_mappings(self, raw_sources: list[Any]) -> list[dict[str, Any]]:
@@ -468,104 +461,7 @@ class SourceRegistryService:
 
 
 def _default_sources() -> list[dict[str, Any]]:
-    return [
-        {
-            "id": "manual-intake",
-            "name": "Manual Intake",
-            "kind": "manual",
-            "status": "ready",
-            "url": "",
-            "recipe_path": "",
-            "added_at": "2026-05-09",
-            "enabled": True,
-            "notes": "Manual fallback for recruiter emails, copied postings, and sources that are not safe to automate.",
-            "tags": ["manual", "fallback"],
-        },
-        {
-            "id": "sample-jobs",
-            "name": "Sample Jobs",
-            "kind": "local_yaml",
-            "status": "ready",
-            "url": "",
-            "recipe_path": "",
-            "added_at": "2026-05-09",
-            "enabled": True,
-            "notes": "Existing local YAML sample source used by daily runs and tests.",
-            "tags": ["local", "sample"],
-        },
-        {
-            "id": "eursap-jobs",
-            "name": "Eursap Jobs",
-            "kind": "recipe",
-            "status": "testing",
-            "url": "https://eursap.eu/jobs",
-            "recipe_path": "sources/recipes/experimental/eursap-jobs.yaml",
-            "added_at": "2026-05-09",
-            "enabled": False,
-            "notes": "Recipe-backed source from saved local calibration artifacts. Not connected to daily runs.",
-            "tags": ["sap", "recipe", "live-calibrated"],
-        },
-        {
-            "id": "whitehall-sap-contract",
-            "name": "Whitehall Resources SAP Jobs",
-            "kind": "recipe",
-            "status": "testing",
-            "url": "https://www.whitehallresources.com/sap-jobs/",
-            "recipe_path": "sources/recipes/experimental/whitehall-sap-contract.yaml",
-            "added_at": "2026-05-09",
-            "enabled": False,
-            "notes": "Recipe-backed source using saved Whitehall SAP job-item listing blocks. Not connected to daily runs.",
-            "tags": ["sap", "recipe", "live-calibrated"],
-        },
-        {
-            "id": "montreal-associates-jobs",
-            "name": "Montreal Associates Job Search",
-            "kind": "recipe",
-            "status": "needs_review",
-            "url": "https://www.montrealassociates.com/uk/candidates/job-search/",
-            "recipe_path": "sources/recipes/experimental/montreal-associates-jobs.yaml",
-            "added_at": "2026-05-09",
-            "enabled": False,
-            "notes": "Partial rendered recipe. Saved preview works, but broad results include non-SAP roles.",
-            "tags": ["sap", "recipe", "partial"],
-        },
-    ]
-
-
-def _recipe_source_mappings(root: Path, existing_ids: set[str]) -> list[dict[str, Any]]:
-    recipes_root = recipes_dir(root)
-    if not recipes_root.exists():
-        return []
-
-    mappings: list[dict[str, Any]] = []
-    for path in sorted(recipes_root.rglob("*.yaml")):
-        relative = f"sources/recipes/{path.relative_to(recipes_root).as_posix()}"
-        if "/examples/" in f"/{relative}":
-            continue
-        data = read_yaml(path, {})
-        if not isinstance(data, dict):
-            continue
-        start_url = str(data.get("start_url") or "").strip()
-        if not start_url:
-            continue
-        source_id = _slug(path.stem)
-        if source_id in existing_ids:
-            continue
-        mappings.append(
-            {
-                "id": source_id,
-                "name": str(data.get("source_name") or path.stem.replace("-", " ").title()).strip(),
-                "kind": "recipe",
-                "status": "testing" if "/experimental/" in f"/{relative}" else "needs_review",
-                "url": start_url,
-                "recipe_path": relative,
-                "added_at": "",
-                "enabled": False,
-                "notes": "Discovered from a recipe file; review before enabling daily-run execution.",
-                "tags": ["recipe"],
-            }
-        )
-    return mappings
+    return []
 
 
 def _mapping_source_id(data: dict[str, Any]) -> str:

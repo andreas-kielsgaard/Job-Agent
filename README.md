@@ -73,7 +73,7 @@ The daily run:
 
 ## Local Web UI
 
-The web UI supports setup, source review, test runs, daily runs, job triage, generated-material review, manual posting intake, match sandboxing, stats, and local profile editing.
+The web UI supports setup, profile-based source suggestions, source review, test runs, daily runs, job triage, generated-material review, manual posting intake, match sandboxing, stats, and local profile editing.
 
 The server binds to `127.0.0.1` and is intended for one local user, not public hosting.
 

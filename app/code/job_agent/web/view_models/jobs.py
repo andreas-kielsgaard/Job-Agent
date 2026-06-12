@@ -6,6 +6,7 @@ from typing import Any
 
 from job_agent.application_status_store import APPLICATION_STATUSES, ApplicationStatusStore
 from job_agent.config import ROOT
+from job_agent.llm import LlmService
 from job_agent.models import SeenJobRecord
 from job_agent.run_store import RunRecord, RunStore
 from job_agent.services.cv_reference_service import CvReferenceService
@@ -76,7 +77,47 @@ def build_job_detail_view(job_id: str, run_id: str = "", root: Path = ROOT) -> d
         "statuses": sorted(APPLICATION_STATUSES),
         "render_md": markdown_to_html,
         "cv_reference": CvReferenceService(root).get_cv_reference(),
+        "score_details": _score_details(package),
+        "llm_configured": LlmService(root).is_configured(),
     }
+
+
+def _score_details(package: dict[str, Any]) -> dict[str, Any]:
+    raw_components = package.get("components") or package.get("match_components") or {}
+    components: list[dict[str, Any]] = []
+    if isinstance(raw_components, dict):
+        components = [
+            {
+                "label": str(key).replace("_", " ").title(),
+                "value": value,
+                "tone": "positive" if _numeric(value) > 0 else "negative" if _numeric(value) < 0 else "neutral",
+            }
+            for key, value in raw_components.items()
+            if _numeric(value) != 0
+        ]
+    elif isinstance(raw_components, list):
+        components = [item for item in raw_components if isinstance(item, dict)]
+    return {
+        "components": components,
+        "reasons": _text_list(package.get("reasons") or package.get("match_reasons")),
+        "concerns": _text_list(package.get("concerns") or package.get("match_concerns")),
+        "missing_information": _text_list(package.get("missing_information") or package.get("match_missing_info")),
+    }
+
+
+def _text_list(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    if isinstance(value, str) and value.strip():
+        return [item.strip() for item in value.split(";") if item.strip()]
+    return []
+
+
+def _numeric(value: Any) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
 
 
 def _filter_jobs(jobs: list[dict[str, Any]], filters: dict[str, Any]) -> list[dict[str, Any]]:

@@ -46,6 +46,16 @@ class CvReferenceServiceTests(unittest.TestCase):
             self.assertIn("broken", reference["extraction_error"])
             self.assertFalse((root / "profile" / "canonical-cv.md").exists())
 
+    def test_text_extraction_repairs_common_mojibake(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "cv.txt"
+            path.write_text("Address: VÃ¥rkjÃ¦rvej", encoding="utf-8")
+
+            text, error = CvReferenceService.extract_cv_text_with_error(path)
+
+            self.assertEqual(error, "")
+            self.assertIn("Vårkjærvej", text)
+
 
 if __name__ == "__main__":
     unittest.main()

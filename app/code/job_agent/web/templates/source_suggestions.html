@@ -1,0 +1,135 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="source-detail-header">
+  <div>
+    <p class="eyebrow">Sources</p>
+    <h1>Suggest Sources</h1>
+    <p class="muted">Generate profile-aware job-board ideas, then visit each board and save the exact listing page you want the app to learn later.</p>
+  </div>
+  <div class="source-header-actions">
+    <a class="button light" href="/sources/new">Add source</a>
+    <a class="button light" href="/sources">Back to sources</a>
+  </div>
+</div>
+
+{% if message %}
+<div class="panel"><span class="badge high">{{ message }}</span>{% if model %} <span class="muted">Model: {{ model }}</span>{% endif %}</div>
+{% endif %}
+{% if warning %}
+<div class="panel"><span class="badge low">{{ warning }}</span></div>
+{% endif %}
+
+<div class="panel source-suggestion-workspace">
+  <div>
+    <h2>Prompt</h2>
+    <p class="muted">The prompt includes app boundaries, profile context, and existing sources so the LLM can suggest useful boards without duplicating what is already saved.</p>
+  </div>
+  <form method="post" action="/sources/suggest/generate" class="source-suggestion-focus">
+    <label>Extra focus</label>
+    <textarea name="focus" class="compact-textarea" placeholder="Example: prioritize Danish or EU contract sources with SAP ABAP, RAP, CDS, OData, and hybrid/remote options.">{{ focus }}</textarea>
+    <div class="action-row">
+      <button type="submit" class="button light" formmethod="get" formaction="/sources/suggest">Update prompt</button>
+      {% if llm_configured %}
+      <button type="submit" class="button">Generate with Claude</button>
+      {% else %}
+      <button type="submit" class="button" disabled>Claude not connected</button>
+      <a class="button light" href="/setup#ai-writing">Connect Claude</a>
+      {% endif %}
+      <button
+        type="button"
+        class="button light"
+        onclick="openExternalAgent(this)"
+        data-title="Suggest job sources in another AI"
+        data-prepare-url="/sources/suggest/external-agent/prepare"
+        data-apply-url="/sources/suggest/external-agent/apply"
+      >Use another AI</button>
+      <button type="button" class="button light" onclick="copyText('source-suggestion-prompt')">Copy prompt</button>
+    </div>
+  </form>
+  <textarea id="source-suggestion-prompt" class="prompt-textarea" readonly>{{ prompt }}</textarea>
+</div>
+
+<div class="panel">
+  <h2>Paste AI Response</h2>
+  <p class="muted">Paste strict JSON from any AI here. Parsed suggestions appear below and can be saved one by one.</p>
+  <form method="post" action="/sources/suggest/parse">
+    <input type="hidden" name="focus" value="{{ focus }}">
+    <textarea name="llm_response" placeholder='{"sources":[...]}'>{% if raw_response %}{{ raw_response }}{% endif %}</textarea>
+    <div class="form-actions action-row">
+      <button type="submit" class="button">Parse suggestions</button>
+      {% if raw_response %}
+      <button type="button" class="button light" onclick="copyText('source-suggestion-response')">Copy response</button>
+      {% endif %}
+    </div>
+  </form>
+  {% if raw_response %}
+  <pre id="source-suggestion-response" class="copy-source" hidden>{{ raw_response }}</pre>
+  {% endif %}
+</div>
+
+{% if source_suggestions %}
+<div class="source-list source-suggestion-list">
+  {% for suggestion in source_suggestions %}
+  <article class="source-card source-suggestion-card setup">
+    <div class="source-card-main">
+      <div class="source-title-row">
+        <div>
+          <h2>{{ suggestion.name }}</h2>
+          {% if suggestion.source_url %}
+          <a class="source-url" href="{{ suggestion.source_url }}" target="_blank" rel="noreferrer">{{ suggestion.source_url }}</a>
+          {% endif %}
+        </div>
+        <div class="badge-row">
+          <span class="badge {% if suggestion.priority <= 2 %}high{% elif suggestion.priority >= 5 %}low{% else %}medium{% endif %}">{{ suggestion.priority_label }}</span>
+        </div>
+      </div>
+
+      <div class="source-fact-grid setup">
+        <div>
+          <span class="fact-label">Why it fits</span>
+          <strong>{{ suggestion.why_relevant or "Review fit manually" }}</strong>
+          <span>{{ suggestion.expected_signal }}</span>
+        </div>
+        <div>
+          <span class="fact-label">Filters to try</span>
+          <strong>{{ suggestion.filters_label or "Use site search" }}</strong>
+          <span>{{ suggestion.search_terms_label }}</span>
+        </div>
+        <div>
+          <span class="fact-label">Caveats</span>
+          <strong>{{ suggestion.caveats or "No caveat provided" }}</strong>
+        </div>
+      </div>
+
+      {% if suggestion.visit_instructions %}
+      <div class="source-visit-guide">
+        <strong>Visit guide</strong>
+        <p>{{ suggestion.visit_instructions }}</p>
+      </div>
+      {% endif %}
+
+      <form method="post" action="/sources/new" class="source-suggestion-save">
+        <input type="hidden" name="name" value="{{ suggestion.name }}">
+        <input type="hidden" name="recipe_path" value="">
+        <label>Source URL to save</label>
+        <input name="url" value="{{ suggestion.source_url }}" required>
+        <label>Notes</label>
+        <textarea name="notes" class="compact-textarea">{{ suggestion.notes_for_source }}</textarea>
+        <div class="form-actions action-row">
+          {% if suggestion.source_url %}
+          <a class="button light" href="{{ suggestion.source_url }}" target="_blank" rel="noreferrer">Visit board</a>
+          {% endif %}
+          <button type="submit" class="button">Save source</button>
+        </div>
+      </form>
+    </div>
+  </article>
+  {% endfor %}
+</div>
+{% else %}
+<div class="panel">
+  <h2>No Suggestions Yet</h2>
+  <p class="muted">Use connected Claude, another AI, or paste a JSON response.</p>
+</div>
+{% endif %}
+{% endblock %}

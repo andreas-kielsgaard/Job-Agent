@@ -14,6 +14,12 @@ from job_agent.services.source_health_service import SourceHealthService
 from job_agent.services.source_listing_index_store import SourceListingIndexStore
 from job_agent.services.source_registry_service import SourceRegistryService
 from job_agent.services.source_test_service import SourceTestJobPreview, SourceTestResult
+from tests.helpers import seed_common_sources
+
+
+@pytest.fixture(autouse=True)
+def configured_eursap_source(project_root: Path) -> None:
+    seed_common_sources(project_root)
 
 
 def test_source_detail_shows_go_live_readiness_panel(client: TestClient) -> None:

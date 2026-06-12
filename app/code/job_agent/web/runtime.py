@@ -71,18 +71,38 @@ class SourceSessionCaptureTask:
     href: str = ""
 
 
+@dataclass
+class SourceAutoSetupTask:
+    task_id: str
+    run_id: str
+    source_id: str
+    source_name: str
+    title: str = ""
+    status: str = "pending"
+    stage: str = "Queued"
+    message: str = ""
+    progress_percent: int = 8
+    started_at: str = ""
+    finished_at: str = ""
+    error_message: str = ""
+    href: str = ""
+
+
 class WebRuntime:
     def __init__(self, root: Path = ROOT) -> None:
         self.root = root
         self.executor = ThreadPoolExecutor(max_workers=1)
         self.index_executor = ThreadPoolExecutor(max_workers=3)
         self.session_executor = ThreadPoolExecutor(max_workers=3)
+        self.auto_setup_executor = ThreadPoolExecutor(max_workers=1)
         self._index_tasks: dict[str, SourceIndexTask] = {}
         self._index_lock = threading.Lock()
         self._profile_tasks: dict[str, ProfileDraftTask] = {}
         self._profile_lock = threading.Lock()
         self._session_tasks: dict[str, SourceSessionCaptureTask] = {}
         self._session_lock = threading.Lock()
+        self._auto_setup_tasks: dict[str, SourceAutoSetupTask] = {}
+        self._auto_setup_lock = threading.Lock()
         self.last_request_at = time.time()
         self.idle_monitor_started = False
         self.app_version = ""
@@ -173,10 +193,13 @@ class WebRuntime:
 
     def active_work_payload(self) -> dict[str, Any]:
         profile_tasks = self._active_profile_tasks()
+        auto_setup_tasks = self._active_auto_setup_tasks()
         snapshot = {
             "active_run": self.active_run(),
             "index_tasks": self._active_index_sources(),
             "session_tasks": self._active_session_sources(),
+            "auto_setup_tasks": auto_setup_tasks,
+            "persisted_auto_setup_tasks": self._active_persisted_auto_setups(auto_setup_tasks),
             "profile_tasks": profile_tasks,
             "persisted_profile_tasks": self._active_persisted_profile_drafts(profile_tasks),
         }
@@ -224,6 +247,37 @@ class WebRuntime:
                     existing.finished_at = superseded_at
             self._session_tasks[task.task_id] = task
         self.session_executor.submit(self._run_source_session_capture, task.task_id)
+        return task
+
+    def launch_source_auto_setup(self, source_id: str, *, run_id: str = "") -> SourceAutoSetupTask:
+        from job_agent.web.source_auto_setup import SourceAutoSetupWorkflowHandler
+
+        workflow = SourceAutoSetupWorkflowHandler(self.root)
+        run = workflow.prepare(source_id, run_id=run_id)
+        task_id = f"auto-{run['run_id']}"
+        with self._auto_setup_lock:
+            existing = self._auto_setup_tasks.get(task_id)
+            if existing and existing.status in {"pending", "running"} and not existing.finished_at:
+                return existing
+            for task in self._auto_setup_tasks.values():
+                if task.source_id == source_id and task.status in {"pending", "running"} and not task.finished_at:
+                    return task
+            task = SourceAutoSetupTask(
+                task_id=task_id,
+                run_id=str(run["run_id"]),
+                source_id=str(run["source_id"]),
+                source_name=str(run.get("source_name") or source_id),
+                title=f"Setting up {run.get('source_name') or source_id}",
+                status=str(run.get("status") or "pending"),
+                stage=str(run.get("stage") or "Queued"),
+                message=str(run.get("message") or "Automatic setup is queued."),
+                progress_percent=_int(run.get("progress_percent") or 8),
+                started_at=str(run.get("started_at") or run.get("created_at") or utc_now()),
+                href=f"/sources/{source_id}",
+            )
+            self._auto_setup_tasks[task.task_id] = task
+        if str(run.get("status") or "") != "completed":
+            self.auto_setup_executor.submit(self._run_source_auto_setup, task.task_id)
         return task
 
     def start_profile_draft_task(self, task_id: str = "", title: str = "Drafting profile from CV") -> ProfileDraftTask:
@@ -554,6 +608,92 @@ class WebRuntime:
             for task_id in stale_ids:
                 self._session_tasks.pop(task_id, None)
         return items
+
+    def _run_source_auto_setup(self, task_id: str) -> None:
+        from job_agent.web.source_auto_setup import SourceAutoSetupWorkflowHandler
+
+        with self._auto_setup_lock:
+            task = self._auto_setup_tasks.get(task_id)
+            if not task:
+                return
+            run_id = task.run_id
+        workflow = SourceAutoSetupWorkflowHandler(self.root)
+
+        def progress(event: dict[str, Any]) -> None:
+            updates = {
+                "status": str(event.get("status") or "running"),
+                "stage": str(event.get("stage") or ""),
+                "message": str(event.get("message") or ""),
+                "progress_percent": _int(event.get("progress_percent") or 8),
+            }
+            self._update_auto_setup_task(task_id, **updates)
+
+        self._update_auto_setup_task(task_id, status="running", stage="Starting", message="Starting automatic setup.")
+        try:
+            run = workflow.run(run_id, progress_callback=progress)
+            self._update_auto_setup_task(
+                task_id,
+                status=str(run.get("status") or "completed"),
+                stage=str(run.get("stage") or "Finished"),
+                message=str(run.get("message") or "Automatic setup finished."),
+                progress_percent=_int(run.get("progress_percent") or 100),
+                error_message=str(run.get("error_message") or ""),
+                finished_at=str(run.get("finished_at") or utc_now()),
+            )
+        except Exception as exc:
+            self._update_auto_setup_task(
+                task_id,
+                status="failed",
+                stage="Failed",
+                message=f"Automatic setup failed: {exc}",
+                error_message=str(exc),
+                progress_percent=100,
+                finished_at=utc_now(),
+            )
+
+    def _update_auto_setup_task(self, task_id: str, **updates: Any) -> None:
+        with self._auto_setup_lock:
+            task = self._auto_setup_tasks.get(task_id)
+            if not task:
+                return
+            for key, value in updates.items():
+                setattr(task, key, value)
+
+    def _active_auto_setup_tasks(self) -> list[dict[str, Any]]:
+        now = time.time()
+        items = []
+        stale_ids = []
+        with self._auto_setup_lock:
+            for task_id, task in self._auto_setup_tasks.items():
+                if task.finished_at:
+                    try:
+                        finished = datetime.fromisoformat(task.finished_at).timestamp()
+                    except ValueError:
+                        finished = now
+                    if now - finished > 30:
+                        stale_ids.append(task_id)
+                        continue
+                payload = asdict(task)
+                payload.update(
+                    {
+                        "kind": "auto_setup",
+                        "title": task.title or f"Setting up {task.source_name}",
+                        "status": task.status,
+                    }
+                )
+                items.append(payload)
+            for task_id in stale_ids:
+                self._auto_setup_tasks.pop(task_id, None)
+        return items
+
+    def _active_persisted_auto_setups(self, auto_setup_tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        existing_task_ids = {str(item.get("task_id") or "") for item in auto_setup_tasks}
+        try:
+            from job_agent.web.source_auto_setup import SourceAutoSetupWorkflowHandler
+
+            return SourceAutoSetupWorkflowHandler(self.root).active_work_items(exclude_task_ids=existing_task_ids)
+        except Exception:
+            return []
 
     def _active_profile_tasks(self) -> list[dict[str, Any]]:
         now = time.time()

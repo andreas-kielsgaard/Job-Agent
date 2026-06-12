@@ -40,14 +40,18 @@
         };
         const modal = document.getElementById("external-agent-modal");
         modal.style.display = "flex";
-        document.getElementById("external-agent-title").innerText = button.dataset.title || "External agent";
+        document.getElementById("external-agent-title").innerText = button.dataset.title || "Another AI";
         document.getElementById("external-agent-instructions").innerText = "Preparing prompt...";
         document.getElementById("external-agent-prompt").value = "";
         document.getElementById("external-agent-response").value = "";
         document.getElementById("external-agent-error").innerText = "";
         document.getElementById("external-agent-status").innerText = "";
+        document.getElementById("external-agent-success").innerHTML = "";
         document.getElementById("external-agent-response-panel").hidden = false;
-        document.getElementById("external-agent-apply-button").hidden = false;
+        const applyButton = document.getElementById("external-agent-apply-button");
+        applyButton.hidden = false;
+        applyButton.disabled = false;
+        applyButton.innerText = "Apply response";
         const formData = externalAgentState.form ? new FormData(externalAgentState.form) : new FormData();
         try {
           const response = await fetch(externalAgentState.prepareUrl, { method: "POST", body: formData });
@@ -61,8 +65,8 @@
           const copyOnly = !externalAgentState.applyUrl || data.response_mode === "none";
           document.getElementById("external-agent-response-panel").hidden = copyOnly;
           document.getElementById("external-agent-apply-button").hidden = copyOnly;
-          document.getElementById("external-agent-title").innerText = data.title || button.dataset.title || "External agent";
-          document.getElementById("external-agent-instructions").innerText = data.instructions || (copyOnly ? "Copy this context for use in an external agent." : "Paste this prompt into an external agent, then paste the response below.");
+          document.getElementById("external-agent-title").innerText = data.title || button.dataset.title || "Another AI";
+          document.getElementById("external-agent-instructions").innerText = data.instructions || (copyOnly ? "Copy this context for use in another AI." : "Paste this prompt into another AI, then paste the response below.");
           document.getElementById("external-agent-prompt").value = data.prompt || "";
           const copied = await copyValueToClipboard(data.prompt || "");
           document.getElementById("external-agent-status").innerText = copied ? "Prompt copied to clipboard." : "Prompt is ready to copy.";
@@ -84,33 +88,49 @@
       async function submitExternalAgentResponse() {
         const responseText = document.getElementById("external-agent-response").value;
         const error = document.getElementById("external-agent-error");
+        const status = document.getElementById("external-agent-status");
+        const success = document.getElementById("external-agent-success");
+        const applyButton = document.getElementById("external-agent-apply-button");
         error.innerText = "";
+        success.innerHTML = "";
         if (!externalAgentState.applyUrl) {
-          error.innerText = "This external-agent prompt is copy-only.";
+          error.innerText = "This prompt is copy-only.";
           return;
         }
         if (!responseText.trim()) {
-          error.innerText = "Paste the external agent response before applying it.";
+          error.innerText = "Paste the AI response before applying it.";
           return;
         }
         const formData = externalAgentState.form ? new FormData(externalAgentState.form) : new FormData();
         formData.set("interaction_id", externalAgentState.interactionId || "");
         formData.set("response_text", responseText);
+        applyButton.disabled = true;
+        applyButton.innerText = "Applying...";
+        status.innerText = "Applying response...";
         try {
           const response = await fetch(externalAgentState.applyUrl, { method: "POST", body: formData });
           const data = await response.json();
           if (!data.ok) {
             error.innerText = data.error || "Could not apply response.";
+            applyButton.disabled = false;
+            applyButton.innerText = "Apply response";
+            status.innerText = "";
             return;
           }
           const redirectUrl = data.redirect_url || externalAgentState.successUrl;
           if (redirectUrl) {
-            window.location.href = redirectUrl;
+            status.innerText = "Response applied. Opening the next step...";
+            success.innerHTML = `Response applied. <a href="${escapeHtml(redirectUrl)}">Open next step</a>`;
+            window.setTimeout(() => window.location.assign(redirectUrl), 50);
             return;
           }
+          status.innerText = "Response applied.";
           closeExternalAgent();
         } catch {
           error.innerText = "Could not apply response.";
+          applyButton.disabled = false;
+          applyButton.innerText = "Apply response";
+          status.innerText = "";
         }
       }
 
@@ -314,10 +334,10 @@
           const sessionMatch = window.location.pathname.match(/^\/sources\/([^/]+)\/session$/);
           if (!match && !sessionMatch) return;
           const sourceId = decodeURIComponent((match || sessionMatch)[1]);
-          const finishedStatuses = new Set(["completed", "completed_with_warnings", "failed"]);
+          const finishedStatuses = new Set(["completed", "completed_with_warnings", "failed", "blocked"]);
           items.forEach((item) => {
             const status = String(item.status || "").toLowerCase();
-            const refreshableKind = match ? item.kind === "index" : item.kind === "session";
+            const refreshableKind = match ? ["index", "auto_setup"].includes(item.kind) : item.kind === "session";
             if (!item.task_id || !refreshableKind || item.source_id !== sourceId || !finishedStatuses.has(status)) {
               return;
             }
@@ -596,7 +616,7 @@
         const data = await response.json();
         document.getElementById("ai-spinner").classList.remove("active");
         if (!data.ok) {
-          document.getElementById("ai-error").innerText = data.error || "Could not prepare external-agent prompt.";
+          document.getElementById("ai-error").innerText = data.error || "Could not prepare AI prompt.";
           document.getElementById("ai-generated-prompt").value = data.prompt || "";
           return;
         }
@@ -710,7 +730,7 @@
     <div class="modal-backdrop" id="external-agent-modal">
       <div class="modal small-modal">
         <div class="row">
-          <h2 id="external-agent-title" style="margin-right:auto;">External agent</h2>
+          <h2 id="external-agent-title" style="margin-right:auto;">Another AI</h2>
           <button class="light" type="button" onclick="closeExternalAgent()">Close</button>
         </div>
         <p id="external-agent-instructions" class="muted"></p>
@@ -721,10 +741,11 @@
           <span id="external-agent-status" class="muted"></span>
         </div>
         <div id="external-agent-response-panel">
-          <label>External agent response</label>
+          <label>AI response</label>
           <textarea id="external-agent-response" placeholder="Paste the response here."></textarea>
         </div>
         <p id="external-agent-error" class="muted"></p>
+        <p id="external-agent-success" class="muted"></p>
         <div class="row">
           <button id="external-agent-apply-button" type="button" onclick="submitExternalAgentResponse()">Apply response</button>
           <button class="secondary" type="button" onclick="closeExternalAgent()">Cancel</button>

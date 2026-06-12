@@ -110,6 +110,13 @@
   const sourceTestPageParams = new URLSearchParams(window.location.search);
   const shouldStartImmediately = sourceTestPageParams.get("start") === "1";
 
+  function consumeImmediateStartFlag() {
+    if (!shouldStartImmediately || !window.history || !window.history.replaceState) return;
+    sourceTestPageParams.delete("start");
+    const query = sourceTestPageParams.toString();
+    window.history.replaceState(null, "", `${window.location.pathname}${query ? `?${query}` : ""}`);
+  }
+
   function setStep(index, className) {
     const steps = [...document.querySelectorAll("#source-test-steps li")];
     steps.forEach((step, stepIndex) => {
@@ -572,6 +579,7 @@
       return;
     }
     if (shouldStartImmediately) {
+      consumeImmediateStartFlag();
       runSourceTest();
       return;
     }

@@ -31,8 +31,8 @@
   {% endif %}
   <div class="action-row run-actions">
     <a class="button" href="#proposed-jobs">Review picks</a>
-    <a class="button light" href="/jobs?run_id={{ run.run_id }}&dedupe=0">View all jobs from this run</a>
-    <a class="button light" href="/jobs?date_from={{ run.started_at[:10] }}&date_to={{ run.started_at[:10] }}">View jobs from this day</a>
+    <a class="button light" href="{{ all_run_jobs_url }}">View all jobs from this run</a>
+    <a class="button light" href="{{ day_jobs_url }}">View jobs from this day</a>
     {% if run.digest_path %}<a class="button light" href="/runs/{{ run.run_id }}/log">Open log</a>{% endif %}
     {% if run_overview.materials_missing %}<a class="button light" href="#proposed-jobs">Review missing materials</a>{% endif %}
     <a class="button light" href="#activity-log" onclick="document.getElementById('activity-log').open = true">Show activity log</a>
@@ -189,7 +189,11 @@
   {% endif %}
   <form id="batch-generate-form" method="post" action="/api/jobs/batch-generate" class="row">
     <input type="hidden" name="return_to" value="/runs/{{ run.run_id }}">
+    {% if llm_configured %}
     <label class="check"><input type="checkbox" name="use_llm"> Use Claude</label>
+    {% else %}
+    <label class="check"><input type="checkbox" disabled> Claude not connected</label>
+    {% endif %}
     <button type="submit">Generate materials for selected</button>
   </form>
   <div class="triage-list" id="triage-list">

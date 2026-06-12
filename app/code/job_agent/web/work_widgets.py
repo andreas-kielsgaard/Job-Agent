@@ -26,6 +26,8 @@ class WorkStatusWidgetHandler:
                 *self._daily_run_widgets(snapshot.get("active_run")),
                 *self._source_index_widgets(snapshot.get("index_tasks") or []),
                 *self._source_session_widgets(snapshot.get("session_tasks") or []),
+                *self._source_auto_setup_widgets(snapshot.get("auto_setup_tasks") or []),
+                *self._source_auto_setup_widgets(snapshot.get("persisted_auto_setup_tasks") or []),
                 *self._profile_widgets(profile_tasks),
                 *self._profile_widgets(snapshot.get("persisted_profile_tasks") or []),
             ]
@@ -73,6 +75,9 @@ class WorkStatusWidgetHandler:
         return list(tasks)
 
     def _source_session_widgets(self, tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return list(tasks)
+
+    def _source_auto_setup_widgets(self, tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
         return list(tasks)
 
     def _profile_widgets(self, tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:

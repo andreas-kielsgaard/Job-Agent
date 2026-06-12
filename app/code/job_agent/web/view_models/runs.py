@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlencode
 
 from job_agent.config import ROOT
+from job_agent.llm import LlmService
 from job_agent.run_store import RunStore
 from job_agent.services.package_index_service import PackageIndexService
 from job_agent.token_usage import TokenUsageStore
@@ -95,6 +97,15 @@ def build_run_detail_view(
         "source_progress": source_progress["items"],
         "source_progress_summary": source_progress["summary"],
         "token_records": TokenUsageStore(root).list_for_run(run_id),
+        "llm_configured": LlmService(root).is_configured(),
+        "all_run_jobs_url": _jobs_url({"run_id": run_id, "dedupe": "0"}),
+        "day_jobs_url": _jobs_url(
+            {
+                "date_from": record.started_at[:10],
+                "date_to": record.started_at[:10],
+                "dedupe": "0",
+            }
+        ),
         "filters": {
             "category": category,
             "app_status": app_status,
@@ -105,6 +116,21 @@ def build_run_detail_view(
             "match_group": match_group,
         },
     }
+
+
+def _jobs_url(params: dict[str, str]) -> str:
+    pairs: list[tuple[str, str]] = [
+        *params.items(),
+        ("category_include", "strong"),
+        ("category_include", "exploratory"),
+        ("category_include", "weak"),
+        ("category_include", "excluded"),
+        ("category_include", "not_scored"),
+        ("posting_status_include", "active"),
+        ("posting_status_include", "no_longer_posted"),
+        ("posting_status_include", "unknown"),
+    ]
+    return f"/jobs?{urlencode(pairs)}"
 
 
 def build_run_overview(
@@ -280,9 +306,9 @@ def build_option_summary(options: dict[str, Any]) -> list[str]:
     else:
         labels.append("Materials generated after review")
     if options.get("use_llm"):
-        labels.append("Claude writing enabled")
+        labels.append("Claude writing requested")
     if options.get("ai_enhanced_search"):
-        labels.append("AI-assisted scoring enabled")
+        labels.append("AI-assisted scoring requested")
     if options.get("mark_seen"):
         labels.append("Marks reviewed jobs as seen")
     detail_limit = options.get("detail_extraction_limit", 25)

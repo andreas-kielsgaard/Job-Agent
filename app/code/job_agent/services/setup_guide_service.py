@@ -4,12 +4,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from dotenv import dotenv_values
-
 from job_agent.config import ROOT
+from job_agent.env import load_env
 from job_agent.io.json_store import read_json, write_json
 from job_agent.io.yaml_store import read_yaml
-from job_agent.paths import env_file, output_dir, profile_dir, sources_dir
+from job_agent.paths import output_dir, profile_dir, sources_dir
 from job_agent.profile_contract import build_profile_contract
 from job_agent.services.cv_reference_service import CvReferenceService
 
@@ -162,7 +161,7 @@ class SetupGuideService:
         write_json(self.path, state)
 
     def _observed_state(self) -> dict[str, dict[str, Any]]:
-        env = dotenv_values(env_file(self.root))
+        env = load_env(self.root)
         cv_reference = CvReferenceService(self.root).get_cv_reference()
         profile_contract = build_profile_contract(self.root, cv_reference)
         profile_observed = self._profile_observed(profile_contract)
@@ -231,23 +230,35 @@ class SetupGuideService:
             and bool(source.get("enabled"))
             and bool(source.get("recipe_path") or source.get("url"))
         ]
-        enabled_count = len(enabled_execution) or len(enabled_registry_sources)
         readiness = read_yaml(source_root / "source-execution-readiness.yaml", {"sources": {}})
         readiness_sources = readiness.get("sources", {}) if isinstance(readiness, dict) else {}
+        ready_source_ids = {
+            str(source_id)
+            for source_id, source in readiness_sources.items()
+            if isinstance(source, dict) and source.get("readiness_status") == "ready"
+        }
         ready_count = sum(
             1
             for source in readiness_sources.values()
             if isinstance(source, dict) and source.get("readiness_status") == "ready"
         )
-        if enabled_count:
-            detail = f"{enabled_count} daily-run source(s) enabled."
-        elif registry_sources:
-            detail = "Sources exist, but none are enabled for daily runs yet."
+        enabled_ready_count = sum(
+            1
+            for source in enabled_execution
+            if str(source.get("source_id") or "").strip() in ready_source_ids
+            or str(source.get("type") or "").strip() in {"local_yaml", "manual"}
+        )
+        if enabled_ready_count:
+            detail = f"{enabled_ready_count} tested daily-run source(s) ready."
+        elif enabled_execution:
+            detail = "Daily-run sources exist, but none have passed safe testing yet."
+        elif ready_count:
+            detail = f"{ready_count} source test(s) ready; include a source in the daily run."
+        elif registry_sources or enabled_registry_sources:
+            detail = "Sources exist, but none are tested and included in the daily run yet."
         else:
             detail = "No sources configured yet."
-        if ready_count:
-            detail += f" {ready_count} source test(s) ready."
-        return {"complete": enabled_count > 0, "detail": detail}
+        return {"complete": enabled_ready_count > 0, "detail": detail}
 
     def _run_observed(self) -> dict[str, Any]:
         runs = read_json(output_dir(self.root) / "runs" / "runs.json", [])

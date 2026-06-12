@@ -11,13 +11,31 @@
   <p>Source: <a href="{{ package.source_url }}">{{ package.source_url }}</a></p>
   <p>Application: <a href="{{ package.application_url }}">{{ package.application_url }}</a></p>
   {% if cv_reference %}
-  <p><strong>Reference CV for upload:</strong> <a href="{{ cv_reference.url }}">{{ cv_reference.filename }}</a><br><span class="muted">{{ cv_reference.path }}</span></p>
+  <p><strong>Reference CV:</strong> <a href="{{ cv_reference.url }}">{{ cv_reference.filename }}</a><br><span class="muted">Stored locally for your own review.</span></p>
   {% else %}
   <p class="muted">No full reference CV uploaded yet. Add one in Profile if you want easy access here.</p>
   {% endif %}
   <p><strong>Recommended angle:</strong> {{ package.recommended_angle }}</p>
   {% if package.concerns %}
   <p><strong>Concerns:</strong> {{ package.concerns | join("; ") }}</p>
+  {% endif %}
+  {% if score_details.components or score_details.reasons or score_details.missing_information %}
+  <div class="score-detail-block">
+    <h2>Why this score?</h2>
+    {% if score_details.components %}
+    <div class="component-list">
+      {% for component in score_details.components %}
+      <span class="badge {{ component.tone }}">{{ component.label }} {{ "%+d"|format(component.value) if component.value is number else component.value }}</span>
+      {% endfor %}
+    </div>
+    {% endif %}
+    {% if score_details.reasons %}
+    <p><strong>Signals:</strong> {{ score_details.reasons | join("; ") }}</p>
+    {% endif %}
+    {% if score_details.missing_information %}
+    <p><strong>Missing information:</strong> {{ score_details.missing_information | join("; ") }}</p>
+    {% endif %}
+  </div>
   {% endif %}
   <div class="row">
     <span class="badge {{ package.material_status }}">{{ "materials generated" if package.material_status == "generated" else "materials missing" }}</span>
@@ -27,24 +45,28 @@
         class="light"
         type="button"
         onclick="openExternalAgent(this)"
-        data-title="External review bundle"
+        data-title="Review bundle in another AI"
         data-prepare-url="/api/jobs/{{ package.stable_id }}/review-bundle/external-agent/prepare"
       >Review bundle</button>
     </form>
     <form method="post" action="/api/jobs/{{ package.stable_id }}/generate">
       <input type="hidden" name="return_to" value="/jobs/{{ package.stable_id }}">
       <input type="hidden" name="run_id" value="{{ package.run_id }}">
+      {% if llm_configured %}
       <label class="check"><input type="checkbox" name="use_llm"> Use Claude</label>
+      {% else %}
+      <label class="check"><input type="checkbox" disabled> Claude not connected</label>
+      {% endif %}
       <button type="submit">{{ "Regenerate materials" if package.material_status == "generated" else "Generate materials" }}</button>
       <button
         class="light"
         type="button"
         onclick="openExternalAgent(this)"
-        data-title="Draft application externally"
+        data-title="Draft application in another AI"
         data-prepare-url="/api/jobs/{{ package.stable_id }}/application/external-agent/prepare"
         data-apply-url="/api/jobs/{{ package.stable_id }}/application/external-agent/apply"
         data-success-url="/jobs/{{ package.stable_id }}"
-      >Use external agent</button>
+      >Use another AI</button>
     </form>
   </div>
 </div>

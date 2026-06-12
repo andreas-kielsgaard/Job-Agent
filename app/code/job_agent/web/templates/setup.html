@@ -176,11 +176,11 @@
               class="light"
               type="button"
               onclick="openExternalAgent(this)"
-              data-title="Draft profile externally"
+              data-title="Draft profile in another AI"
               data-prepare-url="/setup/cv-reference/external-agent/prepare"
               data-apply-url="/setup/cv-reference/external-agent/apply"
               data-success-url="/setup#cv-profile-draft"
-            >Use external agent</button>
+            >Use another AI</button>
           </div>
         </form>
         {% endif %}
@@ -246,11 +246,11 @@
     <input type="hidden" name="draft_id" value="{{ cv_profile_draft.id }}">
     <textarea class="hidden" name="draft_json">{{ cv_profile_draft.json | e }}</textarea>
     <div class="grid">
-      {% if "canonical_cv" in cv_profile_draft.targets %}<label class="check"><input type="checkbox" name="configure_canonical_cv" checked> Apply CV narrative</label>{% endif %}
-      {% if "skills" in cv_profile_draft.targets %}<label class="check"><input type="checkbox" name="configure_skills" checked> Apply skill matrix and caveats</label>{% endif %}
-      {% if "experience" in cv_profile_draft.targets %}<label class="check"><input type="checkbox" name="configure_experience" checked> Apply case studies</label>{% endif %}
-      {% if "preferences" in cv_profile_draft.targets %}<label class="check"><input type="checkbox" name="configure_preferences" checked> Apply availability and constraints</label>{% endif %}
-      {% if "match_engine" in cv_profile_draft.targets %}<label class="check"><input type="checkbox" name="configure_match_engine" checked> Apply matchmaking settings</label>{% endif %}
+      {% if "canonical_cv" in cv_profile_draft.targets %}<label class="check"><input type="checkbox" name="configure_canonical_cv" {% if "canonical_cv" in cv_profile_draft_ready_targets %}checked{% endif %}> Apply CV narrative</label>{% endif %}
+      {% if "skills" in cv_profile_draft.targets %}<label class="check"><input type="checkbox" name="configure_skills" {% if "skills" in cv_profile_draft_ready_targets %}checked{% endif %}> Apply skill matrix and caveats</label>{% endif %}
+      {% if "experience" in cv_profile_draft.targets %}<label class="check"><input type="checkbox" name="configure_experience" {% if "experience" in cv_profile_draft_ready_targets %}checked{% endif %}> Apply case studies</label>{% endif %}
+      {% if "preferences" in cv_profile_draft.targets %}<label class="check"><input type="checkbox" name="configure_preferences" {% if "preferences" in cv_profile_draft_ready_targets %}checked{% endif %}> Apply availability and constraints</label>{% endif %}
+      {% if "match_engine" in cv_profile_draft.targets %}<label class="check"><input type="checkbox" name="configure_match_engine" {% if "match_engine" in cv_profile_draft_ready_targets %}checked{% endif %}> Apply matchmaking settings</label>{% endif %}
     </div>
     <div class="action-row">
       <button type="submit">Apply selected draft sections</button>

@@ -5,11 +5,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
-from dotenv import dotenv_values
-
 from job_agent.config import ROOT
+from job_agent.env import load_env
 from job_agent.llm.catalog import DEFAULT_LLM_PROVIDER, default_model, model_candidates, model_options, normalize_model
-from job_agent.paths import env_file
 from job_agent.token_usage import TokenUsageStore, token_record_from_anthropic_response
 
 
@@ -49,7 +47,7 @@ class LlmConfig:
     def value(self, key: str, default: str = "") -> str:
         # The local setup page writes .env while the web app is already running, so .env is read fresh for each
         # call and intentionally wins over process env. Process env remains a fallback for CLI/automation usage.
-        env_file_values = dotenv_values(env_file(self.root))
+        env_file_values = load_env(self.root)
         value = env_file_values.get(key)
         if value:
             return str(value)

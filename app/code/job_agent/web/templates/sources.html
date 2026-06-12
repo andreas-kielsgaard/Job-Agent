@@ -6,7 +6,10 @@
     <h1>Sources</h1>
     <p class="muted">Sources are job boards or recruiter pages you want the app to check. New sources stay out of the daily run until their reading plan and safe source test pass.</p>
   </div>
-  <a class="button" href="/sources/new">Add source</a>
+  <div class="source-header-actions">
+    <a class="button light" href="/sources/suggest">Suggest sources</a>
+    <a class="button" href="/sources/new">Add source</a>
+  </div>
 </div>
 {% if message %}
 <div class="panel"><span class="badge high">{{ message }}</span></div>

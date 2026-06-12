@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -535,7 +535,7 @@ def _recipe_changed_after_source_test(root: Path, recipe_path: str, last_checked
     if checked_at.tzinfo is None:
         checked_at = checked_at.replace(tzinfo=UTC)
     modified_at = datetime.fromtimestamp(path.stat().st_mtime, UTC)
-    return modified_at > checked_at
+    return modified_at > checked_at + timedelta(seconds=1)
 
 
 def _source_session_status(root: Path, source) -> tuple[bool, Any | None]:

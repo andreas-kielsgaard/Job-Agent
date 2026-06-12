@@ -431,6 +431,19 @@ def test_recipe_extracts_optional_location_rate_and_date_fields() -> None:
     assert jobs[0].posted_date == "2026-05-07"
 
 
+def test_recipe_does_not_treat_bare_job_id_as_rate() -> None:
+    html = """
+    <article class="job-card">
+      <h2><a class="job-link" href="/jobs/sap-abap-34770">SAP ABAP Consultant 34770</a></h2>
+      <span class="rate">34770</span>
+      <p class="summary">ABAP RAP CDS OData Gateway contract with delivery scope.</p>
+    </article>
+    """
+    jobs = extract_jobs_with_recipe(html, "https://example.com", _recipe())
+
+    assert jobs[0].rate == "Not listed"
+
+
 def test_detail_follow_false_does_not_fetch_detail_pages(monkeypatch: pytest.MonkeyPatch) -> None:
     calls = []
     jobs = extract_jobs_with_recipe(HTML, "https://example.com", _recipe())
