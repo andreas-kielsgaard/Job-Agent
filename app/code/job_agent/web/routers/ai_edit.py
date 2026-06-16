@@ -27,6 +27,7 @@ async def ai_edit_generate(request: Request) -> JSONResponse:
         disabled_blocks=data.get("disabled_blocks", []),
         job_id=data.get("job_id", ""),
         run_id=data.get("run_id", ""),
+        llm_model=data.get("llm_model", ""),
     )
     try:
         mode = str(data.get("mode") or "claude")

@@ -29,6 +29,11 @@ class RunOptions:
     is_test: bool = False
     detail_extraction_limit: int | None = 25
     append_to_daily_run: bool = False
+    llm_model: str = ""
+    full_source_ingestion: bool = False
+    include_disabled_sources: bool = False
+    detail_pause_every_jobs: int = 0
+    detail_pause_seconds: float = 0.0
 
 
 @dataclass

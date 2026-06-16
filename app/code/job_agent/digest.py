@@ -8,7 +8,7 @@ from pathlib import Path
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from .config import ROOT
-from .io.atomic import atomic_write_text
+from .io.atomic import atomic_write_bytes, atomic_write_text
 from .io.json_store import write_json
 from .models import GeneratedPackage, Job, MatchResult, SourceWarning
 from .paths import output_dir, templates_dir
@@ -35,7 +35,12 @@ def write_job_package(
 
     paths = {
         "job": base / "job.json",
+        "posting_snapshot": base / "posting-snapshot.md",
         "cv": base / "cv-at-a-glance.md",
+        "focused_cv": base / "cv-one-page.md",
+        "focused_cv_html": base / "cv-one-page.html",
+        "focused_cv_tex": base / "cv-one-page.tex",
+        "focused_cv_pdf": base / "cv-one-page.pdf",
         "application": base / "application.md",
         "form_answers": base / "form-answers.md",
         "match_analysis": base / "match-analysis.md",
@@ -44,13 +49,21 @@ def write_job_package(
     }
 
     write_json(paths["job"], asdict(job))
+    atomic_write_text(paths["posting_snapshot"], _posting_snapshot(job, match, run_date), encoding="utf-8")
     write_json(paths["match"], asdict(match))
     atomic_write_text(paths["cv"], package.cv, encoding="utf-8")
+    atomic_write_text(paths["focused_cv"], package.focused_cv, encoding="utf-8")
+    atomic_write_text(paths["focused_cv_html"], package.focused_cv_html, encoding="utf-8")
+    atomic_write_text(paths["focused_cv_tex"], package.focused_cv_tex, encoding="utf-8")
+    if package.focused_cv_pdf:
+        atomic_write_bytes(paths["focused_cv_pdf"], package.focused_cv_pdf)
+    else:
+        paths["focused_cv_pdf"].unlink(missing_ok=True)
     atomic_write_text(paths["application"], package.application, encoding="utf-8")
     atomic_write_text(paths["match_analysis"], package.match_analysis, encoding="utf-8")
     atomic_write_text(
         paths["form_answers"],
-        package.form_answers.replace("[generated alongside this form-answer file]", str(paths["cv"])),
+        package.form_answers.replace("[generated alongside this form-answer file]", str(paths["focused_cv_pdf"])),
         encoding="utf-8",
     )
     write_json(
@@ -93,7 +106,12 @@ def write_placeholder_job_package(
 
     paths = {
         "job": base / "job.json",
+        "posting_snapshot": base / "posting-snapshot.md",
         "cv": base / "cv-at-a-glance.md",
+        "focused_cv": base / "cv-one-page.md",
+        "focused_cv_html": base / "cv-one-page.html",
+        "focused_cv_tex": base / "cv-one-page.tex",
+        "focused_cv_pdf": base / "cv-one-page.pdf",
         "application": base / "application.md",
         "form_answers": base / "form-answers.md",
         "match_analysis": base / "match-analysis.md",
@@ -101,6 +119,7 @@ def write_placeholder_job_package(
         "index": base / "index.json",
     }
     write_json(paths["job"], asdict(job))
+    atomic_write_text(paths["posting_snapshot"], _posting_snapshot(job, match, run_date), encoding="utf-8")
     write_json(paths["match"], asdict(match))
     write_json(
         paths["index"],
@@ -154,6 +173,51 @@ def slugify(value: str) -> str:
     value = value.lower()
     value = re.sub(r"[^a-z0-9]+", "-", value)
     return value.strip("-")[:80] or "job"
+
+
+def _posting_snapshot(job: Job, match: MatchResult, run_date: date) -> str:
+    lines = [
+        f"# Saved Posting Snapshot - {job.title}",
+        "",
+        "This is the local posting snapshot saved when the job package was created. "
+        "Use it if the external posting changes or disappears.",
+        "",
+        "## Snapshot Metadata",
+        f"- Snapshot date: {run_date.isoformat()}",
+        f"- Source: {_snapshot_value(job.source)}",
+        f"- Source ID: {_snapshot_value(job.source_id)}",
+        f"- External posting URL: {_snapshot_value(job.url)}",
+        f"- Application URL: {_snapshot_value(job.application_url)}",
+        f"- Match at capture: {match.total_score}% {match.category}",
+        "",
+        "## Posting Facts",
+        f"- Company: {_snapshot_value(job.company)}",
+        f"- Recruiter: {_snapshot_value(job.recruiter)}",
+        f"- End client: {_snapshot_value(job.end_client)}",
+        f"- Location: {_snapshot_value(job.location)}",
+        f"- Remote/onsite: {_snapshot_value(job.remote)}",
+        f"- Rate: {_snapshot_value(job.rate)}",
+        f"- Workload: {_snapshot_value(job.workload)}",
+        f"- Contract duration: {_snapshot_value(job.contract_duration)}",
+        f"- Start date: {_snapshot_value(job.start_date)}",
+        f"- Posted date: {_snapshot_value(job.posted_date)}",
+        f"- Deadline: {_snapshot_value(job.deadline)}",
+        f"- Languages: {_snapshot_value(', '.join(job.languages))}",
+        "",
+        "## Extracted Description",
+        _snapshot_value(job.description),
+        "",
+    ]
+    if job.raw_text and job.raw_text.strip() != job.description.strip():
+        lines.extend(["## Raw Extracted Text", job.raw_text.strip(), ""])
+    if job.extraction_notes:
+        lines.extend(["## Extraction Notes", *[f"- {note}" for note in job.extraction_notes], ""])
+    return "\n".join(lines).strip() + "\n"
+
+
+def _snapshot_value(value: object) -> str:
+    text = str(value or "").strip()
+    return text or "Not listed"
 
 
 def _env(root: Path) -> Environment:

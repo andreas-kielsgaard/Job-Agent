@@ -8,6 +8,7 @@ from urllib.parse import urlparse
 
 import yaml
 
+from job_agent.paths import resolve_project_path
 from job_agent.services.recipes.models import (
     VALID_API_METHODS,
     VALID_API_PAGINATION_STRATEGIES,
@@ -35,6 +36,14 @@ def load_job_board_recipe(path: Path) -> JobBoardRecipe:
     if not isinstance(data, dict):
         raise ValueError(f"Recipe {path} must be a YAML mapping.")
     return job_board_recipe_from_mapping(data, label=str(path))
+
+
+def load_project_job_board_recipe(root: Path, path: str | Path) -> JobBoardRecipe:
+    resolved_path = resolve_project_path(root, path)
+    try:
+        return load_job_board_recipe(resolved_path)
+    except FileNotFoundError as exc:
+        raise ValueError(f"Recipe file not found: {path} (resolved to {resolved_path})") from exc
 
 
 def job_board_recipe_from_mapping(data: dict[str, Any], label: str = "recipe") -> JobBoardRecipe:

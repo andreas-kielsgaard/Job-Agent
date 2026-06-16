@@ -13,8 +13,8 @@ from job_agent.run_store import RunEvent, RunOptions, RunStore
 from job_agent.services.cv_profile_draft_service import CvProfileDraftService
 
 _SOURCE_FIXTURE_TESTS = {
-    "test_configured_recipe_review_runs_source_test_workflow",
-    "test_configured_recipe_review_shows_latest_source_test_evidence",
+    "test_source_test_route_replaces_configured_recipe_review",
+    "test_source_detail_shows_latest_source_test_evidence_without_preview_route",
     "test_source_overview_and_detail_routes_render",
     "test_source_session_route_records_storage_state",
     "test_source_session_capture_route_starts_guided_browser_capture",
@@ -61,7 +61,6 @@ def test_app_creation_health_and_basic_routes_use_temp_root(client: TestClient, 
         "/match-sandbox",
         "/postings/new",
         "/compatibility",
-        "/recipe-preview",
         "/sources",
     ]:
         assert client.get(path).status_code == 200
@@ -70,6 +69,7 @@ def test_app_creation_health_and_basic_routes_use_temp_root(client: TestClient, 
     dashboard = client.get("/").text
     assert 'id="work-status-dock"' in dashboard
     assert "Claude not connected for material generation" in dashboard
+    assert "Ingest all ready sources" in dashboard
     assert 'name="use_llm"' not in dashboard
     material_checkbox = re.search(r'<input[^>]+name="generate_materials_option"[^>]*>', dashboard)
     assert material_checkbox
@@ -93,7 +93,6 @@ def test_browser_tab_titles_describe_current_page(client: TestClient, project_ro
         ("/sources/eursap-jobs", "Source - Eursap Jobs"),
         ("/sources/eursap-jobs/session", "Source Session - Eursap Jobs"),
         ("/sources/eursap-jobs/test-run", "Source Test - Eursap Jobs"),
-        ("/recipe-preview?source_mode=configured&selected_source_id=eursap-jobs", "Recipe Preview - Eursap Jobs"),
         ("/compatibility?source_mode=configured&selected_source_id=eursap-jobs", "Compatibility - Eursap Jobs"),
         ("/postings/new", "Add Posting"),
     ]
@@ -269,6 +268,32 @@ def test_setup_routes_write_to_temp_root_and_validate_inputs(client: TestClient,
     )
     assert policy_response.status_code == 303
     assert "ai_review_policy" in (project_root / "profile" / "preferences.yaml").read_text(encoding="utf-8")
+
+    (project_root / ".env").write_text(
+        "CANVA_CLIENT_ID=canva-client\nCANVA_CLIENT_SECRET=canva-secret\n",
+        encoding="utf-8",
+    )
+    canva_start = client.post("/connectors/canva/start", follow_redirects=False)
+    assert canva_start.status_code == 303
+    assert canva_start.headers["location"].startswith("https://www.canva.com/api/oauth/authorize?")
+    assert "client_id=canva-client" in canva_start.headers["location"]
+    connectors_yaml = (project_root / "connectors.yaml").read_text(encoding="utf-8")
+    assert "pending_oauth" in connectors_yaml
+    assert "code_verifier" in connectors_yaml
+
+    connector_response = client.post(
+        "/setup/connectors",
+        data={
+            "email_enabled": "on",
+            "email_provider": "gmail",
+            "email_mode": "draft_only",
+        },
+        follow_redirects=False,
+    )
+    assert connector_response.status_code == 303
+    connectors_yaml = (project_root / "connectors.yaml").read_text(encoding="utf-8")
+    assert "pending_oauth" in connectors_yaml
+    assert "sending_enabled: false" in connectors_yaml
 
     writing_response = client.post(
         "/setup/writing-reference",
@@ -509,7 +534,7 @@ def test_batch_generate_route_redirects_with_counts(monkeypatch: pytest.MonkeyPa
         failed = 1
 
     class FakeMaterialService:
-        def generate_many(self, job_ids, use_llm):
+        def generate_many(self, job_ids, use_llm, llm_model=""):
             assert job_ids == ["stable-1", "stable-2", "missing"]
             assert use_llm is True
             return FakeResult()
@@ -646,152 +671,25 @@ def test_compatibility_route_renders_report(monkeypatch: pytest.MonkeyPatch, cli
     assert "Generic baseline (initial HTML)" in response.text
 
 
-def test_recipe_preview_route_renders_preview(monkeypatch: pytest.MonkeyPatch, client: TestClient) -> None:
-    from job_agent.services.recipe_preview_service import PreviewJob, PreviewRunStep, RecipePreviewResult
+def test_recipe_preview_route_is_removed(client: TestClient) -> None:
+    assert client.get("/recipe-preview").status_code == 404
+    assert client.post("/recipe-preview", data={}).status_code == 404
 
-    def fake_preview(recipe_path, input_value, base_url, rendered, static, detail_input_value, root):
-        assert recipe_path == "sources/recipes/experimental/eursap-jobs.yaml"
-        assert input_value == "https://eursap.eu/jobs"
-        assert base_url == ""
-        assert rendered is False
-        assert static is False
-        assert detail_input_value == ""
-        return RecipePreviewResult(
-            recipe_source_name="Eursap Jobs (experimental)",
-            recipe_path=recipe_path,
-            recipe_status="experimental",
-            input_type="public URL",
-            input_value=input_value,
-            base_url=base_url,
-            mode_used="local_fixture_html",
-            extracted_job_count=1,
-            useful_titles=1,
-            generic_labels=0,
-            unique_urls=1,
-            average_description_length=120,
-            jobs=[
-                PreviewJob(
-                    title="SAP Basis Consultant",
-                    url="https://eursap.eu/jobs/sap-basis-consultant-34235-remote",
-                    location="Remote Work",
-                    remote="Not listed",
-                    rate="Market Rate",
-                    workload="Contract",
-                    posted_date="Not listed",
-                    start_date="Sep 01, 2026",
-                    languages=["English"],
-                    description_preview="SAP Basis role preview.",
-                    extraction_notes=["Recipe extracted job ID: 34235"],
-                )
-            ],
-            warnings=[],
-            run_steps=[
-                PreviewRunStep(
-                    phase="Listing selectors applied",
-                    status="completed",
-                    detail="Extracted 1 jobs from the configured recipe.",
-                )
-            ],
-        )
 
-    monkeypatch.setattr("job_agent.web.routers.recipe_preview.preview_recipe", fake_preview)
-
-    response = client.post(
-        "/recipe-preview",
-        data={
-            "recipe_path": "sources/recipes/experimental/eursap-jobs.yaml",
-            "input_path_or_url": "https://eursap.eu/jobs",
-            "source_mode": "custom",
-        },
-        follow_redirects=False,
-    )
+def test_source_test_route_replaces_configured_recipe_review(client: TestClient) -> None:
+    response = client.get("/sources/eursap-jobs/test-run")
 
     assert response.status_code == 200
-    assert "Eursap Jobs (experimental)" in response.text
-    assert "SAP Basis Consultant" in response.text
-    assert "Remote Work" in response.text
-    assert "Recipe extracted job ID: 34235" in response.text
-    assert "Run Trace" in response.text
-    assert "Extracted 1 jobs from the configured recipe." in response.text
+    assert "Test Source Safely" in response.text
+    assert "Run source test" in response.text
+    assert '<li class="active">Resolve configured source and selected recipe</li>' not in response.text
+    assert "<li>Resolve configured source and selected recipe</li>" in response.text
+    assert "execution-running" not in response.text
+    assert "Collect jobs from listing records/cards and pagination" in response.text
+    assert "What The Reading Plan Did" in response.text
 
 
-def test_configured_recipe_review_runs_source_test_workflow(
-    monkeypatch: pytest.MonkeyPatch,
-    client: TestClient,
-) -> None:
-    from types import SimpleNamespace
-
-    def fail_preview(*args, **kwargs):
-        raise AssertionError("configured source review should use the source-test workflow")
-
-    class FakeSourceWorkflow:
-        def __init__(self, root):
-            pass
-
-        def run_source_test(self, source_id):
-            assert source_id == "eursap-jobs"
-            return SimpleNamespace(
-                readiness=SimpleNamespace(readiness_status="ready"),
-                payload={
-                    "status": "success",
-                    "readiness_status": "ready",
-                    "readiness": {"last_checked_at": "2026-06-05T12:00:00+00:00"},
-                    "readiness_summary": "Ready: source test extracted 2 jobs and readiness checks passed.",
-                    "job_count": 2,
-                    "warning_count": 0,
-                    "warnings": [],
-                    "capability_checks": [
-                        {
-                            "capability": "listing_cards",
-                            "status": "pass",
-                            "expected": True,
-                            "observed": True,
-                            "detail": "2 jobs extracted from configured listing cards.",
-                        }
-                    ],
-                    "pagination_fetch_count": 1,
-                    "pagination_unique_jobs_from_fetched_pages": 1,
-                    "detail_fetch_count": 2,
-                    "detail_verified_listing_page_count": 2,
-                    "source_test_insight": {
-                        "title": "Source test passed",
-                        "summary": "The selected reading plan verified the source capabilities checked by this test.",
-                        "recommendation": "Review the result and include the source in the daily run when ready.",
-                        "action": {},
-                    },
-                    "jobs": [
-                        {
-                            "title": "SAP Basis Consultant",
-                            "url": "https://eursap.eu/jobs/sap-basis",
-                            "location": "Remote",
-                            "description_preview": "Detailed SAP Basis role.",
-                            "extraction_notes": ["Source test sample."],
-                        }
-                    ],
-                },
-            )
-
-    monkeypatch.setattr("job_agent.web.routers.recipe_preview.preview_recipe", fail_preview)
-    monkeypatch.setattr("job_agent.web.routers.recipe_preview.SourceWorkflowHandler", FakeSourceWorkflow)
-
-    response = client.post(
-        "/recipe-preview",
-        data={
-            "source_mode": "configured",
-            "selected_source_id": "eursap-jobs",
-            "recipe_path": "sources/recipes/experimental/eursap-jobs.yaml",
-        },
-        follow_redirects=False,
-    )
-
-    assert response.status_code == 200
-    assert "Source Test Review" in response.text
-    assert "Fresh source test" in response.text
-    assert "Capability Proof" in response.text
-    assert "SAP Basis Consultant" in response.text
-
-
-def test_configured_recipe_review_shows_latest_source_test_evidence(
+def test_source_detail_shows_latest_source_test_evidence_without_preview_route(
     client: TestClient,
     project_root: Path,
 ) -> None:
@@ -835,17 +733,12 @@ def test_configured_recipe_review_shows_latest_source_test_evidence(
         )
     )
 
-    response = client.get(
-        "/recipe-preview?source_mode=configured&selected_source_id=eursap-jobs"
-        "&recipe_path=sources/recipes/experimental/eursap-jobs.yaml"
-    )
+    response = client.get("/sources/eursap-jobs")
 
     assert response.status_code == 200
-    assert "Source Test Review" in response.text
-    assert "Latest source test" in response.text
-    assert "Source test passed" in response.text
-    assert "SAP Basis Consultant" in response.text
-    assert "Last Saved Review" not in response.text
+    assert "Source-test evidence" in response.text
+    assert "View source test" in response.text
+    assert "/recipe-preview" not in response.text
 
 
 def test_frontend_debug_state_records_browser_snapshots(client: TestClient, project_root: Path) -> None:
@@ -887,24 +780,33 @@ def test_source_overview_and_detail_routes_render(client: TestClient) -> None:
     assert 'class="source-card' in overview.text
     assert "/sources/new" in overview.text
     assert "/sources/suggest" in overview.text
-    assert "Daily-run sources" in overview.text
+    assert "Daily-run configured" in overview.text
     assert "Saved sources" in overview.text
-    assert "Implemented" in overview.text
+    assert "Will run now" in overview.text
     assert "Setup status" in overview.text
     assert "Indexing" in overview.text
     assert "Detail review" in overview.text
+    assert 'data-source-overview-dynamic' in overview.text
+    assert "/api/sources/overview" in overview.text
     assert "Manual Intake" in overview.text
     assert "Eursap Jobs" in overview.text
     assert "Whitehall Resources SAP Jobs" in overview.text
+    overview_payload = client.get("/api/sources/overview")
+
+    assert overview_payload.status_code == 200
+    overview_fragments = overview_payload.json()
+    assert 'class="source-list"' in overview_fragments["overview_html"]
+    assert "Eursap Jobs" in overview_fragments["overview_html"]
+    assert "prepare_all_html" in overview_fragments
 
     detail = client.get("/sources/eursap-jobs")
 
     assert detail.status_code == 200
     assert "Ready for a safe source test" in detail.text
-    assert "Review evidence" in detail.text
-    assert "Review found contents" in detail.text
+    assert "Source-test evidence" in detail.text
+    assert "Review found contents" not in detail.text
     assert "Safe source test" in detail.text
-    assert "Daily run" in detail.text
+    assert "Run eligibility" in detail.text
     assert "View all jobs from this source" in detail.text
     assert "Listing index" in detail.text
     assert "Initial ingestion" in detail.text
@@ -926,7 +828,7 @@ def test_source_overview_and_detail_routes_render(client: TestClient) -> None:
     assert "Generated plans" in detail.text
     assert "Historical Results" in detail.text
     assert "No jobs have been saved from this source yet" in detail.text
-    assert "/recipe-preview" in detail.text
+    assert "/recipe-preview" not in detail.text
     assert "auto_run=1" not in detail.text
     assert "selected_source_id=eursap-jobs" in detail.text
 
@@ -1060,6 +962,8 @@ def test_source_suggestions_copy_paste_flow_renders_save_forms(client: TestClien
     assert "Refresh prompt preview" in page.text
     assert "Use another AI" in page.text
     assert "Copy prompt" in page.text
+    assert "data-work-status-form" in page.text
+    assert "Disqualified domains" in page.text
     assert "SAP ABAP" in page.text
     assert "Prefer broad source URLs" in page.text
 
@@ -1087,6 +991,7 @@ def test_source_suggestions_copy_paste_flow_renders_save_forms(client: TestClien
     assert "Nordic SAP Contracts" in response.text
     assert "Open jobs, search SAP ABAP, then choose Contract." in response.text
     assert 'action="/sources/suggest/save"' in response.text
+    assert 'action="/sources/suggest/disqualify"' in response.text
     assert 'value="https://example.com/jobs?keyword=SAP"' in response.text
 
     saved = client.post(
@@ -1114,6 +1019,17 @@ def test_source_suggestions_copy_paste_flow_renders_save_forms(client: TestClien
     assert duplicate.status_code == 200
     duplicate_payload = duplicate.json()
     assert duplicate_payload["status"] == "already_added"
+
+    disqualified = client.post(
+        "/sources/suggest/save",
+        data={
+            "name": "Indeed",
+            "url": "https://www.indeed.com/jobs?q=sap",
+            "notes": "Filtered",
+        },
+    )
+    assert disqualified.status_code == 400
+    assert "disqualified" in disqualified.json()["error"]
 
     duplicate_page = client.post(
         "/sources/suggest/parse",
@@ -1335,14 +1251,7 @@ def test_source_routes_render_saved_health(client: TestClient, project_root: Pat
         "/compatibility?source_mode=configured&selected_source_id=eursap-jobs"
         "&recipe_path=sources/recipes/experimental/eursap-jobs.yaml&show_saved=1"
     )
-    preview = client.get(
-        "/recipe-preview?source_mode=configured&selected_source_id=eursap-jobs"
-        "&recipe_path=sources/recipes/experimental/eursap-jobs.yaml"
-    )
-    auto_preview = client.get(
-        "/recipe-preview?source_mode=configured&selected_source_id=eursap-jobs"
-        "&recipe_path=sources/recipes/experimental/eursap-jobs.yaml&auto_run=1"
-    )
+    source_test = client.get("/sources/eursap-jobs/test-run")
 
     assert overview.status_code == 200
     assert detail.status_code == 200
@@ -1352,13 +1261,8 @@ def test_source_routes_render_saved_health(client: TestClient, project_root: Pat
     assert compatibility.status_code == 200
     assert "Saved Source / Recipe Result" in compatibility.text
     assert "9 jobs extracted, 9 useful titles, no generic labels." in compatibility.text
-    assert preview.status_code == 200
-    assert "No Source-Test Review Yet" in preview.text
-    assert "Last Saved Review" not in preview.text
-    assert auto_preview.status_code == 200
-    assert "Running source test review" in auto_preview.text
-    assert "requestSubmit()" in auto_preview.text
-    assert 'searchParams.delete("auto_run")' in auto_preview.text
+    assert source_test.status_code == 200
+    assert "Test Source Safely" in source_test.text
 
 
 def test_source_detail_safe_test_panel_uses_session_cta_when_access_blocked(

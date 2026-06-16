@@ -25,6 +25,7 @@ class AiEditRequest:
     disabled_blocks: list[str]
     job_id: str = ""
     run_id: str = ""
+    llm_model: str = ""
 
 
 class AiEditService:
@@ -58,6 +59,7 @@ class AiEditService:
             purpose="ai_edit",
             run_id=request.run_id,
             associated_job_id=request.job_id,
+            model=request.llm_model,
         )
         return {"revised_text": completion.text, "prompt": prompt, "model": completion.model}
 

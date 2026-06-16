@@ -20,6 +20,7 @@ from .package_index_service import PackageIndexService
 @dataclass
 class MaterialUpdate:
     cv: str = ""
+    focused_cv: str = ""
     application: str = ""
     form_answers: str = ""
     match_analysis: str = ""
@@ -44,23 +45,38 @@ class MaterialService:
         self.root = root
         self.packages = PackageIndexService(root)
 
-    def save_job_materials(self, job_id: str, materials: MaterialUpdate) -> None:
-        package = self.packages.find_package(job_id)
+    def save_job_materials(
+        self,
+        job_id: str,
+        materials: MaterialUpdate,
+        run_id: str = "",
+        fields: set[str] | None = None,
+    ) -> None:
+        package = self.packages.find_package(job_id, run_id)
         if not package:
             raise KeyError(f"Job package not found: {job_id}")
         updates = {
             "cv": materials.cv,
+            "focused_cv": materials.focused_cv,
             "application": materials.application,
             "form_answers": materials.form_answers,
             "match_analysis": materials.match_analysis,
         }
         for key, content in updates.items():
+            if fields is not None and key not in fields:
+                continue
             path_text = package.get("paths", {}).get(key)
             if path_text:
                 atomic_write_text(Path(path_text), content, encoding="utf-8")
         self.packages.mark_package_materials_generated(package, True)
 
-    def generate_job_materials(self, job_id: str, use_llm: bool, run_id: str = "") -> dict[str, Any]:
+    def generate_job_materials(
+        self,
+        job_id: str,
+        use_llm: bool,
+        run_id: str = "",
+        llm_model: str = "",
+    ) -> dict[str, Any]:
         package = self.packages.find_package(job_id, run_id)
         if not package:
             raise KeyError(f"Job package not found: {job_id}")
@@ -79,6 +95,7 @@ class MaterialService:
             root=self.root,
             run_id=package.get("run_id", ""),
             stable_id=package.get("stable_id", ""),
+            llm_model=llm_model,
         )
         paths = write_job_package(
             job,
@@ -169,11 +186,16 @@ class MaterialService:
         write_json(Path(paths["index"]), refreshed)
         return refreshed
 
-    def generate_many(self, job_ids: list[str], use_llm: bool) -> BatchMaterialGenerationResult:
+    def generate_many(
+        self,
+        job_ids: list[str],
+        use_llm: bool,
+        llm_model: str = "",
+    ) -> BatchMaterialGenerationResult:
         result = BatchMaterialGenerationResult(total=len(job_ids))
         for job_id in job_ids:
             try:
-                self.generate_job_materials(job_id, use_llm)
+                self.generate_job_materials(job_id, use_llm, llm_model=llm_model)
                 result.succeeded += 1
             except Exception as exc:
                 result.failed += 1

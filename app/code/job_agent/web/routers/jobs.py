@@ -1,12 +1,15 @@
 from __future__ import annotations
 
-from urllib.parse import urlencode
+from pathlib import Path
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from fastapi import APIRouter, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 
 from job_agent.application_status_store import APPLICATION_STATUSES
 from job_agent.llm import ExternalAgentService, LlmRequest
+from job_agent.paths import output_dir
+from job_agent.services.job_context_copy_service import JobContextCopyService
 from job_agent.services.material_service import MaterialUpdate
 from job_agent.services.review_bundle_service import ReviewBundleService
 from job_agent.web.dependencies import (
@@ -66,30 +69,143 @@ def _filter_values(request: Request, name: str, *, legacy: str = "") -> list[str
     return deduped
 
 
+def _unique_text_values(values: object) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    items = values if isinstance(values, list) else []
+    for value in items:
+        text = str(value or "").strip()
+        if not text or text in seen:
+            continue
+        result.append(text)
+        seen.add(text)
+    return result
+
+
+def _set_job_application_status(
+    job_id: str,
+    status: str,
+    *,
+    notes: str | None = None,
+    not_interesting_reason: str | None = None,
+) -> None:
+    store = application_status_store()
+    try:
+        store.update_status(job_id, status, notes=notes, not_interesting_reason=not_interesting_reason)
+    except KeyError:
+        package = package_service().find_package(job_id)
+        if not package:
+            raise
+        store.ensure_for_job(
+            stable_id=str(package.get("stable_id") or package.get("package_id") or job_id),
+            fuzzy_key=str(package.get("fuzzy_key") or ""),
+            title=str(package.get("title") or "Untitled job"),
+            company=str(package.get("company") or "Unknown"),
+            source=str(package.get("source") or package.get("source_id") or "Unknown"),
+            url=str(package.get("source_url") or package.get("url") or ""),
+            application_url=str(package.get("application_url") or package.get("source_url") or package.get("url") or ""),
+        )
+        store.update_status(job_id, status, notes=notes, not_interesting_reason=not_interesting_reason)
+    package_service().refresh_package_status(job_id, status)
+
+
 @router.post("/api/jobs/bulk-status")
 def bulk_job_status(
     job_ids: list[str] = Form(...), status: str = Form(...), return_to: str = Form("/jobs")
 ) -> RedirectResponse:
     if status not in APPLICATION_STATUSES:
         raise HTTPException(status_code=400, detail="Unsupported application status")
-    status_store = application_status_store()
-    packages = package_service()
     for job_id in job_ids:
         try:
-            status_store.update_status(job_id, status)
-            packages.refresh_package_status(job_id, status)
+            _set_job_application_status(job_id, status)
         except (KeyError, ValueError):
             continue
     return RedirectResponse(url=return_to, status_code=303)
 
 
+@router.post("/api/jobs/status")
+async def update_jobs_status(request: Request) -> JSONResponse:
+    try:
+        payload = await request.json()
+    except ValueError:
+        return JSONResponse({"ok": False, "error": "Invalid JSON payload"}, status_code=400)
+    status = str(payload.get("status") or "")
+    if status not in APPLICATION_STATUSES:
+        return JSONResponse({"ok": False, "error": "Unsupported application status"}, status_code=400)
+    raw_job_ids = payload.get("job_ids") or []
+    if isinstance(raw_job_ids, str):
+        raw_job_ids = [raw_job_ids]
+    job_ids = _unique_text_values(raw_job_ids)
+    if not job_ids:
+        return JSONResponse({"ok": False, "error": "No jobs selected"}, status_code=400)
+
+    updated_ids: list[str] = []
+    failed_ids: list[str] = []
+    for job_id in job_ids:
+        try:
+            _set_job_application_status(job_id, status)
+            updated_ids.append(job_id)
+        except (KeyError, ValueError):
+            failed_ids.append(job_id)
+    return JSONResponse(
+        {
+            "ok": bool(updated_ids),
+            "status": status,
+            "updated_ids": updated_ids,
+            "failed_ids": failed_ids,
+            "error": "" if updated_ids else "No selected jobs could be updated",
+        },
+        status_code=200 if updated_ids else 404,
+    )
+
+
 @router.get("/jobs/{job_id}", response_class=HTMLResponse)
-def job_detail(request: Request, job_id: str, run_id: str = "") -> HTMLResponse:
+def job_detail(request: Request, job_id: str, run_id: str = "", status_saved: str = "") -> HTMLResponse:
     try:
         view = build_job_detail_view(job_id, run_id, current_root())
     except KeyError:
         raise HTTPException(status_code=404, detail="Job package not found") from None
-    return templates.TemplateResponse(request, "job_detail.html", {"request": request, **view})
+    return templates.TemplateResponse(
+        request,
+        "job_detail.html",
+        {"request": request, **view, "status_saved": status_saved},
+    )
+
+
+@router.get("/jobs/{job_id}/files/{file_key}")
+def job_package_file(job_id: str, file_key: str, run_id: str = "", download: bool = False) -> FileResponse:
+    allowed = {
+        "posting_snapshot": "text/markdown",
+        "focused_cv_html": "text/html",
+        "focused_cv": "text/markdown",
+        "focused_cv_tex": "text/x-tex",
+        "focused_cv_pdf": "application/pdf",
+        "cv": "text/markdown",
+        "application": "text/markdown",
+        "form_answers": "text/markdown",
+        "match_analysis": "text/markdown",
+    }
+    if file_key not in allowed:
+        raise HTTPException(status_code=404, detail="Generated file not found")
+    package = package_service().find_package(job_id, run_id)
+    if not package:
+        raise HTTPException(status_code=404, detail="Job package not found")
+    path_text = str(package.get("paths", {}).get(file_key) or "")
+    if not path_text:
+        raise HTTPException(status_code=404, detail="Generated file not found")
+    path = Path(path_text).resolve()
+    try:
+        path.relative_to(output_dir(current_root()).resolve())
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Generated file not found") from None
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Generated file not found")
+    return FileResponse(
+        path,
+        filename=path.name,
+        media_type=allowed[file_key],
+        content_disposition_type="attachment" if download else "inline",
+    )
 
 
 @router.post("/api/jobs/{job_id}/status")
@@ -100,39 +216,56 @@ def update_job_status(
     not_interesting_reason: str = Form(""),
     return_to: str = Form(""),
 ) -> RedirectResponse:
-    application_status_store().update_status(
+    _set_job_application_status(
         job_id,
         status,
         notes=notes,
         not_interesting_reason=not_interesting_reason,
     )
-    package_service().refresh_package_status(job_id, status)
-    return RedirectResponse(url=return_to or f"/jobs/{job_id}", status_code=303)
+    target = _url_with_query(return_to or f"/jobs/{job_id}", status_saved=status)
+    return RedirectResponse(url=target, status_code=303)
+
+
+def _url_with_query(url: str, **params: str) -> str:
+    split = urlsplit(url)
+    query = dict(parse_qsl(split.query, keep_blank_values=True))
+    query.update({key: value for key, value in params.items() if value})
+    return urlunsplit((split.scheme, split.netloc, split.path, urlencode(query), split.fragment))
 
 
 @router.post("/api/jobs/{job_id}/materials")
-def save_job_materials(
-    job_id: str,
-    cv: str = Form(""),
-    application: str = Form(""),
-    form_answers: str = Form(""),
-    match_analysis: str = Form(""),
-    return_to: str = Form(""),
-) -> RedirectResponse:
+async def save_job_materials(request: Request, job_id: str) -> RedirectResponse:
+    form = await request.form()
+    material_fields = {"cv", "focused_cv", "application", "form_answers", "match_analysis"}
+    submitted_fields = {key for key in material_fields if key in form}
     try:
         material_service().save_job_materials(
             job_id,
-            MaterialUpdate(cv=cv, application=application, form_answers=form_answers, match_analysis=match_analysis),
+            MaterialUpdate(
+                cv=str(form.get("cv", "")),
+                focused_cv=str(form.get("focused_cv", "")),
+                application=str(form.get("application", "")),
+                form_answers=str(form.get("form_answers", "")),
+                match_analysis=str(form.get("match_analysis", "")),
+            ),
+            run_id=str(form.get("run_id", "")),
+            fields=submitted_fields,
         )
     except KeyError:
         raise HTTPException(status_code=404, detail="Job package not found") from None
-    return RedirectResponse(url=return_to or f"/jobs/{job_id}", status_code=303)
+    return RedirectResponse(url=str(form.get("return_to", "")) or f"/jobs/{job_id}", status_code=303)
 
 
 @router.post("/api/jobs/{job_id}/generate")
-def generate_job_materials(job_id: str, use_llm: bool = Form(False), return_to: str = Form("")) -> RedirectResponse:
+def generate_job_materials(
+    job_id: str,
+    use_llm: bool = Form(False),
+    run_id: str = Form(""),
+    return_to: str = Form(""),
+    llm_model: str = Form(""),
+) -> RedirectResponse:
     try:
-        material_service().generate_job_materials(job_id, use_llm)
+        material_service().generate_job_materials(job_id, use_llm, run_id=run_id, llm_model=llm_model)
     except KeyError:
         raise HTTPException(status_code=404, detail="Job package not found") from None
     except ValueError as exc:
@@ -164,6 +297,18 @@ def prepare_external_review_bundle(job_id: str, run_id: str = Form("")) -> JSONR
     payload = interaction.to_payload()
     payload["response_mode"] = "none"
     return JSONResponse({"ok": True, **payload})
+
+
+@router.post("/api/jobs/{job_id}/context/copy")
+def copy_job_context(job_id: str, run_id: str = Form("")) -> JSONResponse:
+    root = current_root()
+    package = package_service().find_package(job_id, run_id)
+    if not package:
+        return JSONResponse({"ok": False, "error": "Job package not found"}, status_code=404)
+    files = package_service().read_package_files(package)
+    status = application_status_store().get(job_id)
+    context = JobContextCopyService(root).build(package, files, status)
+    return JSONResponse({"ok": True, "context": context, "title": f"Context for {package.get('title', 'job')}"})
 
 
 @router.post("/api/jobs/{job_id}/application/external-agent/prepare")
@@ -202,8 +347,9 @@ def batch_generate_job_materials(
     job_ids: list[str] = Form(default=[]),
     use_llm: bool = Form(False),
     return_to: str = Form("/jobs"),
+    llm_model: str = Form(""),
 ) -> RedirectResponse:
-    result = material_service().generate_many(job_ids, use_llm)
+    result = material_service().generate_many(job_ids, use_llm, llm_model=llm_model)
     separator = "&" if "?" in return_to else "?"
     query = urlencode({"generated": result.succeeded, "failed": result.failed})
     return RedirectResponse(url=f"{return_to}{separator}{query}", status_code=303)

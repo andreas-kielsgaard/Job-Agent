@@ -1,0 +1,57 @@
+<div class="panel source-window-panel" id="source-results-panel" data-source-results-panel>
+  <h2>Source Results</h2>
+  <p id="source-progress-skip-note" {% if not source_progress_summary.sources_skipped_setup %}hidden{% endif %}><span class="badge warning">{{ source_progress_summary.sources_skipped_setup }} skipped</span> These sources were not run because their current source-test or listing-index checks are blocked. Their cards remain visible below so it is clear what was excluded.</p>
+  <div class="source-run-list" id="source-run-list">
+    {% if source_progress %}
+    {% for source in source_progress %}
+    <section class="source-run-card" data-source-run-card="{{ source.source_index }}" data-source-status="{{ source.status }}">
+      {% set source_highlights = source.highlights if source.highlights else [source.highlight] %}
+      <div class="source-run-header">
+        <div>
+          <h3>{{ source.source_name }}</h3>
+          <p class="muted source-window-stage">{{ source.stage }}</p>
+        </div>
+        <span class="badge {{ source.status }}">{{ source.status }}</span>
+      </div>
+      <div class="source-window-progress" aria-hidden="true"><span style="width: {{ source.progress_percent }}%"></span></div>
+      <div class="source-window-highlight-shell" data-highlight-index="0">
+        {% if source_highlights|length > 1 %}<button class="source-highlight-nav previous" type="button" data-highlight-nav="-1" aria-label="Previous finding">&lt;</button>{% endif %}
+        <div class="source-highlight-slides">
+          {% for highlight in source_highlights %}
+          <div class="source-window-highlight {{ highlight.kind }}" data-highlight-slide {% if not loop.first %}hidden{% endif %}>
+            <span>{{ highlight.label }}</span>
+            <strong>{{ highlight.title }}</strong>
+            <p>{{ highlight.detail }}</p>
+          </div>
+          {% endfor %}
+        </div>
+        {% if source_highlights|length > 1 %}<button class="source-highlight-nav next" type="button" data-highlight-nav="1" aria-label="Next finding">&gt;</button>{% endif %}
+      </div>
+      <div class="source-run-stats">
+        <div><span>Listing pages</span><strong>{{ source.listing_progress_text }}</strong></div>
+        <div><span>Job coverage</span><strong>{{ source.coverage_text }}</strong></div>
+        <div><span>Detail pages</span><strong>{{ source.detail_progress_text }}</strong></div>
+        <div><span>Listings seen</span><strong>{{ source.jobs_found }}</strong></div>
+        <div><span>Fresh/updated</span><strong>{{ source.new_changed }}</strong></div>
+        <div><span>Review picks</span><strong>{{ source.included_roles }}</strong></div>
+        {% if source.status not in ["running", "waiting"] and source.warnings_count %}<div><span>Issues</span><strong>{{ source.warnings_count }}</strong></div>{% endif %}
+        <div><span>Time</span><strong>{% if source.elapsed_time_seconds is not none %}{{ source.elapsed_time_seconds }}s{% elif source.status in ["running", "waiting"] %}{{ source.status }}{% else %}not timed{% endif %}</strong></div>
+      </div>
+      <p class="source-window-pulse">
+        <span class="execution-line {% if source.is_running %}execution-running{% endif %}">
+          <span class="execution-spinner" aria-hidden="true"></span>
+          <span>{{ source.latest_message or "Waiting to start." }}</span>
+        </span>
+      </p>
+      {% if source.listing_limit_skipped_count %}
+      <p><span class="badge warning">Limit hit</span> {{ source.listing_limit_skipped_count }} listing card(s) were outside the configured limit.</p>
+      {% endif %}
+      {% if source.skipped_reason %}
+      <p><span class="badge warning">Not run</span> {{ source.skipped_reason }}</p>
+      {% endif %}
+    </section>
+    {% endfor %}
+    {% endif %}
+  </div>
+  <p id="source-progress-empty" {% if source_progress %}hidden{% endif %}>No source progress events recorded for this run.</p>
+</div>

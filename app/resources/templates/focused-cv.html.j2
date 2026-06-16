@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>{{ contact.name }} - Focused CV</title>
+  <style>
+    @page {
+      size: A4;
+      margin: 12mm;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      color: #1f2724;
+      background: #f6f7f5;
+      font-family: "Aptos", "Segoe UI", Arial, sans-serif;
+      font-size: 10pt;
+      line-height: 1.32;
+    }
+
+    main {
+      width: 186mm;
+      min-height: 273mm;
+      margin: 0 auto;
+      padding: 12mm;
+      background: #ffffff;
+      border-top: 5px solid #2c6f5d;
+    }
+
+    header {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(42mm, auto);
+      gap: 8mm;
+      align-items: start;
+      padding-bottom: 5mm;
+      border-bottom: 1px solid #d8dfdc;
+    }
+
+    h1,
+    h2,
+    h3,
+    p {
+      margin: 0;
+    }
+
+    h1 {
+      font-size: 22pt;
+      line-height: 1;
+      font-weight: 750;
+      color: #15201c;
+    }
+
+    .headline {
+      margin-top: 2mm;
+      font-size: 11pt;
+      color: #2c6f5d;
+      font-weight: 650;
+    }
+
+    .target {
+      margin-top: 3mm;
+      max-width: 110mm;
+      color: #3b4743;
+    }
+
+    .contact {
+      display: grid;
+      gap: 1.3mm;
+      color: #40504b;
+      font-size: 8.8pt;
+      text-align: right;
+    }
+
+    section {
+      margin-top: 5mm;
+    }
+
+    h2 {
+      margin-bottom: 2.2mm;
+      color: #15201c;
+      font-size: 9pt;
+      text-transform: uppercase;
+      font-weight: 800;
+      border-bottom: 1px solid #d8dfdc;
+      padding-bottom: 1.4mm;
+    }
+
+    .profile {
+      font-size: 10.4pt;
+      color: #27332f;
+    }
+
+    .skills {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 2.5mm 5mm;
+    }
+
+    .skill {
+      break-inside: avoid;
+    }
+
+    .skill strong {
+      display: block;
+      color: #15201c;
+      font-size: 9.6pt;
+    }
+
+    .skill span {
+      display: block;
+      color: #465650;
+      font-size: 8.9pt;
+    }
+
+    .experience {
+      display: grid;
+      gap: 3.4mm;
+    }
+
+    .experience-item {
+      break-inside: avoid;
+    }
+
+    .experience-heading {
+      display: flex;
+      justify-content: space-between;
+      gap: 4mm;
+      color: #15201c;
+      font-weight: 750;
+      font-size: 9.8pt;
+    }
+
+    ul {
+      margin: 1.4mm 0 0;
+      padding-left: 4.5mm;
+    }
+
+    li {
+      margin: 0 0 1mm;
+    }
+
+    .keywords {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 1.4mm;
+    }
+
+    .keywords span {
+      padding: 1mm 2mm;
+      background: #edf5f2;
+      border: 1px solid #c9ddd6;
+      color: #27473e;
+      font-size: 8.5pt;
+      font-weight: 650;
+    }
+
+    .notes {
+      color: #5b5144;
+      font-size: 8.6pt;
+    }
+
+    @media print {
+      body {
+        background: #ffffff;
+      }
+
+      main {
+        padding: 0;
+        width: auto;
+        min-height: auto;
+        border-top-width: 4px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div>
+        <h1>{{ contact.name }}</h1>
+        <p class="headline">{{ focused_cv.headline }}</p>
+        <p class="target">Focused for {{ focused_cv.target }}</p>
+      </div>
+      <div class="contact">
+        <span>{{ contact.location }}</span>
+        <span>{{ contact.email }}</span>
+        <span>{{ contact.phone }}</span>
+        {% if contact.linkedin %}<span>{{ contact.linkedin }}</span>{% endif %}
+      </div>
+    </header>
+
+    <section>
+      <h2>Recruiter Profile</h2>
+      <p class="profile">{{ focused_cv.positioning }}</p>
+    </section>
+
+    <section>
+      <h2>Selected Skills</h2>
+      <div class="skills">
+        {% for item in focused_cv.skills %}
+        <div class="skill">
+          <strong>{{ item.name }}</strong>
+          <span>{{ item.detail }}</span>
+        </div>
+        {% endfor %}
+      </div>
+    </section>
+
+    <section>
+      <h2>Selected Experience</h2>
+      <div class="experience">
+        {% for item in focused_cv.experience %}
+        <article class="experience-item">
+          <div class="experience-heading">
+            <span>{{ item.company }}</span>
+            <span>{{ item.role }}</span>
+          </div>
+          <ul>
+            {% for bullet in item.bullets %}
+            <li>{{ bullet }}</li>
+            {% endfor %}
+          </ul>
+        </article>
+        {% endfor %}
+      </div>
+    </section>
+
+    {% if focused_cv.keywords %}
+    <section>
+      <h2>Keywords</h2>
+      <div class="keywords">
+        {% for keyword in focused_cv.keywords %}
+        <span>{{ keyword }}</span>
+        {% endfor %}
+      </div>
+    </section>
+    {% endif %}
+
+    {% if focused_cv.caveats %}
+    <section class="notes">
+      <h2>Review Notes</h2>
+      <ul>
+        {% for caveat in focused_cv.caveats %}
+        <li>{{ caveat }}</li>
+        {% endfor %}
+      </ul>
+    </section>
+    {% endif %}
+  </main>
+</body>
+</html>

@@ -23,110 +23,184 @@
 </div>
 {% endmacro %}
 
+{% block shell_class %}jobs-shell{% endblock %}
+
 {% block content %}
+<div class="jobs-page">
 <div class="panel">
   <h1>Jobs</h1>
-  <p class="muted">Browse jobs across sources and runs. Weak and excluded matches are hidden by default; use the filters to include or exclude multiple values.</p>
-  <form method="get" class="grid" id="jobs-filter-form">
-    {{ tri_filter("category", "Categories", [
-      {"value": "strong", "label": "Strong"},
-      {"value": "exploratory", "label": "Exploratory"},
-      {"value": "weak", "label": "Weak"},
-      {"value": "excluded", "label": "Excluded"},
-      {"value": "not_scored", "label": "Indexed only"}
-    ], filters.category_includes, filters.category_excludes) }}
+  <form method="get" class="job-filter-form" id="jobs-filter-form" data-today="{{ today }}">
+    <section class="job-filter-section open-section">
+      <div class="job-filter-section-title">
+        <h2>Filters</h2>
+        <div class="job-filter-actions">
+          <button type="submit">Filter</button>
+          <a class="button light" href="/jobs">Clear</a>
+        </div>
+      </div>
+      <div class="job-filter-grid primary">
+        <div class="job-filter-field source-text-filter">
+          <label>Source text</label>
+          <input name="source" value="{{ filters.source }}" placeholder="Name, id, or URL">
+        </div>
+        <div class="job-filter-field date-range-filter">
+          <label>Run date</label>
+          <div class="date-range-inputs">
+            <input type="date" name="date_from" value="{{ filters.date_from }}" aria-label="Run date from">
+            <input type="date" name="date_to" value="{{ filters.date_to }}" aria-label="Run date to">
+            <button class="light" type="button" data-date-shortcut="today">Today</button>
+            <button class="light" type="button" data-date-shortcut="clear">Clear dates</button>
+          </div>
+        </div>
+      </div>
+      <div class="job-filter-grid">
+        {{ tri_filter("category", "Categories", [
+          {"value": "strong", "label": "Strong"},
+          {"value": "exploratory", "label": "Exploratory"},
+          {"value": "weak", "label": "Weak"},
+          {"value": "excluded", "label": "Excluded"},
+          {"value": "not_scored", "label": "Indexed only"}
+        ], filters.category_includes, filters.category_excludes) }}
 
-    {{ tri_filter("source_id", "Sources", source_options, filters.source_id_includes, filters.source_id_excludes) }}
+        {{ tri_filter("app_status", "Application statuses", [
+          {"value": "unreviewed", "label": "Unreviewed"},
+          {"value": "interesting", "label": "Interesting"},
+          {"value": "not_interesting", "label": "Not interesting"},
+          {"value": "applied", "label": "Applied"},
+          {"value": "archived", "label": "Archived"}
+        ], filters.app_status_includes, filters.app_status_excludes) }}
+      </div>
+      <div class="job-filter-checks">
+        <label class="check"><input type="checkbox" name="ai_prioritized" value="1" {% if filters.ai_prioritized %}checked{% endif %}> AI-prioritized</label>
+        <input type="hidden" name="dedupe" value="0">
+        <label class="check"><input type="checkbox" name="dedupe" value="1" {% if filters.dedupe %}checked{% endif %}> Show latest instance of each job</label>
+      </div>
+    </section>
 
-    {{ tri_filter("app_status", "Application statuses", [
-      {"value": "unreviewed", "label": "Unreviewed"},
-      {"value": "interesting", "label": "Interesting"},
-      {"value": "not_interesting", "label": "Not interesting"},
-      {"value": "applied", "label": "Applied"},
-      {"value": "archived", "label": "Archived"}
-    ], filters.app_status_includes, filters.app_status_excludes) }}
+    <details class="job-filter-section">
+      <summary>Sources and runs</summary>
+      <div class="job-filter-grid">
+        {{ tri_filter("source_id", "Sources", source_options, filters.source_id_includes, filters.source_id_excludes) }}
+        {{ tri_filter("run_id", "Runs", run_options, filters.run_id_includes, filters.run_id_excludes) }}
+      </div>
+    </details>
 
-    {{ tri_filter("run_id", "Runs", run_options, filters.run_id_includes, filters.run_id_excludes) }}
+    <details class="job-filter-section">
+      <summary>Materials and posting status</summary>
+      <div class="job-filter-grid">
+        {{ tri_filter("material_status", "Material status", [
+          {"value": "generated", "label": "Generated"},
+          {"value": "missing", "label": "Missing"}
+        ], filters.material_status_includes, filters.material_status_excludes) }}
 
-    <div>
-      <label>Run date from</label>
-      <input type="date" name="date_from" value="{{ filters.date_from }}">
-    </div>
-    <div>
-      <label>Run date to</label>
-      <input type="date" name="date_to" value="{{ filters.date_to }}">
-    </div>
-    <div>
-      <label>Source text</label>
-      <input name="source" value="{{ filters.source }}" placeholder="Name, id, or URL">
-    </div>
+        {{ tri_filter("posting_status", "Posting status", [
+          {"value": "active", "label": "Active"},
+          {"value": "no_longer_posted", "label": "No longer posted"}
+        ], filters.posting_status_includes, filters.posting_status_excludes) }}
+      </div>
+    </details>
 
-    {{ tri_filter("material_status", "Material status", [
-      {"value": "generated", "label": "Generated"},
-      {"value": "missing", "label": "Missing"}
-    ], filters.material_status_includes, filters.material_status_excludes) }}
-
-    {{ tri_filter("posting_status", "Posting status", [
-      {"value": "active", "label": "Active"},
-      {"value": "no_longer_posted", "label": "No longer posted"}
-    ], filters.posting_status_includes, filters.posting_status_excludes) }}
-
-    <label class="check"><input type="checkbox" name="ai_prioritized" value="1" {% if filters.ai_prioritized %}checked{% endif %}> AI-prioritized</label>
-    <input type="hidden" name="dedupe" value="0">
-    <label class="check"><input type="checkbox" name="dedupe" value="1" {% if filters.dedupe %}checked{% endif %}> Show latest instance of each job</label>
     <div id="tri-filter-inputs"></div>
-    <div>
-      <button type="submit">Filter</button>
-      <a class="button light" href="/jobs">Clear</a>
-    </div>
   </form>
   <p class="muted">{{ result_count }} job{% if result_count != 1 %}s{% endif %} shown.</p>
 </div>
 
-<div class="panel">
-  <form method="post" action="/api/jobs/bulk-status">
-    <input type="hidden" name="return_to" value="{{ return_to }}">
-    <div class="row">
-      <select name="status" style="max-width:260px;">
-        <option value="unreviewed">Mark unreviewed/seen</option>
-        <option value="interesting">Mark interesting</option>
-        <option value="not_interesting">Mark not interesting</option>
-        <option value="applied">Mark applied</option>
-        <option value="archived">Archive</option>
-      </select>
-      <button type="submit">Apply to selected</button>
+<div class="panel jobs-list-panel">
+  <div class="job-table-shell" data-job-table-shell>
+    <div class="job-triage-toolbar" data-job-selection-toolbar>
+      <div>
+        <strong data-selected-count>No rows selected</strong>
+        <span class="muted">Click a row for a preview. Shift-click selects a range for bulk status.</span>
+      </div>
+      <div class="job-triage-actions">
+        <button type="button" class="light" data-bulk-status="interesting" disabled>Interesting</button>
+        <button type="button" class="light" data-bulk-status="not_interesting" disabled>Not interesting</button>
+        <button type="button" class="light" data-bulk-status="applied" disabled>Applied</button>
+        <button type="button" class="light" data-clear-selection disabled>Clear</button>
+      </div>
+      <span class="job-triage-message" data-status-message aria-live="polite"></span>
     </div>
-    <table>
-      <thead><tr><th><input type="checkbox" onchange="toggleAll(this, '.job-check:not(:disabled)')"></th><th>Role</th><th>Company</th><th>Source</th><th>Location</th><th>Match</th><th>Status</th><th>Run</th></tr></thead>
+    <table class="job-table" id="jobs-table" data-sortable-table data-default-sort-key="match" data-default-sort-direction="desc">
+      <thead>
+        <tr>
+          <th class="select-column"><span class="visually-hidden">Selection</span></th>
+          <th data-sort-heading="role" aria-sort="none"><button type="button" class="table-sort-button" data-sort-key="role" data-sort-type="text" data-sort-default="asc">Role <span data-sort-indicator></span></button></th>
+          <th data-sort-heading="company" aria-sort="none"><button type="button" class="table-sort-button" data-sort-key="company" data-sort-type="text" data-sort-default="asc">Company <span data-sort-indicator></span></button></th>
+          <th class="secondary-column source-column" data-sort-heading="source" aria-sort="none"><button type="button" class="table-sort-button" data-sort-key="source" data-sort-type="text" data-sort-default="asc">Source <span data-sort-indicator></span></button></th>
+          <th data-sort-heading="location" aria-sort="none"><button type="button" class="table-sort-button" data-sort-key="location" data-sort-type="text" data-sort-default="asc">Location <span data-sort-indicator></span></button></th>
+          <th data-sort-heading="pay" aria-sort="none"><button type="button" class="table-sort-button" data-sort-key="pay" data-sort-type="number" data-sort-default="desc">Pay <span data-sort-indicator></span></button></th>
+          <th data-sort-heading="match" aria-sort="descending"><button type="button" class="table-sort-button active" data-sort-key="match" data-sort-type="number" data-sort-default="desc" data-sort-initial="desc">Match <span data-sort-indicator>D1</span></button></th>
+          <th data-sort-heading="status" aria-sort="none"><button type="button" class="table-sort-button" data-sort-key="status" data-sort-type="text" data-sort-default="asc">Status <span data-sort-indicator></span></button></th>
+          <th class="secondary-column run-column" data-sort-heading="run" aria-sort="none"><button type="button" class="table-sort-button" data-sort-key="run" data-sort-type="date" data-sort-default="desc">Run <span data-sort-indicator></span></button></th>
+        </tr>
+      </thead>
       <tbody>
         {% for job in jobs %}
-        {% if job.has_package %}
-        <tr class="clickable-row" onclick="goToRow(event, '/jobs/{{ job.stable_id }}?run_id={{ job.run_id }}')">
-        {% elif job.source_url %}
-        <tr class="clickable-row" onclick="goToRow(event, {{ job.source_url|tojson }})">
-        {% else %}
-        <tr>
-        {% endif %}
-          <td><input class="job-check" type="checkbox" name="job_ids" value="{{ job.stable_id }}" {% if not job.can_update_status %}disabled title="Open job details before changing follow-up status."{% endif %}></td>
-          <td><strong>{{ job.title }}</strong><br><span class="muted">{{ job.state }}</span></td>
-          <td>{{ job.company }}{% if job.recruiter %}<br><span class="muted">{{ job.recruiter }}</span>{% endif %}</td>
-          <td>{{ job.source or job.source_id }}<br><span class="muted">{{ job.source_id }}</span></td>
-          <td>{{ job.location }}<br><span class="muted">{{ job.remote }}</span></td>
-          <td><span class="badge {{ job.match_category }}">{{ job.match_score }}% {{ job.match_category }}</span></td>
-          <td>
-            <span class="badge {{ job.application_status }}">{{ job.application_status }}</span>
-            {% if job.posting_status == "no_longer_posted" %}
-            <br><span class="badge low">No longer posted</span>
-            {% endif %}
+        <tr
+          class="selectable-job-row"
+          data-job-row
+          data-job-id="{{ job.stable_id }}"
+          data-can-update-status="{{ 'true' if job.can_update_status else 'false' }}"
+          data-current-status="{{ job.application_status }}"
+          data-posting-status="{{ job.posting_status }}"
+          data-row-target-label="{{ job.row_target_label }}"
+          data-sort-role="{{ job.title|lower|e }}"
+          data-sort-company="{{ job.company|lower|e }}"
+          data-sort-source="{{ (job.source or job.source_id)|lower|e }}"
+          data-sort-location="{{ (job.location ~ ' ' ~ job.remote)|lower|e }}"
+          data-sort-pay="{{ job.pay_sort_value }}"
+          data-sort-match="{{ job.match_score or 0 }}"
+          data-sort-status="{{ (job.application_status ~ ' ' ~ job.posting_status)|lower|e }}"
+          data-sort-run="{{ job.run_date }}"
+          aria-selected="false"
+        >
+          <td class="select-column">
+            <span class="job-select-marker" aria-hidden="true"></span>
+            <span class="visually-hidden">{{ "Selectable" if job.can_update_status else "Not selectable" }}</span>
           </td>
-          <td>{{ job.run_label or job.run_id }}<br><span class="muted">{{ job.run_date }}</span></td>
+          <td class="job-title-cell">
+            {% if job.row_target_url %}
+            <a class="job-title-link" href="{{ job.row_target_url }}"><strong>{{ job.title }}</strong></a>
+            {% else %}
+            <strong>{{ job.title }}</strong>
+            {% endif %}
+            <br><span class="muted">{{ job.state }}</span>
+            {% if job.row_target_url %}
+            <a class="job-row-open-link" href="{{ job.row_target_url }}" target="_blank" rel="noreferrer">{{ job.row_target_label }} in new tab</a>
+            {% endif %}
+            <template data-job-preview-description>{{ job.preview_description }}</template>
+          </td>
+          <td>{{ job.company }}{% if job.recruiter %}<br><span class="muted">{{ job.recruiter }}</span>{% endif %}</td>
+          <td class="secondary-column source-column">{{ job.source or job.source_id }}<br><span class="muted">{{ job.source_id }}</span></td>
+          <td>{{ job.location }}<br><span class="muted">{{ job.remote }}</span></td>
+          <td class="pay-column">{{ job.pay_display }}{% if job.workload and job.workload != "Not listed" %}<br><span class="muted">{{ job.workload }}</span>{% endif %}</td>
+          <td><span class="badge {{ job.match_category }}">{{ job.match_score }}% {{ job.match_category }}</span></td>
+          <td class="job-status-cell">
+            <div class="job-status-control">
+              <div class="job-status-display">
+                <span class="badge {{ job.application_status }}" data-application-status-badge>{{ job.application_status }}</span>
+                {% if job.posting_status == "no_longer_posted" %}
+                <span class="badge low">No longer posted</span>
+                {% endif %}
+              </div>
+              {% if job.can_update_status %}
+              <div class="job-row-actions" aria-label="Set status for {{ job.title }}">
+                <button type="button" data-row-status="interesting">Interesting</button>
+                <button type="button" data-row-status="not_interesting">Not interesting</button>
+                <button type="button" data-row-status="applied">Applied</button>
+              </div>
+              {% endif %}
+            </div>
+          </td>
+          <td class="secondary-column run-column">{{ job.run_label or job.run_id }}<br><span class="muted">{{ job.run_date }}</span></td>
         </tr>
         {% else %}
-        <tr><td colspan="8">No jobs match the current filters.</td></tr>
+        <tr data-empty-row><td colspan="9">No jobs match the current filters.</td></tr>
         {% endfor %}
       </tbody>
     </table>
-  </form>
+  </div>
+</div>
 </div>
 
 <script>
@@ -171,5 +245,428 @@
   }
 
   document.addEventListener("DOMContentLoaded", initTriFilters);
+
+  function initJobDateShortcuts() {
+    const form = document.getElementById("jobs-filter-form");
+    if (!form) return;
+    const today = form.dataset.today || "";
+    const dateFrom = form.querySelector('input[name="date_from"]');
+    const dateTo = form.querySelector('input[name="date_to"]');
+    form.querySelectorAll("[data-date-shortcut]").forEach((button) => {
+      button.addEventListener("click", () => {
+        if (!dateFrom || !dateTo) return;
+        if (button.dataset.dateShortcut === "today") {
+          dateFrom.value = today;
+          dateTo.value = today;
+        } else {
+          dateFrom.value = "";
+          dateTo.value = "";
+        }
+      });
+    });
+  }
+
+  document.addEventListener("DOMContentLoaded", initJobDateShortcuts);
+
+  function initJobStatusTriage() {
+    const table = document.getElementById("jobs-table");
+    if (!table) return;
+    const tbody = table.querySelector("tbody");
+    const toolbar = document.querySelector("[data-job-selection-toolbar]");
+    const selectedCount = toolbar ? toolbar.querySelector("[data-selected-count]") : null;
+    const statusMessage = toolbar ? toolbar.querySelector("[data-status-message]") : null;
+    const bulkButtons = toolbar ? [...toolbar.querySelectorAll("[data-bulk-status]")] : [];
+    const clearButton = toolbar ? toolbar.querySelector("[data-clear-selection]") : null;
+    const selected = new Set();
+    let lastSelectedId = "";
+    let expandedJobId = "";
+    let saving = false;
+    const applicationStatuses = ["unreviewed", "interesting", "not_interesting", "applied", "archived"];
+
+    function rows() {
+      return [...tbody.querySelectorAll("[data-job-row]")];
+    }
+
+    function canUpdate(row) {
+      return row && row.dataset.canUpdateStatus === "true";
+    }
+
+    function rowLink(row) {
+      return row.querySelector(".job-title-link") || row.querySelector(".job-row-open-link");
+    }
+
+    function rowText(row, selector) {
+      const element = row.querySelector(selector);
+      return element ? element.textContent.trim().replace(/\s+/g, " ") : "";
+    }
+
+    function keepRowPosition(row, action) {
+      const shell = document.querySelector("[data-job-table-shell]");
+      const before = row.getBoundingClientRect().top;
+      action();
+      const after = row.getBoundingClientRect().top;
+      if (shell) shell.scrollTop += after - before;
+    }
+
+    function collapsePreview() {
+      const preview = tbody.querySelector("[data-preview-row]");
+      if (preview) preview.remove();
+      if (expandedJobId) {
+        const expandedRow = tbody.querySelector(`[data-job-id="${CSS.escape(expandedJobId)}"]`);
+        if (expandedRow) expandedRow.classList.remove("job-row-expanded");
+      }
+      expandedJobId = "";
+    }
+
+    function buildPreviewRow(row) {
+      const link = rowLink(row);
+      const href = link ? link.getAttribute("href") || "" : "";
+      const targetLabel = row.dataset.rowTargetLabel || (href ? "Open details" : "");
+      const title = rowText(row, ".job-title-link") || rowText(row, ".job-title-cell strong");
+      const descriptionTemplate = row.querySelector("[data-job-preview-description]");
+      const description = descriptionTemplate ? descriptionTemplate.content.textContent.trim() : "";
+      const previewText = description || "No extracted posting description was saved for this job.";
+      const detailLabel = targetLabel === "Open posting" ? "Open posting" : "Open details";
+      const actions = href
+        ? `<div class="job-preview-actions"><a class="button" href="${escapeHtml(href)}">${escapeHtml(detailLabel)}</a><a class="button light" href="${escapeHtml(href)}" target="_blank" rel="noreferrer">Open in new view</a></div>`
+        : "";
+      const previewRow = document.createElement("tr");
+      previewRow.className = "job-detail-preview-row";
+      previewRow.dataset.previewRow = "true";
+      previewRow.innerHTML = `
+        <td colspan="9">
+          <div class="job-preview-panel">
+            <div>
+              <p class="eyebrow">Posting Text</p>
+              <h3>${escapeHtml(title || "Selected posting")}</h3>
+              <div class="job-preview-description">${escapeHtml(previewText)}</div>
+            </div>
+            ${actions}
+          </div>
+        </td>
+      `;
+      return previewRow;
+    }
+
+    function toggleJobPreview(row) {
+      keepRowPosition(row, () => {
+        if (expandedJobId === row.dataset.jobId) {
+          collapsePreview();
+          return;
+        }
+        collapsePreview();
+        row.classList.add("job-row-expanded");
+        row.insertAdjacentElement("afterend", buildPreviewRow(row));
+        expandedJobId = row.dataset.jobId;
+      });
+    }
+
+    function selectedRows() {
+      return rows().filter((row) => selected.has(row.dataset.jobId));
+    }
+
+    function setMessage(message, tone = "") {
+      if (!statusMessage) return;
+      statusMessage.textContent = message;
+      statusMessage.dataset.tone = tone;
+    }
+
+    function setBusy(isBusy) {
+      saving = isBusy;
+      renderSelection();
+    }
+
+    function renderSelection() {
+      const count = selected.size;
+      rows().forEach((row) => {
+        const isSelected = selected.has(row.dataset.jobId);
+        row.classList.toggle("job-row-selected", isSelected);
+        row.setAttribute("aria-selected", isSelected ? "true" : "false");
+      });
+      if (selectedCount) {
+        selectedCount.textContent = count === 1 ? "1 row selected" : count ? `${count} rows selected` : "No rows selected";
+      }
+      bulkButtons.forEach((button) => {
+        button.disabled = saving || count === 0;
+      });
+      if (clearButton) clearButton.disabled = saving || count === 0;
+    }
+
+    function selectRange(toRow) {
+      const ordered = rows().filter(canUpdate);
+      const toIndex = ordered.indexOf(toRow);
+      const fromIndex = ordered.findIndex((row) => row.dataset.jobId === lastSelectedId);
+      if (toIndex < 0 || fromIndex < 0) {
+        selected.clear();
+        selected.add(toRow.dataset.jobId);
+        return;
+      }
+      const start = Math.min(fromIndex, toIndex);
+      const end = Math.max(fromIndex, toIndex);
+      for (const row of ordered.slice(start, end + 1)) {
+        selected.add(row.dataset.jobId);
+      }
+    }
+
+    function updateRowStatus(row, status) {
+      row.dataset.currentStatus = status;
+      row.dataset.sortStatus = `${status} ${row.dataset.postingStatus || ""}`.trim().toLowerCase();
+      const badge = row.querySelector("[data-application-status-badge]");
+      if (badge) {
+        badge.classList.remove(...applicationStatuses);
+        badge.classList.add(status);
+        badge.textContent = status;
+      }
+    }
+
+    async function applyStatus(jobIds, status) {
+      const uniqueIds = [...new Set(jobIds)].filter(Boolean);
+      if (!uniqueIds.length || saving) return;
+      setBusy(true);
+      setMessage("Saving status...", "working");
+      try {
+        const response = await fetch("/api/jobs/status", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ job_ids: uniqueIds, status }),
+        });
+        const data = await response.json();
+        if (!response.ok || !data.ok) {
+          throw new Error(data.error || "Status update failed");
+        }
+        rows().forEach((row) => {
+          if (data.updated_ids.includes(row.dataset.jobId)) updateRowStatus(row, data.status);
+        });
+        const failed = data.failed_ids && data.failed_ids.length ? ` ${data.failed_ids.length} could not be updated.` : "";
+        setMessage(`Updated ${data.updated_ids.length} row${data.updated_ids.length === 1 ? "" : "s"}.${failed}`, failed ? "warning" : "success");
+      } catch (error) {
+        setMessage(error.message || "Status update failed", "error");
+      } finally {
+        setBusy(false);
+      }
+    }
+
+    rows().forEach((row) => {
+      row.addEventListener("click", (event) => {
+        if (event.target.closest("a, button, input, select, textarea, label")) return;
+        if (!event.shiftKey && !event.ctrlKey && !event.metaKey) {
+          toggleJobPreview(row);
+          return;
+        }
+        if (!canUpdate(row)) {
+          selected.clear();
+          renderSelection();
+          setMessage("This row is indexed only. Open the posting before changing follow-up status.", "warning");
+          return;
+        }
+        if (event.shiftKey) {
+          selectRange(row);
+        } else if (event.ctrlKey || event.metaKey) {
+          if (selected.has(row.dataset.jobId)) {
+            selected.delete(row.dataset.jobId);
+          } else {
+            selected.add(row.dataset.jobId);
+          }
+        } else {
+          selected.clear();
+          selected.add(row.dataset.jobId);
+        }
+        lastSelectedId = row.dataset.jobId;
+        setMessage("");
+        renderSelection();
+      });
+      row.querySelectorAll("[data-row-status]").forEach((button) => {
+        button.addEventListener("click", (event) => {
+          event.stopPropagation();
+          if (!canUpdate(row)) return;
+          selected.clear();
+          selected.add(row.dataset.jobId);
+          lastSelectedId = row.dataset.jobId;
+          renderSelection();
+          applyStatus([row.dataset.jobId], button.dataset.rowStatus);
+        });
+      });
+    });
+
+    bulkButtons.forEach((button) => {
+      button.addEventListener("click", () => applyStatus([...selected], button.dataset.bulkStatus));
+    });
+    if (clearButton) {
+      clearButton.addEventListener("click", () => {
+        selected.clear();
+        setMessage("");
+        renderSelection();
+      });
+    }
+    table.addEventListener("job-table-before-sort", collapsePreview);
+    renderSelection();
+  }
+
+  document.addEventListener("DOMContentLoaded", initJobStatusTriage);
+
+  function initJobTableSorting() {
+    const table = document.querySelector("[data-sortable-table]");
+    if (!table) return;
+    const tbody = table.querySelector("tbody");
+    const rows = [...tbody.querySelectorAll("tr:not([data-empty-row])")].map((row, index) => {
+      row.dataset.initialIndex = String(index);
+      return row;
+    });
+    if (!rows.length) return;
+
+    const buttons = [...table.querySelectorAll("[data-sort-key]")];
+    const states = new Map();
+    let lastTouchedKey = "";
+    let sortTimer = 0;
+    let sortVersion = 0;
+
+    function stateFor(key) {
+      if (!states.has(key)) {
+        states.set(key, { key, direction: "off", order: 0 });
+      }
+      return states.get(key);
+    }
+
+    function seedInitialSort() {
+      const defaultKey = table.dataset.defaultSortKey || "";
+      const defaultDirection = table.dataset.defaultSortDirection || "";
+      buttons.forEach((button) => {
+        const initialDirection = button.dataset.sortInitial || (button.dataset.sortKey === defaultKey ? defaultDirection : "");
+        if (!initialDirection) return;
+        const state = stateFor(button.dataset.sortKey);
+        state.direction = initialDirection;
+        state.order = state.order || nextOrder();
+        lastTouchedKey = state.key;
+      });
+    }
+
+    function activeSorts() {
+      return [...states.values()]
+        .filter((state) => state.direction !== "off" && state.order > 0)
+        .sort((left, right) => left.order - right.order);
+    }
+
+    function nextOrder() {
+      return Math.max(0, ...[...states.values()].map((state) => Number(state.order || 0))) + 1;
+    }
+
+    function clearDormantSorts(exceptKey) {
+      states.forEach((state, key) => {
+        if (key !== exceptKey && state.direction === "off") state.order = 0;
+      });
+    }
+
+    function cycleSort(button) {
+      const key = button.dataset.sortKey;
+      const state = stateFor(key);
+      if (lastTouchedKey && lastTouchedKey !== key) clearDormantSorts(key);
+      const defaultDirection = button.dataset.sortDefault || "asc";
+      if (state.direction === "off") {
+        state.direction = defaultDirection;
+        if (!state.order) state.order = nextOrder();
+      } else if (state.direction === defaultDirection) {
+        state.direction = defaultDirection === "asc" ? "desc" : "asc";
+      } else {
+        state.direction = "off";
+      }
+      lastTouchedKey = key;
+      renderSortState();
+      scheduleSort();
+    }
+
+    function renderSortState() {
+      const ordered = activeSorts();
+      const rankByKey = new Map(ordered.map((state, index) => [state.key, index + 1]));
+      buttons.forEach((button) => {
+        const state = stateFor(button.dataset.sortKey);
+        const heading = table.querySelector(`[data-sort-heading="${button.dataset.sortKey}"]`);
+        const indicator = button.querySelector("[data-sort-indicator]");
+        button.classList.toggle("active", state.direction !== "off");
+        if (heading) heading.setAttribute("aria-sort", state.direction === "off" ? "none" : state.direction === "asc" ? "ascending" : "descending");
+        if (!indicator) return;
+        if (state.direction === "off") {
+          indicator.textContent = "";
+        } else {
+          const direction = state.direction === "asc" ? "A" : "D";
+          indicator.textContent = `${direction}${rankByKey.get(state.key) || ""}`;
+        }
+      });
+    }
+
+    function valueFor(row, state) {
+      const raw = row.dataset[`sort${state.key.charAt(0).toUpperCase()}${state.key.slice(1)}`] || "";
+      const button = buttons.find((item) => item.dataset.sortKey === state.key);
+      const type = button ? button.dataset.sortType : "text";
+      if (type === "number") {
+        const value = Number(raw);
+        return Number.isFinite(value) ? value : Number.NEGATIVE_INFINITY;
+      }
+      if (type === "date") {
+        const value = Date.parse(raw);
+        return Number.isFinite(value) ? value : 0;
+      }
+      return raw.toLocaleLowerCase();
+    }
+
+    function compareRows(left, right, sortState) {
+      const leftValue = valueFor(left, sortState);
+      const rightValue = valueFor(right, sortState);
+      if (leftValue < rightValue) return sortState.direction === "asc" ? -1 : 1;
+      if (leftValue > rightValue) return sortState.direction === "asc" ? 1 : -1;
+      return 0;
+    }
+
+    function scheduleSort() {
+      const version = ++sortVersion;
+      table.dispatchEvent(new CustomEvent("job-table-before-sort"));
+      window.clearTimeout(sortTimer);
+      sortTimer = window.setTimeout(() => {
+        const ordered = activeSorts();
+        if (version !== sortVersion) return;
+        const sortedRows = [...rows].sort((left, right) => {
+          for (const sortState of ordered) {
+            const result = compareRows(left, right, sortState);
+            if (result) return result;
+          }
+          return Number(left.dataset.initialIndex || 0) - Number(right.dataset.initialIndex || 0);
+        });
+        if (version !== sortVersion) return;
+        const fragment = document.createDocumentFragment();
+        sortedRows.forEach((row) => fragment.appendChild(row));
+        tbody.appendChild(fragment);
+      }, 80);
+    }
+
+    buttons.forEach((button) => button.addEventListener("click", () => cycleSort(button)));
+    table.addEventListener("job-table-sort-refresh", scheduleSort);
+    seedInitialSort();
+    renderSortState();
+    scheduleSort();
+  }
+
+  document.addEventListener("DOMContentLoaded", initJobTableSorting);
+
+  function resizeJobTableShell() {
+    const shell = document.querySelector("[data-job-table-shell]");
+    if (!shell) return;
+    const rect = shell.getBoundingClientRect();
+    const bottomPadding = 24;
+    const minHeight = 360;
+    const toolbar = shell.querySelector("[data-job-selection-toolbar]");
+    shell.style.setProperty("--job-triage-toolbar-height", `${toolbar ? toolbar.offsetHeight : 0}px`);
+    const visibleTop = Math.max(16, rect.top);
+    const available = Math.floor(window.innerHeight - visibleTop - bottomPadding);
+    shell.style.setProperty("--job-table-max-height", `${Math.max(minHeight, available)}px`);
+  }
+
+  let jobTableResizeFrame = 0;
+  function scheduleJobTableShellResize() {
+    window.cancelAnimationFrame(jobTableResizeFrame);
+    jobTableResizeFrame = window.requestAnimationFrame(resizeJobTableShell);
+  }
+
+  window.addEventListener("resize", resizeJobTableShell);
+  window.addEventListener("scroll", scheduleJobTableShellResize, { passive: true });
+  document.addEventListener("DOMContentLoaded", resizeJobTableShell);
 </script>
 {% endblock %}

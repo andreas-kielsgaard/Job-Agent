@@ -170,6 +170,7 @@ def build_run_overview(
         "limit_hit_sources": limit_hit_sources,
         "detail_limit_hit_sources": detail_limit_hit_sources,
         "is_running": record.status in {"pending", "running"},
+        "full_source_ingestion": bool(record.options.get("full_source_ingestion")),
         "option_summary": build_option_summary(record.options),
     }
 
@@ -220,6 +221,7 @@ def build_run_progress(
 
     return {
         "status": record.status,
+        "is_running": record.status == "running",
         "phase": phase,
         "summary": summary,
         "latest_message": str(latest_event.get("message") or ""),
@@ -245,11 +247,13 @@ def finalize_source_progress_for_run(source_progress: dict[str, Any], run_status
     if not items:
         return
     for item in items:
+        item["is_running"] = False
         if item.get("processed") or item.get("status") == "failed":
             continue
         if item.get("status") not in {"running", "waiting", "completed", "warning"}:
             continue
         item["status"] = "deferred" if run_status == "completed" else "failed"
+        item["is_running"] = False
         item["stage"] = "Deferred" if run_status == "completed" else "Stopped"
         item["progress_percent"] = 100
         if run_status == "completed":
@@ -291,6 +295,10 @@ def finalize_source_progress_for_run(source_progress: dict[str, Any], run_status
 
 def build_option_summary(options: dict[str, Any]) -> list[str]:
     labels = []
+    if options.get("full_source_ingestion"):
+        labels.append("Full source ingestion")
+    if options.get("include_disabled_sources"):
+        labels.append("Includes sources currently eligible outside daily runs")
     if options.get("is_test"):
         labels.append("Test run")
     if options.get("include_seen"):
@@ -315,7 +323,7 @@ def build_option_summary(options: dict[str, Any]) -> list[str]:
     if detail_limit is None:
         labels.append("Reviews all new jobs in detail")
     else:
-        labels.append(f"Reviews up to {detail_limit} new jobs in detail")
+        labels.append(f"Reviews up to {detail_limit} new jobs in detail per source")
     if options.get("append_to_daily_run"):
         labels.append("Adds source results to today's daily run")
     return labels
@@ -508,13 +516,19 @@ def _has_language_risk(values: list[str]) -> bool:
 def build_source_progress(events: list[dict[str, Any]]) -> dict[str, Any]:
     items_by_index: dict[int, dict[str, Any]] = {}
     source_count = 0
+    skipped_setup_sources: list[dict[str, str]] = []
 
     for event in events:
-        if event.get("phase") not in {"source_ingestion", "source_processing"} or not str(
-            event.get("event_type", "")
-        ).startswith("source_"):
+        event_type = str(event.get("event_type") or "")
+        if event.get("phase") not in {"source_ingestion", "source_processing"}:
             continue
         counts = event.get("counts") or {}
+        if event_type == "source_setup_skipped":
+            source_count = max(source_count, int(counts.get("source_count") or 0))
+            skipped_setup_sources = _source_setup_skips_from_counts(counts)
+            continue
+        if not (event_type.startswith("source_") or event_type.startswith("detail_review_")):
+            continue
         source_index = int(counts.get("source_index") or 0)
         if source_index <= 0:
             continue
@@ -532,8 +546,8 @@ def build_source_progress(events: list[dict[str, Any]]) -> dict[str, Any]:
         elapsed = counts.get("elapsed_time_seconds")
         if elapsed is not None:
             item["elapsed_time_seconds"] = elapsed
+        _apply_source_progress_counts(item, counts)
 
-        event_type = event.get("event_type")
         if event_type == "source_started":
             item["status"] = "running"
             item["started_at"] = event.get("timestamp", "")
@@ -544,21 +558,7 @@ def build_source_progress(events: list[dict[str, Any]]) -> dict[str, Any]:
             item["status"] = "running"
             item["activity_count"] += 1
             item["stage"] = _source_stage(event.get("message", ""))
-            item["latest_message"] = _source_activity_summary(event.get("message", ""))
-            if int(counts.get("jobs_found") or 0):
-                item["jobs_found"] = int(counts.get("jobs_found") or 0)
-            if int(counts.get("page_explored_count") or 0):
-                item["page_explored_count"] = int(counts.get("page_explored_count") or 0)
-            if int(counts.get("page_total") or 0):
-                item["page_total"] = int(counts.get("page_total") or 0)
-            if int(counts.get("detail_read_count") or 0):
-                item["detail_read_count"] = int(counts.get("detail_read_count") or 0)
-            if int(counts.get("detail_total") or 0):
-                item["detail_total"] = int(counts.get("detail_total") or 0)
-            if int(counts.get("detail_fetch_count") or 0):
-                item["detail_fetch_count"] = int(counts.get("detail_fetch_count") or 0)
-            if int(counts.get("reviewed_in_detail_count") or 0):
-                item["reviewed_in_detail_count"] = int(counts.get("reviewed_in_detail_count") or 0)
+            item["latest_message"] = _source_activity_summary(event.get("message", ""), counts)
             item["recent_activity"].append(
                 {
                     "timestamp": event.get("timestamp", ""),
@@ -581,6 +581,18 @@ def build_source_progress(events: list[dict[str, Any]]) -> dict[str, Any]:
             item["status"] = "failed"
             item["finished_at"] = event.get("timestamp", "")
             item["stage"] = "Failed"
+        elif event_type == "detail_review_started":
+            item["status"] = "running"
+            item["stage"] = "Reading detail pages"
+            item["latest_message"] = event.get("message") or "Reading detail pages for fresh listings."
+        elif event_type == "detail_review_pause":
+            item["status"] = "running"
+            item["stage"] = "Pausing detail reads"
+            item["latest_message"] = event.get("message") or "Pausing before the next detail page batch."
+        elif event_type == "detail_review_completed":
+            item["status"] = "running"
+            item["stage"] = "Scoring jobs"
+            item["latest_message"] = event.get("message") or "Detail pages read; scoring jobs."
         elif event_type == "source_processed":
             item["status"] = "warning" if item["warnings_count"] > 0 else "completed"
             item["processed"] = True
@@ -594,12 +606,17 @@ def build_source_progress(events: list[dict[str, Any]]) -> dict[str, Any]:
             item["listing_observed_count"] = int(counts.get("listing_observed_count") or 0)
             item["listing_limit_skipped_count"] = int(counts.get("listing_limit_skipped_count") or 0)
             item["pagination_fetch_count"] = int(counts.get("pagination_fetch_count") or 0)
+            item["pagination_duplicate_page_count"] = int(counts.get("pagination_duplicate_page_count") or 0)
+            item["pagination_max_pages"] = int(counts.get("pagination_max_pages") or 0)
+            item["visible_total_job_count"] = int(counts.get("visible_total_job_count") or 0)
             item["page_explored_count"] = max(
                 int(item.get("page_explored_count") or 0),
+                int(counts.get("page_explored_count") or 0),
                 1 + int(counts.get("pagination_fetch_count") or 0),
             )
             item["page_total"] = max(
                 int(item.get("page_total") or 0),
+                int(counts.get("page_total") or 0),
                 int(item.get("page_explored_count") or 0),
             )
             item["detail_fetch_count"] = int(counts.get("detail_fetch_count") or 0)
@@ -616,6 +633,17 @@ def build_source_progress(events: list[dict[str, Any]]) -> dict[str, Any]:
             item["detail_limit_skipped_count"] = int(counts.get("detail_limit_skipped_count") or 0)
             _apply_source_processed_highlight(item)
             item["latest_message"] = _source_processed_pulse(item)
+
+    if skipped_setup_sources:
+        total_count = source_count + len(skipped_setup_sources)
+        for offset, skipped in enumerate(skipped_setup_sources, start=1):
+            source_index = source_count + offset
+            items_by_index[source_index] = _skipped_source_item(
+                source_index,
+                total_count,
+                skipped.get("source_name") or "Skipped source",
+                skipped.get("reason") or "setup is not complete",
+            )
 
     for event in events:
         event_type = str(event.get("event_type") or "")
@@ -670,7 +698,11 @@ def build_source_progress(events: list[dict[str, Any]]) -> dict[str, Any]:
         items_by_index[source_index]["source_count"] = source_count
 
     for item in items_by_index.values():
+        item["is_running"] = item["status"] == "running"
         item["progress_percent"] = _source_progress_percent(item)
+        item["listing_progress_text"] = _listing_progress_text(item)
+        item["detail_progress_text"] = _detail_progress_text(item)
+        item["coverage_text"] = _coverage_text(item)
         if item["highlight"]["kind"] == "neutral":
             item["highlight"] = _fallback_source_highlight(item)
         base_highlight = item.get("source_summary_highlight") or item["highlight"]
@@ -687,10 +719,13 @@ def build_source_progress(events: list[dict[str, Any]]) -> dict[str, Any]:
     running_count = sum(1 for item in items if item["status"] == "running")
     waiting_count = sum(1 for item in items if item["status"] == "waiting")
     summary = {
-        "total_sources": source_count,
+        "total_sources": len(items),
+        "selected_sources": source_count,
+        "configured_sources": len(items),
         "sources_completed": completed_count,
         "sources_failed": failed_count,
         "sources_deferred": deferred_count,
+        "sources_skipped_setup": len(skipped_setup_sources),
         "sources_running": running_count,
         "sources_waiting": waiting_count,
         "jobs_found_so_far": sum(int(item["jobs_found"] or 0) for item in items),
@@ -728,8 +763,12 @@ def _waiting_source_item(source_index: int, source_count: int) -> dict[str, Any]
         "exploratory_matches": 0,
         "included_roles": 0,
         "listing_observed_count": 0,
+        "listing_extracted_count": 0,
         "listing_limit_skipped_count": 0,
         "pagination_fetch_count": 0,
+        "pagination_duplicate_page_count": 0,
+        "pagination_max_pages": 0,
+        "visible_total_job_count": 0,
         "page_explored_count": 0,
         "page_total": 0,
         "detail_fetch_count": 0,
@@ -738,6 +777,10 @@ def _waiting_source_item(source_index: int, source_count: int) -> dict[str, Any]
         "detail_total": 0,
         "reviewed_in_detail_count": 0,
         "detail_limit_skipped_count": 0,
+        "skipped_reason": "",
+        "listing_progress_text": "",
+        "detail_progress_text": "",
+        "coverage_text": "",
         "progress_percent": 0,
         "source_summary_highlight": None,
         "highlights": [],
@@ -749,6 +792,108 @@ def _waiting_source_item(source_index: int, source_count: int) -> dict[str, Any]
             "score": 0,
         },
     }
+
+
+def _skipped_source_item(source_index: int, source_count: int, source_name: str, reason: str) -> dict[str, Any]:
+    item = _waiting_source_item(source_index, source_count)
+    item.update(
+        {
+            "source_name": source_name,
+            "status": "deferred",
+            "stage": "Skipped by readiness",
+            "latest_message": f"Not run: {reason}.",
+            "skipped_reason": reason,
+            "progress_percent": 100,
+            "highlight": {
+                "kind": "deferred",
+                "label": "Skipped",
+                "title": "Readiness gate blocked this source",
+                "detail": f"Not run: {reason}. Rerun the safe source test or refresh setup to include it.",
+                "score": 0,
+            },
+        }
+    )
+    item["source_summary_highlight"] = item["highlight"]
+    return item
+
+
+def _source_setup_skips_from_counts(counts: dict[str, Any]) -> list[dict[str, str]]:
+    raw_sources = counts.get("skipped_sources")
+    if not isinstance(raw_sources, list):
+        return []
+    skipped = []
+    for raw in raw_sources:
+        if not isinstance(raw, dict):
+            continue
+        source_name = str(raw.get("source_name") or raw.get("source_id") or "Skipped source").strip()
+        reason = str(raw.get("reason") or "setup is not complete").strip()
+        skipped.append({"source_name": source_name, "reason": reason})
+    return skipped
+
+
+_SOURCE_PROGRESS_COUNT_KEYS = (
+    "jobs_found",
+    "listing_observed_count",
+    "listing_extracted_count",
+    "listing_limit_skipped_count",
+    "pagination_fetch_count",
+    "pagination_duplicate_page_count",
+    "pagination_max_pages",
+    "visible_total_job_count",
+    "page_explored_count",
+    "page_total",
+    "detail_fetch_count",
+    "detail_enriched_count",
+    "detail_read_count",
+    "detail_total",
+    "reviewed_in_detail_count",
+    "detail_limit_skipped_count",
+)
+
+
+def _apply_source_progress_counts(item: dict[str, Any], counts: dict[str, Any]) -> None:
+    for key in _SOURCE_PROGRESS_COUNT_KEYS:
+        if key not in counts:
+            continue
+        try:
+            value = int(counts.get(key) or 0)
+        except (TypeError, ValueError):
+            continue
+        if value or key in {"jobs_found"}:
+            item[key] = max(int(item.get(key) or 0), value)
+
+
+def _listing_progress_text(item: dict[str, Any]) -> str:
+    explored = int(item.get("page_explored_count") or 0)
+    total = int(item.get("page_total") or 0)
+    if explored and total:
+        return f"{explored}/{total} pages"
+    if explored:
+        return f"{explored} page(s)"
+    if item.get("status") == "deferred":
+        return "not run"
+    return "not started"
+
+
+def _detail_progress_text(item: dict[str, Any]) -> str:
+    total = int(item.get("detail_total") or item.get("reviewed_in_detail_count") or 0)
+    read = int(item.get("detail_read_count") or item.get("detail_fetch_count") or 0)
+    if total:
+        return f"{read}/{total} pages"
+    if item.get("status") == "deferred":
+        return "not run"
+    return "not needed yet"
+
+
+def _coverage_text(item: dict[str, Any]) -> str:
+    visible_total = int(item.get("visible_total_job_count") or 0)
+    jobs_found = int(item.get("jobs_found") or 0)
+    if visible_total:
+        return f"{jobs_found}/{visible_total}"
+    observed = int(item.get("listing_observed_count") or 0)
+    if observed and observed != jobs_found:
+        return f"{jobs_found}/{observed}"
+    return str(jobs_found)
 
 
 def _apply_source_processed_highlight(item: dict[str, Any]) -> None:
@@ -876,8 +1021,13 @@ def _source_stage(message: str) -> str:
     return "Working"
 
 
-def _source_activity_summary(message: str) -> str:
+def _source_activity_summary(message: str, counts: dict[str, Any] | None = None) -> str:
     lowered = message.lower()
+    count_summary = _source_activity_count_summary(counts or {})
+    if message.strip():
+        if count_summary and count_summary.lower() not in lowered:
+            return f"{message.strip()} ({count_summary})."
+        return message.strip()
     if "detail page" in lowered:
         return "Reading detail pages for fresh listings."
     if "pagination" in lowered:
@@ -887,6 +1037,26 @@ def _source_activity_summary(message: str) -> str:
     if "scored" in lowered or "classified" in lowered:
         return "Scoring fresh listings from this source."
     return "Working through this source."
+
+
+def _source_activity_count_summary(counts: dict[str, Any]) -> str:
+    parts: list[str] = []
+    page_explored = _int_score(counts.get("page_explored_count"))
+    page_total = _int_score(counts.get("page_total"))
+    jobs_found = _int_score(counts.get("jobs_found"))
+    detail_read = _int_score(counts.get("detail_read_count") or counts.get("detail_fetch_count"))
+    detail_total = _int_score(counts.get("detail_total") or counts.get("reviewed_in_detail_count"))
+    if page_explored and page_total:
+        parts.append(f"{page_explored}/{page_total} listing pages")
+    elif page_explored:
+        parts.append(f"{page_explored} listing page(s)")
+    if jobs_found:
+        parts.append(f"{jobs_found} listing(s) seen")
+    if detail_read and detail_total:
+        parts.append(f"{detail_read}/{detail_total} detail pages")
+    elif detail_read:
+        parts.append(f"{detail_read} detail page(s)")
+    return "; ".join(parts)
 
 
 def _source_processed_pulse(item: dict[str, Any]) -> str:

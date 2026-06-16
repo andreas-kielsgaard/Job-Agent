@@ -15,13 +15,18 @@ def test_save_job_materials_writes_files_and_marks_generated(project_root: Path)
     MaterialService(project_root).save_job_materials(
         "stable-1",
         MaterialUpdate(
-            cv="updated cv", application="updated app", form_answers="updated forms", match_analysis="updated analysis"
+            cv="updated cv",
+            focused_cv="updated focused cv",
+            application="updated app",
+            form_answers="updated forms",
+            match_analysis="updated analysis",
         ),
     )
 
     package = MaterialService(project_root).packages.find_package("stable-1")
     files = MaterialService(project_root).packages.read_package_files(package)
     assert files["cv"] == "updated cv"
+    assert files["focused_cv"] == "updated focused cv"
     assert files["application"] == "updated app"
     assert files["form_answers"] == "updated forms"
     assert files["match_analysis"] == "updated analysis"
@@ -53,8 +58,15 @@ def test_generate_job_materials_deterministically_regenerates_package(template_p
     assert refreshed["material_status"] == "generated"
     package = MaterialService(template_project).packages.find_package("stable-1")
     files = MaterialService(template_project).packages.read_package_files(package)
+    assert "Saved Posting Snapshot" in files["posting_snapshot"]
+    assert "SAP ABAP Consultant" in files["posting_snapshot"]
     assert "SAP ABAP Consultant" in files["cv"]
+    assert "Focused One-Page CV" in files["focused_cv"]
+    assert "<!doctype html>" in files["focused_cv_html"]
+    assert "\\documentclass" in files["focused_cv_tex"]
     assert "Standard Form Answer Package" in files["form_answers"]
+    assert "cv-one-page.pdf" in files["form_answers"]
+    assert Path(package["paths"]["focused_cv_pdf"]).read_bytes().startswith(b"%PDF")
 
 
 def test_generate_many_continues_after_failure(template_project: Path) -> None:

@@ -19,6 +19,7 @@ def launch_run(
     mark_seen: bool = Form(False),
     generate_materials_option: bool = Form(False),
     is_test: bool = Form(False),
+    llm_model: str = Form(""),
 ) -> RedirectResponse:
     options = RunOptions(
         use_llm=use_llm,
@@ -28,18 +29,35 @@ def launch_run(
         mark_seen=mark_seen,
         generate_materials=generate_materials_option,
         is_test=is_test,
+        llm_model=llm_model,
     )
     record = workflow_handler().executor.launch_daily_run(runtime, options)
     return RedirectResponse(url=f"/runs/{record.run_id}", status_code=303)
 
 
+@router.post("/api/run/ingest-all")
+def launch_full_source_ingestion() -> RedirectResponse:
+    record = workflow_handler().executor.launch_full_source_ingestion(runtime)
+    return RedirectResponse(url=f"/runs/{record.run_id}", status_code=303)
+
+
 @router.get("/api/runs/{run_id}/status")
-def run_status(run_id: str) -> JSONResponse:
+def run_status(request: Request, run_id: str) -> JSONResponse:
     try:
         payload = workflow_handler().executor.run_status_payload(run_id)
     except KeyError:
         raise HTTPException(status_code=404, detail="Run not found") from None
-    return JSONResponse(payload)
+    payload["source_results_html"] = _render_template_fragment(
+        "run_source_results_fragment.html",
+        {
+            "request": request,
+            "source_progress": payload["source_progress"]["items"],
+            "source_progress_summary": payload["source_progress"]["summary"],
+        },
+    )
+    response = JSONResponse(payload)
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 @router.get("/runs", response_class=HTMLResponse)
@@ -127,3 +145,7 @@ def run_log_text(run_id: str) -> PlainTextResponse:
     except KeyError:
         raise HTTPException(status_code=404, detail="Run not found") from None
     return PlainTextResponse(log_text)
+
+
+def _render_template_fragment(template_name: str, context: dict) -> str:
+    return templates.env.get_template(template_name).render(**context)

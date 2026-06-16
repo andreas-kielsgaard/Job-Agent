@@ -11,6 +11,8 @@ from job_agent.models import Job
 from job_agent.paths import output_dir
 from job_agent.store import JobStore
 
+TEXT_PACKAGE_SUFFIXES = {".json", ".md", ".txt", ".html", ".tex"}
+
 
 class PackageIndexService:
     def __init__(self, root: Path = ROOT) -> None:
@@ -72,7 +74,7 @@ class PackageIndexService:
         result = {}
         for key, path_text in package.get("paths", {}).items():
             path = Path(path_text)
-            if path.exists():
+            if path.exists() and path.suffix.lower() in TEXT_PACKAGE_SUFFIXES:
                 result[key] = path.read_text(encoding="utf-8")
         return result
 

@@ -74,6 +74,7 @@ from job_agent.services.recipes.fetching import (
 from job_agent.services.recipes.mapping import (
     job_board_recipe_from_mapping,
     load_job_board_recipe,
+    load_project_job_board_recipe,
 )
 from job_agent.services.recipes.models import (
     AcceptRecipe,
@@ -148,6 +149,7 @@ __all__ = [
     "find_pagination_links",
     "job_board_recipe_from_mapping",
     "load_job_board_recipe",
+    "load_project_job_board_recipe",
     "quality_from_recipe_result",
 ]
 

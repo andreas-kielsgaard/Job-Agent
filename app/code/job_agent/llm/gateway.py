@@ -18,6 +18,7 @@ class LlmRequest:
     purpose: str
     run_id: str = ""
     associated_job_id: str = ""
+    model: str = ""
 
 
 @dataclass(frozen=True)
@@ -79,7 +80,7 @@ class AnthropicProvider:
         from anthropic import Anthropic
 
         client = Anthropic(api_key=self.api_key(config))
-        configured_model = config.model_name(self.provider_id)
+        configured_model = request.model or config.model_name(self.provider_id)
         attempted_models: list[str] = []
         last_model_not_found: Exception | None = None
         for candidate_model in model_candidates(configured_model, self.provider_id):
@@ -138,6 +139,7 @@ class LlmGateway:
         purpose: str,
         run_id: str = "",
         associated_job_id: str = "",
+        model: str = "",
     ) -> LlmCompletion:
         return self.complete_request(
             LlmRequest(
@@ -146,6 +148,7 @@ class LlmGateway:
                 purpose=purpose,
                 run_id=run_id,
                 associated_job_id=associated_job_id,
+                model=model,
             )
         )
 

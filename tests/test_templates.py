@@ -33,9 +33,21 @@ def test_material_templates_render_with_minimal_context(template_project) -> Non
         "availability_line": "Immediate. Can travel.",
         "material_concerns": [],
         "generation_notes": [],
+        "focused_cv": {
+            "headline": "SAP Consultant",
+            "target": "SAP ABAP Consultant",
+            "positioning": "SAP ABAP profile.",
+            "skills": [{"name": "ABAP", "detail": "Built OData."}],
+            "experience": [{"company": "LEGO", "role": "SAP ABAP", "bullets": ["Built OData."]}],
+            "keywords": ["ABAP", "RAP"],
+            "caveats": [],
+        },
     }
 
     cv = env.get_template("at-a-glance-cv.md.j2").render(**context)
+    focused_cv = env.get_template("focused-cv.md.j2").render(**context)
+    focused_cv_html = env.get_template("focused-cv.html.j2").render(**context)
+    focused_cv_tex = env.get_template("focused-cv.tex.j2").render(**context)
     application = env.get_template("application-letter.md.j2").render(**context)
     form_answers = env.get_template("form-answers.md.j2").render(
         **context, application_text=application, cv_path="cv.md"
@@ -44,6 +56,11 @@ def test_material_templates_render_with_minimal_context(template_project) -> Non
 
     assert "match score" not in cv.lower()
     assert "Andreas Kielsgaard" in cv
+    assert "Focused One-Page CV" in focused_cv
+    assert "<!doctype html>" in focused_cv_html
+    assert "SAP ABAP Consultant" in focused_cv_html
+    assert "\\documentclass" in focused_cv_tex
+    assert "Andreas Kielsgaard" in focused_cv_tex
     assert "Standard Form Answer Package" in form_answers
     assert "Score: 82%" in match_analysis
 
@@ -82,9 +99,27 @@ def test_digest_templates_render_with_empty_and_included_items(template_project)
 
 
 def _env(root):
-    return Environment(
+    env = Environment(
         loader=FileSystemLoader(root / "templates"),
         autoescape=select_autoescape(default=False),
         trim_blocks=True,
         lstrip_blocks=True,
     )
+    env.filters["latex"] = _latex_escape
+    return env
+
+
+def _latex_escape(value) -> str:
+    escapes = {
+        "\\": r"\textbackslash{}",
+        "&": r"\&",
+        "%": r"\%",
+        "$": r"\$",
+        "#": r"\#",
+        "_": r"\_",
+        "{": r"\{",
+        "}": r"\}",
+        "~": r"\textasciitilde{}",
+        "^": r"\textasciicircum{}",
+    }
+    return "".join(escapes.get(char, char) for char in str(value))

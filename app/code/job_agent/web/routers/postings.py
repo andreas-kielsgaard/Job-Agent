@@ -36,6 +36,7 @@ def create_posting(
     ai_enhanced_search: bool = Form(False),
     generate_materials: bool = Form(False),
     use_llm: bool = Form(False),
+    llm_model: str = Form(""),
 ) -> RedirectResponse:
     try:
         result = ManualPostingService(current_root()).import_posting(
@@ -54,6 +55,7 @@ def create_posting(
                 ai_enhanced_search=ai_enhanced_search,
                 generate_materials=generate_materials,
                 use_llm=use_llm,
+                llm_model=llm_model,
             )
         )
     except ValueError as exc:

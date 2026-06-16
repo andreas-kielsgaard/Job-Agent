@@ -55,6 +55,7 @@ class AiSearchService:
         *,
         run_id: str,
         stable_id: str,
+        llm_model: str = "",
     ) -> AiSearchEvaluation:
         prompt = self._build_prompt(job, match, profile, highlight_reasons)
         completion = self.llm.complete(
@@ -63,6 +64,7 @@ class AiSearchService:
             purpose="ai_search_evaluation",
             run_id=run_id,
             associated_job_id=stable_id,
+            model=llm_model,
         )
         parsed = parse_ai_search_response(completion.text)
         parsed.status = "evaluated"

@@ -3,7 +3,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from inspect import Parameter, signature
 from pathlib import Path
@@ -36,6 +36,7 @@ class SourceProgressEvent:
     elapsed_time_seconds: float | None = None
     page_explored_count: int = 0
     page_total: int = 0
+    details: dict[str, Any] = field(default_factory=dict)
 
 
 SourceProgressCallback = Callable[[SourceProgressEvent], None]
@@ -233,10 +234,10 @@ class RecipeHtmlAdapter(SourceAdapter):
 
         try:
             from .services.job_board_recipe_service import extract_jobs_with_recipe_from_url
-            from .services.recipes.mapping import load_job_board_recipe
+            from .services.recipes.mapping import load_project_job_board_recipe
             from .services.source_session_service import SourceSessionService
 
-            recipe = load_job_board_recipe(resolve_project_path(self.root, recipe_path))
+            recipe = load_project_job_board_recipe(self.root, recipe_path)
             options = options or SourceFetchOptions()
             _record_material_recipe(options.material_log, recipe_path)
             _emit_fetch_progress(
@@ -375,6 +376,17 @@ def iter_source_results(
                     source_count=len(sources),
                     warnings_count=len(skipped_sources),
                     message=_setup_skipped_message(skipped_sources),
+                    details={
+                        "skipped_source_count": len(skipped_sources),
+                        "skipped_sources": [
+                            {
+                                "source_name": str(source.get("name") or source.get("source_id") or "Unknown source"),
+                                "source_id": str(source.get("source_id") or ""),
+                                "reason": reason,
+                            }
+                            for source, reason in skipped_sources
+                        ],
+                    },
                 ),
             )
     source_count = len(sources)
@@ -550,6 +562,7 @@ def _run_source_item(
                 f"Completed source {item.source_index}/{item.source_count}: {item.source_name} - "
                 f"{len(source_result.jobs)} jobs found, {len(source_result.warnings)} warnings"
             ),
+            details=_source_progress_metadata_counts(source_result.metadata, len(source_result.jobs)),
         ),
     )
     return SourceFetchResult(
@@ -560,6 +573,33 @@ def _run_source_item(
         result=source_result,
         elapsed_time_seconds=elapsed,
     )
+
+
+def _source_progress_metadata_counts(metadata: dict[str, Any], job_count: int) -> dict[str, Any]:
+    if not metadata:
+        return {}
+    details = {
+        "listing_observed_count": _int(metadata.get("listing_observed_count")),
+        "listing_extracted_count": _int(metadata.get("listing_extracted_count")),
+        "listing_limit_skipped_count": _int(metadata.get("listing_limit_skipped_count")),
+        "pagination_fetch_count": _int(metadata.get("pagination_fetch_count")),
+        "pagination_duplicate_page_count": _int(metadata.get("pagination_duplicate_page_count")),
+        "pagination_max_pages": _int(metadata.get("pagination_max_pages")),
+        "visible_total_job_count": _int(metadata.get("visible_total_job_count")),
+        "detail_fetch_count": _int(metadata.get("detail_fetch_count")),
+        "detail_enriched_count": _int(metadata.get("detail_enriched_count")),
+    }
+    pagination_fetch_count = int(details["pagination_fetch_count"] or 0)
+    page_explored_count = max(1 if metadata or job_count else 0, 1 + pagination_fetch_count)
+    page_total = max(page_explored_count, int(details["pagination_max_pages"] or 0))
+    visible_total = int(details["visible_total_job_count"] or 0)
+    observed = int(details["listing_extracted_count"] or job_count or 0)
+    if visible_total and observed and page_explored_count:
+        per_page = max(1, round(observed / page_explored_count))
+        page_total = max(page_total, (visible_total + per_page - 1) // per_page)
+    details["page_explored_count"] = page_explored_count
+    details["page_total"] = page_total
+    return {key: value for key, value in details.items() if value not in {0, "", None}}
 
 
 def _emit_adapter_progress(

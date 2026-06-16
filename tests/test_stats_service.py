@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import date
 from pathlib import Path
 
 from tests.helpers import write_sample_package
@@ -14,13 +15,16 @@ def test_dashboard_stats_handles_no_runs(project_root: Path) -> None:
 
     assert stats["latest_is_today"] is False
     assert stats["jobs_found_today"] == 0
+    assert stats["listings_read_today"] == 0
+    assert stats["new_changed_roles_today"] == 0
+    assert stats["today_jobs_url"].startswith("/jobs?")
     assert stats["applied_last_7"] == 0
 
 
 def test_dashboard_stats_counts_today_active_and_recent_applied(project_root: Path) -> None:
     store = RunStore(project_root)
     active = store.create_run(RunOptions())
-    store.update(active.run_id, status="running", total_loaded=2, new_roles=1)
+    store.update(active.run_id, status="running", total_loaded=5, new_roles=2, changed_roles=1, source_warnings=1)
     old = store.create_run(RunOptions())
     store.update(old.run_id, started_at="2026-01-01T00:00:00+00:00", status="completed", total_loaded=5)
 
@@ -35,11 +39,21 @@ def test_dashboard_stats_counts_today_active_and_recent_applied(project_root: Pa
         application_url="https://example.com/apply",
     )
     status_store.update_status("stable-1", "applied")
+    write_sample_package(project_root, run_id=active.run_id, stable_id="stable-2", run_date=date.today())
 
     stats = StatsService(project_root).build_dashboard_stats(store.list_runs())
 
     assert stats["active_run"].run_id == active.run_id
-    assert stats["jobs_found_today"] == 2
+    assert stats["jobs_found_today"] == 5
+    assert stats["listings_read_today"] == 5
+    assert stats["new_roles_today"] == 2
+    assert stats["changed_roles_today"] == 1
+    assert stats["new_changed_roles_today"] == 3
+    assert stats["known_or_repeated_listings_today"] == 2
+    assert stats["source_issues_today"] == 1
+    assert stats["review_picks_today"] == 1
+    assert stats["unreviewed_review_picks_today"] == 1
+    assert f"date_from={date.today().isoformat()}" in stats["today_jobs_url"]
     assert stats["applied_last_7"] == 1
 
 

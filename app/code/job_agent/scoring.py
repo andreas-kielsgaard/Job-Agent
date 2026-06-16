@@ -245,13 +245,13 @@ def _location_fit(job: Job, profile: dict, settings: dict[str, Any]) -> int:
             return 12
         return 7
     preferred = profile.get("location_policy", {}).get("preferred_regions", [])
-    if policy == "strong_preference":
-        return -12
     if policy == "required":
         return 0
     if any(str(region).split()[0].lower() in text for region in preferred):
         return 6
-    if job.location == "Not listed":
+    if policy == "strong_preference":
+        return -12 if _is_explicitly_onsite(job) else 0
+    if not _has_listed_value(job.location) and not _has_listed_value(job.remote):
         return 0
     return 2
 
@@ -304,14 +304,12 @@ def _freshness_risk(job: Job, today: date) -> int:
         return -100
     if deadline and (today - deadline).days > 21:
         return -100
-    if not posted and not deadline:
-        return -5
     return 0
 
 
 def _rate_fit(job: Job) -> int:
     if not job.rate or job.rate == "Not listed":
-        return -2
+        return 0
     return 5
 
 
@@ -332,7 +330,7 @@ def _exclusion_reason(
         return f"Application deadline is more than 3 weeks overdue ({job.deadline})."
     if language_risk <= -25 and language_policy["exclude_if_mandatory_unmatched"]:
         return "Mandatory language requirement appears incompatible."
-    if settings["remote_policy"] == "required" and not _is_remote_or_hybrid(job):
+    if settings["remote_policy"] == "required" and not _is_remote_or_hybrid(job) and _is_explicitly_onsite(job):
         return "Remote or hybrid setup is required by match settings."
     if settings["permanent_policy"] == "exclude" and _is_permanent_role(text):
         return "Permanent employment is excluded by match settings."
@@ -369,8 +367,6 @@ def _add_concerns(
 ) -> None:
     if components["language_risk"] < 0:
         concerns.append("Language requirement may need manual confirmation.")
-    if components["freshness_risk"] < 0 and components["freshness_risk"] > -100:
-        concerns.append("Freshness is uncertain because no reliable posting date or deadline was found.")
     if components["rate_visibility_or_rate_fit"] < 0:
         concerns.append("Rate or salary is not listed.")
     if components["contract_fit"] < 0 and _is_permanent_role(text):
@@ -575,6 +571,22 @@ def _term_matches(text: str, term: str) -> bool:
 def _is_remote_or_hybrid(job: Job) -> bool:
     text = f"{job.location} {job.remote}".lower()
     return any(term in text for term in REMOTE_TERMS)
+
+
+def _is_explicitly_onsite(job: Job) -> bool:
+    text = f"{job.location} {job.remote} {job.description} {job.raw_text}".lower()
+    return any(
+        _term_matches(text, term)
+        for term in [
+            "onsite",
+            "on-site",
+            "on site",
+            "office based",
+            "office-based",
+            "no remote",
+            "not remote",
+        ]
+    )
 
 
 def _is_permanent_role(text: str) -> bool:

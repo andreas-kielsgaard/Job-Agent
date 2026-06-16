@@ -23,6 +23,9 @@
     <div class="stat" data-run-stat-cell="source_warnings" {% if run.status in ["pending", "running"] or not run.source_warnings %}hidden{% endif %}><span>Issues</span><strong data-run-stat="source_warnings">{{ run.source_warnings }}</strong></div>
   </div>
   {% if run.is_test %}<p><span class="badge">Test run</span> This run is excluded from normal run views and does not mark jobs as seen.</p>{% endif %}
+  {% if run_overview.full_source_ingestion %}
+  <p><span class="badge">Long-running ingestion</span> This run covers all sources that are currently eligible to execute, including sources excluded from daily runs. You can leave it open, come back from Dashboard or Runs, and resume watching this page at any time.</p>
+  {% endif %}
   {% if run_overview.limit_hit_sources %}
   <p><span class="badge warning">Limit reached</span> {{ run_overview.limit_hit_sources|join(", ") }} stopped at a configured extraction limit. Use a source backfill/extended source run before relying on this as a full historical import.</p>
   {% endif %}
@@ -58,54 +61,15 @@
     <div><span>Highlights</span><strong id="run-progress-signals">{{ run_progress.interesting_signals }}</strong></div>
     <div id="run-progress-issues-cell" {% if run.status in ["pending", "running"] or not run_progress.warnings %}hidden{% endif %}><span>Issues</span><strong id="run-progress-warnings">{{ run_progress.warnings }}</strong></div>
   </div>
-  <p class="muted run-progress-message" id="run-progress-message">{{ run_progress.latest_message or "Waiting for activity." }}</p>
+  <p class="muted run-progress-message" id="run-progress-message">
+    <span class="execution-line {% if run_progress.is_running %}execution-running{% endif %}">
+      <span class="execution-spinner" aria-hidden="true"></span>
+      <span>{{ run_progress.latest_message or "Waiting for activity." }}</span>
+    </span>
+  </p>
 </div>
 
-<div class="panel source-window-panel">
-  <h2>Source Results</h2>
-  <div class="source-run-list" id="source-run-list">
-    {% if source_progress %}
-    {% for source in source_progress %}
-    <section class="source-run-card">
-      {% set source_highlights = source.highlights if source.highlights else [source.highlight] %}
-      <div class="source-run-header">
-        <div>
-          <h3>{{ source.source_name }}</h3>
-          <p class="muted source-window-stage">{{ source.stage }}</p>
-        </div>
-        <span class="badge {{ source.status }}">{{ source.status }}</span>
-      </div>
-      <div class="source-window-progress" aria-hidden="true"><span style="width: {{ source.progress_percent }}%"></span></div>
-      <div class="source-window-highlight-shell" data-highlight-index="0">
-        {% if source_highlights|length > 1 %}<button class="source-highlight-nav previous" type="button" data-highlight-nav="-1" aria-label="Previous finding">&lt;</button>{% endif %}
-        <div class="source-highlight-slides">
-          {% for highlight in source_highlights %}
-          <div class="source-window-highlight {{ highlight.kind }}" data-highlight-slide {% if not loop.first %}hidden{% endif %}>
-            <span>{{ highlight.label }}</span>
-            <strong>{{ highlight.title }}</strong>
-            <p>{{ highlight.detail }}</p>
-          </div>
-          {% endfor %}
-        </div>
-        {% if source_highlights|length > 1 %}<button class="source-highlight-nav next" type="button" data-highlight-nav="1" aria-label="Next finding">&gt;</button>{% endif %}
-      </div>
-      <div class="source-run-stats">
-        <div><span>Listings seen</span><strong>{{ source.jobs_found }}</strong></div>
-        <div><span>Fresh/updated</span><strong>{{ source.new_changed }}</strong></div>
-        <div><span>Review picks</span><strong>{{ source.included_roles }}</strong></div>
-        {% if source.status not in ["running", "waiting"] and source.warnings_count %}<div><span>Issues</span><strong>{{ source.warnings_count }}</strong></div>{% endif %}
-        <div><span>Time</span><strong>{% if source.elapsed_time_seconds is not none %}{{ source.elapsed_time_seconds }}s{% elif source.status in ["running", "waiting"] %}{{ source.status }}{% else %}not timed{% endif %}</strong></div>
-      </div>
-      <p class="source-window-pulse">{{ source.latest_message or "Waiting to start." }}</p>
-      {% if source.listing_limit_skipped_count %}
-      <p><span class="badge warning">Limit hit</span> {{ source.listing_limit_skipped_count }} listing card(s) were outside the configured limit.</p>
-      {% endif %}
-    </section>
-    {% endfor %}
-    {% endif %}
-  </div>
-  <p id="source-progress-empty" {% if source_progress %}hidden{% endif %}>No source progress events recorded for this run.</p>
-</div>
+{% include "run_source_results_fragment.html" %}
 
 <div class="panel">
   <h2>Interesting Signals</h2>
@@ -187,7 +151,7 @@
   {% if batch_result.generated or batch_result.failed %}
   <p><span class="badge generated">Generated materials for {{ batch_result.generated }} jobs.</span> {% if batch_result.failed %}<span class="badge failed">{{ batch_result.failed }} failed.</span>{% endif %}</p>
   {% endif %}
-  <form id="batch-generate-form" method="post" action="/api/jobs/batch-generate" class="row">
+  <form id="batch-generate-form" method="post" action="/api/jobs/batch-generate" class="row" data-llm-model-picker data-llm-model-requires="use_llm" data-llm-model-title="Choose AI power for material generation">
     <input type="hidden" name="return_to" value="/runs/{{ run.run_id }}">
     {% if llm_configured %}
     <label class="check"><input type="checkbox" name="use_llm"> Use Claude</label>
@@ -299,6 +263,11 @@
       if (element) element.textContent = value;
     }
 
+    function setExecutionLine(selector, value, running) {
+      const element = document.querySelector(selector);
+      if (element) element.innerHTML = executionUi.line(value, { running });
+    }
+
     function updateSummary(data) {
       const run = data.run || {};
       const overview = data.run_overview || {};
@@ -329,8 +298,8 @@
       setText("#run-progress-proposed", progress.proposed_jobs || 0);
       setText("#run-progress-signals", progress.interesting_signals || 0);
       setText("#run-progress-warnings", progress.warnings || 0);
-      setText("#run-progress-message", progress.latest_message || "Waiting for activity.");
       const status = String(progress.status || "running").toLowerCase();
+      setExecutionLine("#run-progress-message", progress.latest_message || "Waiting for activity.", Boolean(progress.is_running));
       const issuesCell = document.getElementById("run-progress-issues-cell");
       if (issuesCell) issuesCell.hidden = ["pending", "running"].includes(status) || !Number(progress.warnings || 0);
       const statusBadge = document.getElementById("run-progress-status");
@@ -342,74 +311,44 @@
       if (fill) fill.style.width = `${Math.max(0, Math.min(100, Number(progress.progress_percent || 0)))}%`;
     }
 
-    function updateSourceResults(progress) {
-      const items = (progress && progress.items) || [];
-      const list = document.getElementById("source-run-list");
-      const empty = document.getElementById("source-progress-empty");
-      if (!list || !empty) return;
-      empty.hidden = items.length > 0;
-      list.innerHTML = items.map((source) => renderSourceCard(source)).join("");
+    function updateSourceResults(data) {
+      const html = data && data.source_results_html;
+      const panel = document.getElementById("source-results-panel");
+      if (!html || !panel) return;
+      const highlightState = readSourceHighlightState(panel);
+      const template = document.createElement("template");
+      template.innerHTML = String(html).trim();
+      const nextPanel = template.content.firstElementChild;
+      if (!nextPanel) return;
+      panel.replaceWith(nextPanel);
+      restoreSourceHighlightState(nextPanel, highlightState);
     }
 
-    function renderSourceCard(source) {
-      const status = String(source.status || "waiting").toLowerCase();
-      const timeText = source.elapsed_time_seconds === null || source.elapsed_time_seconds === undefined
-        ? (["running", "waiting"].includes(status) ? status : "not timed")
-        : `${esc(source.elapsed_time_seconds)}s`;
-      const issuesMarkup = !["running", "waiting"].includes(status) && Number(source.warnings_count || 0) > 0
-        ? `<div><span>Issues</span><strong>${esc(source.warnings_count || 0)}</strong></div>`
-        : "";
-      const limitMarkup = Number(source.listing_limit_skipped_count || 0) > 0
-        ? `<p><span class="badge warning">Limit hit</span> ${esc(source.listing_limit_skipped_count)} listing card(s) were outside the configured limit.</p>`
-        : "";
-      return `
-        <section class="source-run-card" data-source-status="${esc(status)}">
-          <div class="source-run-header">
-            <div>
-              <h3>${esc(source.source_name || "Unknown source")}</h3>
-              <p class="muted source-window-stage">${esc(source.stage || "Waiting")}</p>
-            </div>
-            <span class="badge ${esc(status)}">${esc(status)}</span>
-          </div>
-          <div class="source-window-progress" aria-hidden="true"><span style="width:${Math.max(0, Math.min(100, Number(source.progress_percent || 0)))}%"></span></div>
-          ${renderHighlightShell(source)}
-          <div class="source-run-stats">
-            <div><span>Listings seen</span><strong>${esc(source.jobs_found || 0)}</strong></div>
-            <div><span>Fresh/updated</span><strong>${esc(source.new_changed || 0)}</strong></div>
-            <div><span>Review picks</span><strong>${esc(source.included_roles || 0)}</strong></div>
-            ${issuesMarkup}
-            <div><span>Time</span><strong>${timeText}</strong></div>
-          </div>
-          <p class="source-window-pulse">${esc(source.latest_message || "Waiting to start.")}</p>
-          ${limitMarkup}
-        </section>
-      `;
+    function readSourceHighlightState(panel) {
+      const state = new Map();
+      panel.querySelectorAll("[data-source-run-card]").forEach((card) => {
+        const shell = card.querySelector(".source-window-highlight-shell");
+        if (shell) state.set(card.dataset.sourceRunCard || "", Number(shell.dataset.highlightIndex || 0));
+      });
+      return state;
     }
 
-    function renderHighlightShell(source) {
-      const highlights = Array.isArray(source.highlights) && source.highlights.length
-        ? source.highlights
-        : [source.highlight || {}];
-      const navPrevious = highlights.length > 1
-        ? '<button class="source-highlight-nav previous" type="button" data-highlight-nav="-1" aria-label="Previous finding">&lt;</button>'
-        : "";
-      const navNext = highlights.length > 1
-        ? '<button class="source-highlight-nav next" type="button" data-highlight-nav="1" aria-label="Next finding">&gt;</button>'
-        : "";
-      const slides = highlights.map((highlight, index) => `
-        <div class="source-window-highlight ${esc(highlight.kind || "neutral")}" data-highlight-slide ${index > 0 ? "hidden" : ""}>
-          <span>${esc(highlight.label || "Finding")}</span>
-          <strong>${esc(highlight.title || "Waiting for this source")}</strong>
-          <p>${esc(highlight.detail || "This source has not started yet.")}</p>
-        </div>
-      `).join("");
-      return `
-        <div class="source-window-highlight-shell" data-highlight-index="0">
-          ${navPrevious}
-          <div class="source-highlight-slides">${slides}</div>
-          ${navNext}
-        </div>
-      `;
+    function restoreSourceHighlightState(panel, state) {
+      panel.querySelectorAll("[data-source-run-card]").forEach((card) => {
+        const shell = card.querySelector(".source-window-highlight-shell");
+        if (!shell) return;
+        setSourceHighlightIndex(shell, state.get(card.dataset.sourceRunCard || "") || 0);
+      });
+    }
+
+    function setSourceHighlightIndex(shell, nextIndex) {
+      const slides = [...shell.querySelectorAll("[data-highlight-slide]")];
+      if (!slides.length) return;
+      const index = ((nextIndex % slides.length) + slides.length) % slides.length;
+      slides.forEach((slide, slideIndex) => {
+        slide.hidden = slideIndex !== index;
+      });
+      shell.dataset.highlightIndex = String(index);
     }
 
     function updateMatchHighlights(highlights, overview) {
@@ -524,7 +463,7 @@
         const data = await response.json();
         updateSummary(data);
         updateRunProgress(data.run_progress);
-        updateSourceResults(data.source_progress);
+        updateSourceResults(data);
         updateMatchHighlights(data.match_highlights, data.run_overview || {});
         updatePackages(data.packages);
         const status = String((data.run && data.run.status) || "").toLowerCase();

@@ -1,139 +1,603 @@
 {% extends "base.html" %}
 {% block content %}
-<div class="panel">
-  <h1>{{ package.title }}</h1>
-  <div class="grid">
-    <div class="stat"><span>Match</span><strong>{{ package.match_score }}%</strong><span>{{ package.match_category }}</span></div>
-    <div class="stat"><span>Status</span><strong>{{ package.application_status }}</strong></div>
-    <div class="stat"><span>Location</span><strong>{{ package.location }}</strong><span>{{ package.remote }}</span></div>
-    <div class="stat"><span>Rate</span><strong>{{ package.rate }}</strong></div>
+{% set detail_url = "/jobs/" ~ package.stable_id ~ ("?run_id=" ~ package.run_id if package.run_id else "") %}
+<div class="job-detail-page">
+  <section class="panel job-hero">
+    <div class="job-title-stack">
+      <p class="eyebrow">{{ package.source or "Job detail" }}</p>
+      <h1>
+        {% if job_detail.source_url %}
+        <a class="job-title-link" href="{{ job_detail.source_url }}" target="_blank" rel="noreferrer" title="View posting on external website">{{ package.title }}</a>
+        {% else %}
+        {{ package.title }}
+        {% endif %}
+      </h1>
+      <div class="job-hero-meta">
+        <span class="badge {{ package.match_category }}">{{ package.match_category }}</span>
+        <span class="badge {{ package.application_status }}">{{ package.application_status }}</span>
+        <span class="badge {{ package.posting_status }}">{{ package.posting_status }}</span>
+        <span class="badge {{ package.material_status }}">{{ "materials generated" if package.material_status == "generated" else "materials missing" }}</span>
+      </div>
+    </div>
+    <div class="job-hero-score">
+      <span>Match</span>
+      <strong>{{ package.match_score }}%</strong>
+      {% if match_summary.confidence %}<small>{{ match_summary.confidence }} confidence</small>{% endif %}
+    </div>
+  </section>
+
+  {% if status_saved %}
+  <div class="status-saved-alert" role="status">
+    Status saved as <strong>{{ status_saved | replace("_", " ") }}</strong>.
   </div>
-  <p>Source: <a href="{{ package.source_url }}">{{ package.source_url }}</a></p>
-  <p>Application: <a href="{{ package.application_url }}">{{ package.application_url }}</a></p>
-  {% if cv_reference %}
-  <p><strong>Reference CV:</strong> <a href="{{ cv_reference.url }}">{{ cv_reference.filename }}</a><br><span class="muted">Stored locally for your own review.</span></p>
-  {% else %}
-  <p class="muted">No full reference CV uploaded yet. Add one in Profile if you want easy access here.</p>
   {% endif %}
-  <p><strong>Recommended angle:</strong> {{ package.recommended_angle }}</p>
-  {% if package.concerns %}
-  <p><strong>Concerns:</strong> {{ package.concerns | join("; ") }}</p>
-  {% endif %}
-  {% if score_details.components or score_details.reasons or score_details.missing_information %}
-  <div class="score-detail-block">
-    <h2>Why this score?</h2>
-    {% if score_details.components %}
-    <div class="component-list">
-      {% for component in score_details.components %}
-      <span class="badge {{ component.tone }}">{{ component.label }} {{ "%+d"|format(component.value) if component.value is number else component.value }}</span>
+
+  <section class="panel job-quick-panel">
+    <div class="job-primary-link">
+      <p class="eyebrow">Original Posting</p>
+      {% if job_detail.source_url %}
+      <a class="button" href="{{ job_detail.source_url }}" target="_blank" rel="noreferrer">View posting on external website</a>
+      {% else %}
+      <span class="muted">No original posting link was saved.</span>
+      {% endif %}
+    </div>
+    <div class="job-status-quick">
+      <div>
+        <p class="eyebrow">Status</p>
+        <strong>{{ package.application_status | replace("_", " ") }}</strong>
+      </div>
+      <div class="quick-status-buttons">
+        <button class="light" type="button" data-status-choice="interesting" data-status-label="Interesting">Interesting</button>
+        <button class="light" type="button" data-status-choice="not_interesting" data-status-label="Not interesting">Not interesting</button>
+        <button class="light" type="button" data-status-choice="applied" data-status-label="Applied">Applied</button>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel material-generation-panel">
+    <div class="section-heading-row">
+      <div>
+        <p class="eyebrow">Generated Materials</p>
+        <h2>What the generator creates</h2>
+      </div>
+      <span class="muted">Runs locally; Claude only rewrites selected text when enabled.</span>
+    </div>
+    <div class="generation-output-grid">
+      {% for output in generation_outputs %}
+      <article class="generation-output-card">
+        <span class="badge {{ output.tone }}">{{ output.status }}</span>
+        <h3>{{ output.label }}</h3>
+        <p>{{ output.description }}</p>
+      </article>
       {% endfor %}
     </div>
-    {% endif %}
-    {% if score_details.reasons %}
-    <p><strong>Signals:</strong> {{ score_details.reasons | join("; ") }}</p>
-    {% endif %}
-    {% if score_details.missing_information %}
-    <p><strong>Missing information:</strong> {{ score_details.missing_information | join("; ") }}</p>
-    {% endif %}
-  </div>
-  {% endif %}
-  <div class="row">
-    <span class="badge {{ package.material_status }}">{{ "materials generated" if package.material_status == "generated" else "materials missing" }}</span>
-    <form class="inline-form">
-      <input type="hidden" name="run_id" value="{{ package.run_id }}">
-      <button
-        class="light"
-        type="button"
-        onclick="openExternalAgent(this)"
-        data-title="Review bundle in another AI"
-        data-prepare-url="/api/jobs/{{ package.stable_id }}/review-bundle/external-agent/prepare"
-      >Review bundle</button>
-    </form>
-    <form method="post" action="/api/jobs/{{ package.stable_id }}/generate">
-      <input type="hidden" name="return_to" value="/jobs/{{ package.stable_id }}">
+    <form
+      method="post"
+      action="/api/jobs/{{ package.stable_id }}/generate"
+      class="material-generation-form"
+      data-material-generation-form
+      data-llm-model-picker
+      data-llm-model-requires="use_llm"
+      data-llm-model-title="Choose AI power for material generation"
+    >
+      <input type="hidden" name="return_to" value="{{ detail_url }}#cv">
       <input type="hidden" name="run_id" value="{{ package.run_id }}">
       {% if llm_configured %}
-      <label class="check"><input type="checkbox" name="use_llm"> Use Claude</label>
+      <label class="check"><input type="checkbox" name="use_llm"> Use Claude for application text and focused CV wording</label>
       {% else %}
-      <label class="check"><input type="checkbox" disabled> Claude not connected</label>
+      <label class="check"><input type="checkbox" disabled> Claude not connected; deterministic fallback will be used</label>
       {% endif %}
-      <button type="submit">{{ "Regenerate materials" if package.material_status == "generated" else "Generate materials" }}</button>
-      <button
-        class="light"
-        type="button"
-        onclick="openExternalAgent(this)"
-        data-title="Draft application in another AI"
-        data-prepare-url="/api/jobs/{{ package.stable_id }}/application/external-agent/prepare"
-        data-apply-url="/api/jobs/{{ package.stable_id }}/application/external-agent/apply"
-        data-success-url="/jobs/{{ package.stable_id }}"
-      >Use another AI</button>
+      <button type="submit" data-generation-submit>{{ "Regenerate materials" if package.material_status == "generated" else "Generate materials" }}</button>
+      <span class="generation-working" data-generation-working hidden aria-live="polite">
+        <span class="execution-spinner" aria-hidden="true"></span>
+        Generating CV PDF, LaTeX source, application text, form answers, and match notes...
+      </span>
+    </form>
+  </section>
+
+  <div class="job-tab-shell" data-job-detail-tabs>
+    <nav class="tab-nav job-tab-nav" aria-label="Job detail sections">
+      <button class="tab-link active" type="button" data-tab-target="job">Job Details</button>
+      <button class="tab-link" type="button" data-tab-target="cv">CV</button>
+      <button class="tab-link" type="button" data-tab-target="application">Application</button>
+      <button class="tab-link" type="button" data-tab-target="forms">Form Answers</button>
+      <button class="tab-link" type="button" data-tab-target="match">Match Evidence</button>
+      <button class="tab-link" type="button" data-tab-target="status">Status</button>
+      <button class="tab-link" type="button" data-tab-target="tools">Tools</button>
+    </nav>
+
+    <section class="panel job-tab-panel active" data-tab-panel="job" id="job">
+      <div class="section-heading-row">
+        <div>
+          <p class="eyebrow">Posting Details</p>
+          <h2>What this job actually says</h2>
+        </div>
+        {% if job_detail.description %}
+        <button class="light" type="button" onclick="copyText('job-description-copy')">Copy posting text</button>
+        {% endif %}
+      </div>
+
+      {% if job_detail.description_blocks %}
+      <div id="job-description-copy" class="job-description-copy-source">{{ job_detail.description }}</div>
+      <div class="posting-description">
+        {% for desc_block in job_detail.description_blocks %}
+        <section class="posting-description-block">
+          <h3>{{ desc_block.heading }}</h3>
+          {% for paragraph in desc_block.paragraphs %}
+          <p>{{ paragraph }}</p>
+          {% endfor %}
+        </section>
+        {% endfor %}
+      </div>
+      {% else %}
+      <p class="muted">No extracted posting description was saved for this job.</p>
+      {% endif %}
+
+      <div class="job-subsection">
+        <div class="section-heading-row">
+          <div>
+            <p class="eyebrow">Terms</p>
+            <h2>Role facts</h2>
+          </div>
+        </div>
+        {% if job_detail.facts %}
+        <dl class="job-fact-grid">
+          {% for fact in job_detail.facts %}
+          <div>
+            <dt>{{ fact.label }}</dt>
+            <dd>{{ fact.value }}</dd>
+          </div>
+          {% endfor %}
+        </dl>
+        {% endif %}
+        {% if job_detail.missing_facts %}
+        <p class="muted missing-facts">Not listed: {{ job_detail.missing_facts | join(", ") }}</p>
+        {% endif %}
+        {% if job_detail.tag_groups %}
+        <div class="job-tag-groups">
+          {% for group in job_detail.tag_groups %}
+          <div>
+            <span>{{ group.label }}</span>
+            <div class="tag-cloud compact">
+              {% for item in group["items"] %}<span>{{ item }}</span>{% endfor %}
+            </div>
+          </div>
+          {% endfor %}
+        </div>
+        {% endif %}
+      </div>
+    </section>
+
+    <section class="panel job-tab-panel" data-tab-panel="cv" id="cv" hidden>
+      <div class="section-heading-row">
+        <div>
+          <p class="eyebrow">Targeted CV</p>
+          <h2>One-page CV for this posting</h2>
+        </div>
+        <div class="row">
+          {% if cv_artifacts.pdf.url %}
+          <a class="button" href="{{ cv_artifacts.pdf.url }}" target="_blank" rel="noreferrer">Preview PDF</a>
+          <a class="button light" href="{{ cv_artifacts.pdf.download_url }}">Download PDF</a>
+          {% endif %}
+          {% if cv_artifacts.tex.url %}
+          <a class="button light" href="{{ cv_artifacts.tex.download_url }}">Download LaTeX</a>
+          {% endif %}
+        </div>
+      </div>
+
+      {% if cv_artifacts.pdf.url %}
+      <iframe class="cv-pdf-preview" src="{{ cv_artifacts.pdf.url }}" title="Focused one-page CV PDF preview"></iframe>
+      {% else %}
+      <div class="empty-state compact">
+        <h3>No focused CV PDF yet</h3>
+        <p>Generate materials to create the LaTeX source and recruiter-facing PDF.</p>
+      </div>
+      {% endif %}
+
+      {% if files.get("focused_cv") %}
+      <div class="cv-preview-grid">
+        <section>
+          <div class="section-heading-row">
+            <div>
+              <p class="eyebrow">Readable Draft</p>
+              <h3>Focused CV content</h3>
+            </div>
+            <button class="light" type="button" onclick="copyText('focused-cv-field')">Copy Markdown</button>
+          </div>
+          <div class="markdown material-preview">{{ render_md(files.focused_cv) | safe }}</div>
+          <textarea id="focused-cv-field" class="copy-context-source" readonly>{{ files.focused_cv }}</textarea>
+        </section>
+        {% if files.get("cv") %}
+        <section>
+          <div class="section-heading-row">
+            <div>
+              <p class="eyebrow">Supporting CV</p>
+              <h3>At-a-glance version</h3>
+            </div>
+            <button class="light" type="button" onclick="copyText('at-a-glance-cv-field')">Copy</button>
+          </div>
+          <div class="markdown material-preview">{{ render_md(files.cv) | safe }}</div>
+          <textarea id="at-a-glance-cv-field" class="copy-context-source" readonly>{{ files.cv }}</textarea>
+        </section>
+        {% endif %}
+      </div>
+      {% endif %}
+    </section>
+
+    <section class="panel job-tab-panel" data-tab-panel="application" id="application" hidden>
+      <div class="section-heading-row">
+        <div>
+          <p class="eyebrow">Application Material</p>
+          <h2>Draft text and local edits</h2>
+        </div>
+        {% if files.get("application") %}
+        <button class="light" type="button" onclick="copyText('application-field')">Copy application text</button>
+        {% endif %}
+      </div>
+      {% if files.get("application") %}
+      <form method="post" action="/api/jobs/{{ package.stable_id }}/materials" class="material-edit-form">
+        <input type="hidden" name="return_to" value="{{ detail_url }}#application">
+        <input type="hidden" name="run_id" value="{{ package.run_id }}">
+        <div class="markdown material-preview">{{ render_md(files.application) | safe }}</div>
+        <details class="material-edit-shell">
+          <summary>Edit application text</summary>
+          <textarea id="application-field" class="material-editor" name="application">{{ files.application }}</textarea>
+        </details>
+        <div class="material-save-bar inline">
+          <button type="submit">Save application text</button>
+          <button
+            class="light"
+            type="button"
+            onclick="openExternalAgent(this)"
+            data-title="Draft application in another AI"
+            data-prepare-url="/api/jobs/{{ package.stable_id }}/application/external-agent/prepare"
+            data-apply-url="/api/jobs/{{ package.stable_id }}/application/external-agent/apply"
+            data-success-url="{{ detail_url }}#application"
+          >Use another AI</button>
+        </div>
+      </form>
+      {% else %}
+      <p class="muted">Generate materials to create application text for this role.</p>
+      {% endif %}
+    </section>
+
+    <section class="panel job-tab-panel" data-tab-panel="forms" id="forms" hidden>
+      <div class="section-heading-row">
+        <div>
+          <p class="eyebrow">Form Answers</p>
+          <h2>Copy-ready application fields</h2>
+        </div>
+        {% if files.get("form_answers") %}
+        <button class="light" type="button" onclick="copyText('form-answers-raw')">Copy all answers</button>
+        {% endif %}
+      </div>
+      {% if form_answer_items %}
+      <div class="form-answer-overview">
+        <strong>{{ form_answer_items | length }}</strong>
+        <span>copyable answers generated from the job, profile, application text, and CV artifact path.</span>
+      </div>
+      <div class="form-answer-grid">
+        {% for answer in form_answer_items %}
+        <article class="form-answer-card {% if answer.is_long %}long{% endif %}">
+          <header>
+            <h3>{{ answer.label }}</h3>
+            <button class="light" type="button" onclick="copyText('{{ answer.id }}')">Copy</button>
+          </header>
+          <p>{{ answer.preview }}</p>
+          <textarea id="{{ answer.id }}" class="copy-context-source" readonly>{{ answer.value }}</textarea>
+          {% if answer.is_long %}
+          <details>
+            <summary>View full answer</summary>
+            <pre>{{ answer.value }}</pre>
+          </details>
+          {% endif %}
+        </article>
+        {% endfor %}
+      </div>
+      <form method="post" action="/api/jobs/{{ package.stable_id }}/materials" class="material-edit-form">
+        <input type="hidden" name="return_to" value="{{ detail_url }}#forms">
+        <input type="hidden" name="run_id" value="{{ package.run_id }}">
+        <details class="material-edit-shell">
+          <summary>Edit raw form-answer package</summary>
+          <textarea id="form-answers-raw" class="material-editor" name="form_answers">{{ files.form_answers }}</textarea>
+        </details>
+        <div class="material-save-bar inline">
+          <button type="submit">Save form answers</button>
+        </div>
+      </form>
+      {% else %}
+      <p class="muted">Generate materials to create copy-ready form answers.</p>
+      {% endif %}
+    </section>
+
+    <section class="panel job-tab-panel" data-tab-panel="match" id="match" hidden>
+      <div class="match-evidence-layout">
+        <section>
+          <p class="eyebrow">Deterministic Match</p>
+          <div class="match-summary-score">
+            <strong>{{ match_summary.score }}%</strong>
+            <span class="badge {{ match_summary.category }}">{{ match_summary.category }}</span>
+          </div>
+          {% if match_summary.recommended_angle %}<p>{{ match_summary.recommended_angle }}</p>{% endif %}
+          {% if match_summary.matched_keywords %}
+          <div class="tag-cloud compact">
+            {% for keyword in match_summary.matched_keywords %}<span>{{ keyword }}</span>{% endfor %}
+          </div>
+          {% endif %}
+          {% if score_details.components %}
+          <div class="component-list job-component-list">
+            {% for component in score_details.components %}
+            <span class="badge {{ component.tone }}">{{ component.label }} {{ "%+d"|format(component.value) if component.value is number else component.value }}</span>
+            {% endfor %}
+          </div>
+          {% endif %}
+          {% if score_details.reasons %}
+          <div class="job-signal-list">
+            <strong>Signals</strong>
+            {% for reason in score_details.reasons %}<p>{{ reason }}</p>{% endfor %}
+          </div>
+          {% endif %}
+          {% if score_details.concerns %}
+          <div class="job-signal-list warning">
+            <strong>Concerns</strong>
+            {% for concern in score_details.concerns %}<p>{{ concern }}</p>{% endfor %}
+          </div>
+          {% endif %}
+          {% if score_details.missing_information %}
+          <div class="job-signal-list">
+            <strong>Missing information</strong>
+            <p>{{ score_details.missing_information | join(", ") }}</p>
+          </div>
+          {% endif %}
+          {% if match_summary.review_triggers %}
+          <p class="muted">Review trigger: {{ match_summary.review_triggers | join(", ") }}</p>
+          {% endif %}
+        </section>
+
+        <section>
+          {% if files.get("match_analysis") %}
+          <div class="section-heading-row">
+            <div>
+              <p class="eyebrow">Generated Analysis</p>
+              <h3>Match notes</h3>
+            </div>
+            <button class="light" type="button" onclick="copyText('match-analysis-field')">Copy</button>
+          </div>
+          <div class="markdown material-preview">{{ render_md(files.match_analysis) | safe }}</div>
+          <textarea id="match-analysis-field" class="copy-context-source" readonly>{{ files.match_analysis }}</textarea>
+          {% endif %}
+
+          {% if package.ai_evaluation_status %}
+          <div class="job-subsection">
+            <p class="eyebrow">AI Search Evaluation</p>
+            {% if package.ai_evaluation_status == "evaluated" %}
+              <p>
+                <span class="badge {{ package.ai_fit_confidence }}">{{ package.ai_fit_confidence }} confidence</span>
+                {% if package.ai_should_prioritize %}<span class="badge strong">Prioritize</span>{% endif %}
+              </p>
+              <p>{{ package.ai_summary }}</p>
+              {% if package.ai_recommended_angle %}<p><strong>AI angle:</strong> {{ package.ai_recommended_angle }}</p>{% endif %}
+              {% if package.ai_risk_flags %}<p><strong>Risk flags:</strong> {{ package.ai_risk_flags | join("; ") }}</p>{% endif %}
+              {% if package.ai_key_profile_evidence %}<p><strong>Profile evidence:</strong> {{ package.ai_key_profile_evidence | join("; ") }}</p>{% endif %}
+              {% if package.ai_model %}<p class="muted">Model: {{ package.ai_model }}</p>{% endif %}
+            {% elif package.ai_evaluation_status == "failed" %}
+              <p><span class="badge failed">AI evaluation failed</span> {{ package.ai_error }}</p>
+            {% elif package.ai_evaluation_status == "skipped" %}
+              <p><span class="badge waiting">AI evaluation skipped</span> {{ package.ai_error }}</p>
+            {% endif %}
+          </div>
+          {% endif %}
+
+          {% if job_detail.source_confidence or job_detail.freshness_confidence or job_detail.extraction_notes %}
+          <div class="job-subsection">
+            <p class="eyebrow">Source Evidence</p>
+            {% if job_detail.source_confidence or job_detail.freshness_confidence %}
+            <dl class="source-evidence-list">
+              {% if job_detail.source_confidence %}<div><dt>Extraction</dt><dd>{{ job_detail.source_confidence }}</dd></div>{% endif %}
+              {% if job_detail.freshness_confidence %}<div><dt>Freshness</dt><dd>{{ job_detail.freshness_confidence }}</dd></div>{% endif %}
+            </dl>
+            {% endif %}
+            {% if job_detail.extraction_notes %}
+            <div class="job-signal-list">
+              {% for note in job_detail.extraction_notes %}<p>{{ note }}</p>{% endfor %}
+            </div>
+            {% endif %}
+          </div>
+          {% endif %}
+        </section>
+      </div>
+    </section>
+
+    <section class="panel job-tab-panel" data-tab-panel="status" id="status" hidden>
+      <div class="section-heading-row">
+        <div>
+          <p class="eyebrow">Review Status</p>
+          <h2>Decision notes for this job</h2>
+        </div>
+        {% if status_saved %}
+        <span class="status-inline-saved">Saved as {{ status_saved | replace("_", " ") }}.</span>
+        {% endif %}
+      </div>
+      <div class="status-editor-layout">
+        <section class="status-current-card">
+          <p class="eyebrow">Current status</p>
+          <strong>{{ package.application_status | replace("_", " ") }}</strong>
+          {% if status and status.status_updated_at %}<span class="muted">Updated {{ status.status_updated_at }}</span>{% endif %}
+          {% if status and status.not_interesting_reason %}
+          <p><span>Reason:</span> {{ status.not_interesting_reason }}</p>
+          {% endif %}
+          {% if status and status.notes %}
+          <p><span>Notes:</span> {{ status.notes }}</p>
+          {% endif %}
+        </section>
+        <form method="post" action="/api/jobs/{{ package.stable_id }}/status" class="status-editor-form status-dedicated-form">
+          <input type="hidden" name="return_to" value="{{ detail_url }}#status">
+          <div>
+            <label>Status</label>
+            <select name="status">
+              {% for item in statuses %}
+              <option value="{{ item }}" {% if status and status.status == item %}selected{% endif %}>{{ item | replace("_", " ") }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div>
+            <label>Reason</label>
+            <input name="not_interesting_reason" value="{{ status.not_interesting_reason if status else '' }}" placeholder="Useful for not interesting, optional otherwise">
+          </div>
+          <div>
+            <label>Notes</label>
+            <textarea class="compact-textarea" name="notes" placeholder="Private notes for this posting">{{ status.notes if status else "" }}</textarea>
+          </div>
+          <button type="submit">Save status</button>
+        </form>
+      </div>
+    </section>
+
+    <section class="panel job-tab-panel" data-tab-panel="tools" id="tools" hidden>
+      <div class="tools-grid">
+        <section class="tool-card">
+          <p class="eyebrow">Posting Links</p>
+          <div class="button-stack">
+            {% if posting_snapshot.url %}<a class="button light" href="{{ posting_snapshot.url }}" target="_blank" rel="noreferrer">View saved posting snapshot</a>{% endif %}
+            {% if job_detail.source_url %}<a class="button light" href="{{ job_detail.source_url }}" target="_blank" rel="noreferrer">View posting on external website</a>{% endif %}
+            {% if job_detail.application_url and job_detail.application_url != job_detail.source_url %}<a class="button light" href="{{ job_detail.application_url }}" target="_blank" rel="noreferrer">Open application</a>{% endif %}
+            <a class="button light" href="/match-sandbox?job_id={{ package.stable_id }}&run_id={{ package.run_id }}">Open in sandbox</a>
+            {% if cv_reference %}<a class="button light" href="{{ cv_reference.url }}">Reference CV</a>{% endif %}
+          </div>
+        </section>
+
+        <section class="tool-card">
+          <p class="eyebrow">External Review</p>
+          <p class="muted">Prepare context for another AI without changing local files.</p>
+          <form class="inline-form">
+            <input type="hidden" name="run_id" value="{{ package.run_id }}">
+            <button
+              class="light"
+              type="button"
+              onclick="openExternalAgent(this)"
+              data-title="Review this job in another AI"
+              data-prepare-url="/api/jobs/{{ package.stable_id }}/review-bundle/external-agent/prepare"
+            >Prepare AI review bundle</button>
+          </form>
+          <form class="inline-form copy-context-form">
+            <input type="hidden" name="run_id" value="{{ package.run_id }}">
+            <textarea id="job-copy-context-source" class="copy-context-source" readonly>{{ job_copy_context }}</textarea>
+            <button
+              class="light"
+              type="button"
+              onclick="copyJobContext(this)"
+              data-context-target="job-copy-context-source"
+              data-context-url="/api/jobs/{{ package.stable_id }}/context/copy"
+            >Copy complete job context</button>
+            <span class="copy-context-status" data-copy-context-status aria-live="polite"></span>
+          </form>
+        </section>
+
+      </div>
+
+      {% if files.get("job") %}
+      <details class="diagnostic-panel job-json-diagnostic">
+        <summary>Job JSON</summary>
+        <pre class="copy-source">{{ files.job }}</pre>
+      </details>
+      {% endif %}
+    </section>
+  </div>
+</div>
+
+<div class="modal-backdrop status-modal-backdrop" id="status-modal" role="dialog" aria-modal="true" aria-labelledby="status-modal-title">
+  <div class="modal small-modal status-modal">
+    <div class="section-heading-row">
+      <div>
+        <p class="eyebrow">Update Status</p>
+        <h2 id="status-modal-title">Save status</h2>
+      </div>
+      <button class="light" type="button" onclick="closeStatusModal()">Close</button>
+    </div>
+    <form method="post" action="/api/jobs/{{ package.stable_id }}/status" class="status-editor-form">
+      <input type="hidden" name="return_to" value="{{ detail_url }}#status">
+      <input type="hidden" name="status" id="status-modal-status" value="{{ package.application_status }}">
+      <p class="status-modal-copy">Add a quick note now, or save the status and edit details later in the Status tab.</p>
+      <div>
+        <label>Reason</label>
+        <input id="status-modal-reason" name="not_interesting_reason" value="{{ status.not_interesting_reason if status else '' }}" placeholder="Useful for not interesting, optional otherwise">
+      </div>
+      <div>
+        <label>Notes</label>
+        <textarea id="status-modal-notes" class="compact-textarea" name="notes" placeholder="Private notes for this posting">{{ status.notes if status else "" }}</textarea>
+      </div>
+      <div class="status-modal-actions">
+        <button type="submit" id="status-modal-submit">Save status</button>
+        <button class="light" type="button" onclick="closeStatusModal()">Cancel</button>
+      </div>
     </form>
   </div>
 </div>
 
-{% if package.ai_evaluation_status %}
-<div class="panel">
-  <h2>AI Search Evaluation</h2>
-  {% if package.ai_evaluation_status == "evaluated" %}
-    <p>
-      <span class="badge {{ package.ai_fit_confidence }}">{{ package.ai_fit_confidence }} confidence</span>
-      {% if package.ai_should_prioritize %}<span class="badge strong">Prioritize</span>{% endif %}
-    </p>
-    <p>{{ package.ai_summary }}</p>
-    {% if package.ai_recommended_angle %}<p><strong>AI recommended angle:</strong> {{ package.ai_recommended_angle }}</p>{% endif %}
-    {% if package.ai_risk_flags %}<p><strong>AI risk flags:</strong> {{ package.ai_risk_flags | join("; ") }}</p>{% endif %}
-    {% if package.ai_key_profile_evidence %}<p><strong>Profile evidence:</strong> {{ package.ai_key_profile_evidence | join("; ") }}</p>{% endif %}
-    {% if package.ai_model %}<p class="muted">Model: {{ package.ai_model }}</p>{% endif %}
-  {% elif package.ai_evaluation_status == "failed" %}
-    <p><span class="badge failed">AI evaluation failed</span> {{ package.ai_error }}</p>
-  {% elif package.ai_evaluation_status == "skipped" %}
-    <p><span class="badge waiting">AI evaluation skipped</span> {{ package.ai_error }}</p>
-  {% endif %}
-</div>
-{% endif %}
+<script>
+  function openStatusModal(status, label) {
+    const modal = document.getElementById("status-modal");
+    const statusInput = document.getElementById("status-modal-status");
+    const title = document.getElementById("status-modal-title");
+    const submit = document.getElementById("status-modal-submit");
+    if (!modal || !statusInput || !title || !submit) return;
+    statusInput.value = status || "";
+    title.innerText = `Mark as ${label || status}`;
+    submit.innerText = `Save ${label || "status"}`;
+    modal.style.display = "flex";
+    const target = status === "not_interesting"
+      ? document.getElementById("status-modal-reason")
+      : document.getElementById("status-modal-notes");
+    target?.focus();
+  }
 
-<div class="panel">
-  <h2>Status</h2>
-  <form method="post" action="/api/jobs/{{ package.stable_id }}/status" class="grid">
-    <div>
-      <label>Status</label>
-      <select name="status">
-        {% for item in statuses %}
-        <option value="{{ item }}" {% if status and status.status == item %}selected{% endif %}>{{ item }}</option>
-        {% endfor %}
-      </select>
-    </div>
-    <div><label>Not interesting reason</label><input name="not_interesting_reason" value="{{ status.not_interesting_reason if status else '' }}"></div>
-    <div style="grid-column: 1 / -1;"><label>Notes</label><textarea name="notes">{{ status.notes if status else "" }}</textarea></div>
-    <button type="submit">Save status</button>
-  </form>
-</div>
+  function closeStatusModal() {
+    const modal = document.getElementById("status-modal");
+    if (modal) modal.style.display = "none";
+  }
 
-<div class="panel">
-  <h2>Generated Materials</h2>
-  <p class="muted">You can edit these texts directly. Saving does not call Claude; it only updates the local generated files.</p>
-  <form method="post" action="/api/jobs/{{ package.stable_id }}/materials">
-    <input type="hidden" name="return_to" value="/jobs/{{ package.stable_id }}">
-  {% for key, label in [("cv", "At-a-glance CV"), ("application", "Application text"), ("form_answers", "Form answers"), ("match_analysis", "Match analysis")] %}
-    <h3>{{ label }}</h3>
-    <button class="light" type="button" onclick="copyText('{{ key }}-field')">Copy</button>
-    <button class="light" type="button" onclick="openAiEdit(this)" data-target="{{ key }}-field" data-field-id="job.{{ key }}" data-button-id="job.{{ key }}" data-job-id="{{ package.stable_id }}" data-run-id="{{ package.run_id }}">Edit with AI</button>
-    <textarea id="{{ key }}-field" name="{{ key }}">{{ files.get(key, '') }}</textarea>
-  {% endfor %}
-    <button type="submit">Save edited materials</button>
-  </form>
-</div>
+  document.querySelectorAll("[data-status-choice]").forEach((button) => {
+    button.addEventListener("click", () => openStatusModal(button.dataset.statusChoice, button.dataset.statusLabel));
+  });
 
-{% if files.get("job") %}
-<div class="panel">
-  <h2>Job JSON</h2>
-  <pre class="copy-source">{{ files.job }}</pre>
-</div>
-{% endif %}
+  (() => {
+    const shell = document.querySelector("[data-job-detail-tabs]");
+    if (!shell) return;
+    const buttons = [...shell.querySelectorAll("[data-tab-target]")];
+    const panels = [...shell.querySelectorAll("[data-tab-panel]")];
+    const activate = (name, updateHash = true) => {
+      buttons.forEach((button) => {
+        const active = button.dataset.tabTarget === name;
+        button.classList.toggle("active", active);
+        button.setAttribute("aria-selected", active ? "true" : "false");
+      });
+      panels.forEach((panel) => {
+        const active = panel.dataset.tabPanel === name;
+        panel.classList.toggle("active", active);
+        panel.hidden = !active;
+      });
+      if (updateHash) history.replaceState(null, "", `#${name}`);
+    };
+    buttons.forEach((button) => {
+      button.addEventListener("click", () => activate(button.dataset.tabTarget || "job"));
+    });
+    const initial = location.hash.replace("#", "");
+    if (initial && buttons.some((button) => button.dataset.tabTarget === initial)) {
+      activate(initial, false);
+    }
+  })();
 
-<div class="panel">
-  <h2>Scoring Sandbox</h2>
-  <p class="muted">Open this posting with its saved job fields prefilled.</p>
-  <a class="button light" href="/match-sandbox?job_id={{ package.stable_id }}&run_id={{ package.run_id }}">Open this posting in sandbox</a>
-</div>
+  document.querySelectorAll("[data-material-generation-form]").forEach((form) => {
+    form.addEventListener("submit", () => {
+      const button = form.querySelector("[data-generation-submit]");
+      const status = form.querySelector("[data-generation-working]");
+      if (button) {
+        button.disabled = true;
+        button.innerText = "Generating...";
+      }
+      if (status) status.hidden = false;
+      form.classList.add("is-generating");
+    });
+  });
+</script>
 {% endblock %}

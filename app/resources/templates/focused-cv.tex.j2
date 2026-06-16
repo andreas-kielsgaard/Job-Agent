@@ -1,0 +1,69 @@
+\documentclass[10pt,a4paper]{article}
+\usepackage[margin=12mm]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{titlesec}
+\usepackage[hidelinks]{hyperref}
+
+\definecolor{Accent}{HTML}{2C6F5D}
+\definecolor{Ink}{HTML}{15201C}
+\definecolor{Muted}{HTML}{40504B}
+\definecolor{Rule}{HTML}{D8DFDC}
+
+\pagestyle{empty}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{0pt}
+\renewcommand{\familydefault}{\sfdefault}
+\setlist[itemize]{leftmargin=*, nosep, topsep=1mm, itemsep=0.6mm}
+\titleformat{\section}{\large\bfseries\color{Ink}\uppercase}{}{0pt}{}
+\titlespacing*{\section}{0pt}{3.2mm}{1.4mm}
+
+\begin{document}
+\color{Ink}
+\begingroup
+{\Huge\bfseries {{ contact.name | latex }}}\\[1.5mm]
+{\large\color{Accent} {{ focused_cv.headline | latex }}}\\[1.8mm]
+{\color{Muted} Focused for {{ focused_cv.target | latex }}}\\[2.5mm]
+{\small\color{Muted}
+{{ contact.location | latex }} \enspace|\enspace {{ contact.email | latex }} \enspace|\enspace {{ contact.phone | latex }}{% if contact.linkedin %} \enspace|\enspace {{ contact.linkedin | latex }}{% endif %}
+}
+\par\endgroup
+\vspace{2.5mm}
+{\color{Accent}\rule{\linewidth}{1.1pt}}
+
+\section*{Recruiter Profile}
+{{ focused_cv.positioning | latex }}
+
+\section*{Selected Skills}
+\begin{itemize}
+{% for item in focused_cv.skills -%}
+  \item \textbf{ {{ item.name | latex }} } -- {{ item.detail | latex }}
+{% endfor -%}
+\end{itemize}
+
+\section*{Selected Experience}
+{% for item in focused_cv.experience -%}
+\textbf{ {{ item.company | latex }} } \hfill {{ item.role | latex }}
+\begin{itemize}
+{% for bullet in item.bullets -%}
+  \item {{ bullet | latex }}
+{% endfor -%}
+\end{itemize}
+{% endfor -%}
+
+{% if focused_cv.keywords %}
+\section*{Keywords}
+{{ focused_cv.keywords | map("latex") | join(", ") }}
+{% endif %}
+
+{% if focused_cv.caveats %}
+\section*{Review Notes}
+\begin{itemize}
+{% for caveat in focused_cv.caveats -%}
+  \item {{ caveat | latex }}
+{% endfor -%}
+\end{itemize}
+{% endif %}
+\end{document}

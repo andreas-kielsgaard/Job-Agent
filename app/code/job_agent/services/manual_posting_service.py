@@ -35,6 +35,7 @@ class ManualPostingInput:
     ai_enhanced_search: bool = False
     generate_materials: bool = False
     use_llm: bool = False
+    llm_model: str = ""
 
 
 @dataclass
@@ -92,6 +93,7 @@ class ManualPostingService:
                 root=self.root,
                 run_id=run.run_id,
                 stable_id=state.stable_id,
+                llm_model=data.llm_model,
             )
             paths = write_job_package(
                 job,
@@ -189,7 +191,15 @@ class ManualPostingService:
         if not service.is_configured():
             return service.skipped("ANTHROPIC_API_KEY is missing or placeholder.")
         try:
-            return service.evaluate(job, match, profile, highlight_reasons, run_id=run_id, stable_id=stable_id)
+            return service.evaluate(
+                job,
+                match,
+                profile,
+                highlight_reasons,
+                run_id=run_id,
+                stable_id=stable_id,
+                llm_model=data.llm_model,
+            )
         except Exception as exc:
             return service.failed(str(exc))
 

@@ -3,7 +3,12 @@ from __future__ import annotations
 from pathlib import Path
 
 from job_agent.config import load_profile
-from job_agent.generator import generate_materials, maybe_generate_application_with_llm, select_experience
+from job_agent.generator import (
+    build_focused_cv_llm_prompt,
+    generate_materials,
+    maybe_generate_application_with_llm,
+    select_experience,
+)
 from job_agent.llm import LlmCompletion
 from job_agent.models import Job, MatchResult
 from job_agent.scoring import score_job
@@ -55,6 +60,87 @@ def test_blank_available_from_does_not_leave_stray_period(template_project: Path
 
     assert "Availability: . " not in package.application
     assert "Availability: Can start after agreement." in package.application
+
+
+def test_focused_one_page_cv_is_generated_deterministically(template_project: Path) -> None:
+    profile = load_profile(template_project)
+    job = Job(title="SAP ABAP Consultant", description="ABAP OData QM contract role")
+    match = score_job(job, profile)
+
+    package = generate_materials(job, match, profile, use_llm=False, root=template_project)
+
+    assert "Focused One-Page CV" in package.focused_cv
+    assert "<!doctype html>" in package.focused_cv_html
+    assert "Focused for SAP ABAP Consultant" in package.focused_cv_html
+    assert "\\documentclass" in package.focused_cv_tex
+    assert package.focused_cv_pdf.startswith(b"%PDF")
+    assert "match score" not in package.focused_cv.lower()
+
+
+def test_focused_cv_prompt_has_no_invention_guardrails(template_project: Path) -> None:
+    profile = load_profile(template_project)
+    job = Job(title="SAP ABAP Consultant", description="ABAP")
+    prompt = build_focused_cv_llm_prompt(
+        job,
+        MatchResult(total_score=80, category="strong"),
+        profile,
+        selected_experience=[{"company": "LEGO", "role": "SAP ABAP", "relevance": "Built OData."}],
+        top_skills=["SAP ABAP", "OData"],
+        fallback_model={"keywords": ["SAP ABAP", "OData"]},
+        root=template_project,
+    )
+
+    assert "Do not invent facts" in prompt
+    assert "Return only valid JSON" in prompt
+    assert "LaTeX one-page CV" in prompt
+    assert "SAP ABAP Consultant" in prompt
+
+
+def test_focused_cv_llm_json_is_normalized_without_new_skill_names(monkeypatch, template_project: Path) -> None:
+    profile = load_profile(template_project)
+    calls: list[dict] = []
+
+    class FakeLlmService:
+        def __init__(self, root: Path) -> None:
+            self.root = root
+
+        def model_name(self) -> str:
+            return "fake-model"
+
+        def is_configured(self) -> bool:
+            return True
+
+        def complete(self, prompt: str, **kwargs) -> LlmCompletion:
+            calls.append({"prompt": prompt, **kwargs})
+            if kwargs["purpose"] == "focused_cv_generation":
+                return LlmCompletion(
+                    text=(
+                        '{"headline":"SAP ABAP / RAP Consultant","target":"SAP ABAP Consultant",'
+                        '"positioning":"Evidence-led ABAP profile for recruiter screening.",'
+                        '"skills":[{"name":"SAP ABAP","detail":"Selected from the role and profile evidence."},'
+                        '{"name":"Invented Tool","detail":"Should be dropped."}],'
+                        '"experience":[{"company":"LEGO","role":"SAP ABAP Consultant",'
+                        '"bullets":["Built backend and OData functionality for mobile QM solution."]}],'
+                        '"keywords":["SAP ABAP","Invented Tool"]}'
+                    ),
+                    model="fake-model",
+                )
+            return LlmCompletion(text="LLM application text", model="fake-model")
+
+    monkeypatch.setattr("job_agent.generator.LlmService", FakeLlmService)
+
+    package = generate_materials(
+        Job(title="SAP ABAP Consultant", description="ABAP OData QM"),
+        MatchResult(total_score=82, category="strong", matched_keywords=["SAP ABAP"], recommended_angle="Lead with ABAP"),
+        profile,
+        use_llm=True,
+        root=template_project,
+    )
+
+    assert package.application == "LLM application text\n"
+    assert "Evidence-led ABAP profile" in package.focused_cv
+    assert "Invented Tool" not in package.focused_cv
+    assert [call["purpose"] for call in calls] == ["application_generation", "focused_cv_generation"]
 
 
 def test_selected_experience_prefers_keyword_relevance(template_project: Path) -> None:
@@ -166,12 +252,14 @@ def test_application_generation_uses_llm_service(monkeypatch, template_project: 
         run_id="run-1",
         stable_id="stable-1",
         root=template_project,
+        llm_model="claude-opus-4-8",
     )
 
     assert text == "LLM application text\n"
     assert calls[0]["purpose"] == "application_generation"
     assert calls[0]["run_id"] == "run-1"
     assert calls[0]["associated_job_id"] == "stable-1"
+    assert calls[0]["model"] == "claude-opus-4-8"
     assert any("succeeded with model fake-model" in note for note in notes)
 
 

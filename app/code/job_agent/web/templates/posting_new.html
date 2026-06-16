@@ -3,7 +3,7 @@
 <div class="panel">
   <h1>Add Posting</h1>
   <p class="muted">Paste a role you found from email, LinkedIn, a recruiter portal, or a company site. URL fetching is not used here; the pasted text is the source of truth.</p>
-  <form method="post" action="/postings/new" class="grid">
+  <form method="post" action="/postings/new" class="grid" data-llm-model-picker data-llm-model-requires-any-groups="ai_enhanced_search;generate_materials+use_llm" data-llm-model-title="Choose AI power for posting import">
     <div><label>Title</label><input name="title" placeholder="SAP ABAP/RAP Consultant"></div>
     <div><label>Source / recruiter</label><input name="source" placeholder="Manual Intake, recruiter name, LinkedIn"></div>
     <div><label>Company / client</label><input name="company"></div>

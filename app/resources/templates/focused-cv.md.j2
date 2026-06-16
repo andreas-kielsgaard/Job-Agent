@@ -1,0 +1,35 @@
+# {{ contact.name }} - Focused One-Page CV
+
+{{ focused_cv.headline }}
+
+Target focus: {{ focused_cv.target }}
+
+Contact: {{ contact.email }} | {{ contact.phone }} | {{ contact.location }}{% if contact.linkedin %} | {{ contact.linkedin }}{% endif %}
+
+## Recruiter Profile
+{{ focused_cv.positioning }}
+
+## Selected Skills
+{% for item in focused_cv.skills -%}
+- **{{ item.name }}**: {{ item.detail }}
+{% endfor %}
+
+## Selected Experience
+{% for item in focused_cv.experience -%}
+### {{ item.company }} - {{ item.role }}
+{% for bullet in item.bullets -%}
+- {{ bullet }}
+{% endfor %}
+{% endfor %}
+
+{% if focused_cv.keywords %}
+## Keywords
+{{ focused_cv.keywords | join(", ") }}
+{% endif %}
+
+{% if focused_cv.caveats %}
+## Review Notes
+{% for caveat in focused_cv.caveats -%}
+- {{ caveat }}
+{% endfor %}
+{% endif %}

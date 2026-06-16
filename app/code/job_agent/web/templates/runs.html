@@ -39,7 +39,7 @@
           <td>{{ run.finished_at }}</td>
           <td>{{ run.total_loaded }}</td>
           <td>{{ run.generated_job_count }}</td>
-          <td>{% if run.is_test %}<span class="badge">test</span>{% endif %} <span class="badge">{{ run.visibility }}</span></td>
+          <td>{% if run.is_test %}<span class="badge">test</span>{% endif %} {% if run.options.get("full_source_ingestion") %}<span class="badge">full ingest</span>{% endif %} <span class="badge">{{ run.visibility }}</span></td>
         </tr>
         {% endfor %}
       </tbody>

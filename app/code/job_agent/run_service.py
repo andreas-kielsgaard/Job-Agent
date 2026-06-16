@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import date
@@ -16,7 +17,7 @@ from .run_store import RunEvent, RunOptions, RunRecord, RunStore, utc_now
 from .scoring import score_job
 from .services.ai_search_service import AiSearchEvaluation, AiSearchService, should_ai_evaluate_job
 from .services.job_board_recipe_service import enrich_jobs_with_detail_pages_with_trace
-from .services.recipes.mapping import load_job_board_recipe
+from .services.recipes.mapping import load_project_job_board_recipe
 from .services.source_session_service import SourceSessionService
 from .sources import SourceFetchOptions, SourceFetchResult, SourceProgressEvent, iter_source_results
 from .store import JobStore
@@ -57,6 +58,8 @@ def run_daily_agent(
         record = run_store.create_run(options)
     run_id = record.run_id
     existing_totals = _record_totals(record) if append_to_existing else {}
+    include_disabled = include_disabled_source or options.include_disabled_sources
+    run_label = _run_label(options, source_id)
 
     def emit(
         event_type: str,
@@ -85,7 +88,7 @@ def run_daily_agent(
         run_store.update(run_id, status="running")
         emit(
             "run_started",
-            f"Single-source run started for {source_id}." if source_id else "Daily agent run started.",
+            f"{run_label} started.",
             "startup",
         )
 
@@ -99,6 +102,7 @@ def run_daily_agent(
                 "jobs_found": event.jobs_found,
                 "warnings_count": event.warnings_count,
             }
+            counts.update(event.details or {})
             if event.elapsed_time_seconds is not None:
                 counts["elapsed_time_seconds"] = event.elapsed_time_seconds
             if event.page_explored_count:
@@ -127,7 +131,6 @@ def run_daily_agent(
         excluded_items: list[dict] = []
         processed_states = []
         processed_keys: set[str] = set()
-        remaining_detail_budget = options.detail_extraction_limit
         max_parallel_sources = _max_parallel_sources_from_profile(profile)
         fetch_options = SourceFetchOptions(
             fetch_details=False,
@@ -138,6 +141,19 @@ def run_daily_agent(
             require_setup_complete=not bool(source_id),
             max_parallel_sources=max_parallel_sources,
         )
+        if options.full_source_ingestion:
+            emit(
+                "full_source_ingestion_configured",
+                (
+                    "Full source ingestion will read all sources that are currently eligible to execute, including "
+                    "sources excluded from daily runs, and will not stop at the default detail-page cap."
+                ),
+                "startup",
+                counts={
+                    "detail_pause_every_jobs": max(0, int(options.detail_pause_every_jobs or 0)),
+                    "detail_pause_seconds": max(0, int(options.detail_pause_seconds or 0)),
+                },
+            )
         emit(
             "source_parallelism_configured",
             (
@@ -152,7 +168,7 @@ def run_daily_agent(
             root,
             progress_callback=emit_source_progress,
             source_id=source_id,
-            include_disabled=include_disabled_source,
+            include_disabled=include_disabled,
             fetch_options=fetch_options,
         ):
             total_loaded += len(source_fetch.result.jobs)
@@ -169,13 +185,16 @@ def run_daily_agent(
             source_counts["changed_candidates"] = status_counts["changed"]
             source_counts["previously_seen"] = status_counts["previously_seen"]
             source_counts["previously_seen_skipped"] = 0 if options.include_seen else status_counts["previously_seen"]
+            source_detail_budget = options.detail_extraction_limit
             detail_review = _prepare_detail_review(
                 source_fetch,
                 candidate_listing_states,
                 store,
                 root,
-                remaining_detail_budget,
+                source_detail_budget,
                 emit,
+                pause_every_jobs=options.detail_pause_every_jobs if options.full_source_ingestion else 0,
+                pause_seconds=options.detail_pause_seconds if options.full_source_ingestion else 0,
             )
             candidate_states = detail_review.states
             all_warnings.extend(detail_review.warnings)
@@ -184,8 +203,9 @@ def run_daily_agent(
             source_counts["detail_enriched_count"] = detail_review.enriched
             source_counts["detail_limit_skipped_count"] = detail_review.skipped_for_limit
             source_counts["reviewed_in_detail_count"] = len(candidate_states)
-            if remaining_detail_budget is not None and _source_follows_detail_pages(source_fetch):
-                remaining_detail_budget = max(0, remaining_detail_budget - len(candidate_states))
+            remaining_source_detail_budget = source_detail_budget
+            if source_detail_budget is not None and _source_follows_detail_pages(source_fetch):
+                remaining_source_detail_budget = max(0, source_detail_budget - len(candidate_states))
             if detail_review.skipped_for_limit:
                 emit(
                     "detail_limit_reached",
@@ -199,7 +219,7 @@ def run_daily_agent(
                         "source_index": source_fetch.source_index,
                         "source_count": source_fetch.source_count,
                         "detail_limit_skipped_count": detail_review.skipped_for_limit,
-                        "remaining_detail_budget": remaining_detail_budget or 0,
+                        "remaining_detail_budget": remaining_source_detail_budget or 0,
                     },
                 )
 
@@ -319,6 +339,7 @@ def run_daily_agent(
                                 highlight_reasons,
                                 run_id=run_id,
                                 stable_id=state.stable_id,
+                                llm_model=options.llm_model,
                             )
                             source_counts["ai_evaluations_completed"] += 1
                             if ai_evaluation.should_prioritize:
@@ -380,6 +401,7 @@ def run_daily_agent(
                             run_id=run_id,
                             stable_id=state.stable_id,
                             progress_callback=lambda event: _store_nested_event(run_store, event, progress_callback),
+                            llm_model=options.llm_model,
                         )
                         paths = write_job_package(
                             job,
@@ -453,8 +475,6 @@ def run_daily_agent(
                 current_source=source_fetch.source_name,
                 counts=source_counts,
             )
-            if detail_review.skipped_for_limit and remaining_detail_budget == 0:
-                break
 
         emit(
             "jobs_loaded",
@@ -512,7 +532,7 @@ def run_daily_agent(
         )
         emit(
             "run_completed",
-            f"Single-source run completed for {source_id}." if source_id else "Daily agent run completed.",
+            f"{run_label} completed.",
             "complete",
             status="completed",
             counts=summary,
@@ -532,6 +552,14 @@ def _store_nested_event(run_store: RunStore, event: RunEvent, progress_callback:
         progress_callback(event)
 
 
+def _run_label(options: RunOptions, source_id: str = "") -> str:
+    if source_id:
+        return f"Single-source run for {source_id}"
+    if options.full_source_ingestion:
+        return "Full source ingestion"
+    return "Daily agent run"
+
+
 def _max_parallel_sources_from_profile(profile: dict) -> int:
     runtime = profile.get("runtime", {}) if isinstance(profile.get("runtime", {}), dict) else {}
     try:
@@ -546,8 +574,10 @@ def _prepare_detail_review(
     listing_states: list[JobState],
     store: JobStore,
     root: Path,
-    remaining_detail_budget: int | None,
+    source_detail_budget: int | None,
     emit: Callable[..., None],
+    pause_every_jobs: int = 0,
+    pause_seconds: float = 0.0,
 ) -> DetailReviewResult:
     if not listing_states:
         return DetailReviewResult(states=[])
@@ -556,10 +586,10 @@ def _prepare_detail_review(
         jobs = [state.job for state in listing_states]
         return DetailReviewResult(states=store.classify(jobs))
 
-    if remaining_detail_budget is not None and remaining_detail_budget <= 0:
+    if source_detail_budget is not None and source_detail_budget <= 0:
         return DetailReviewResult(states=[], skipped_for_limit=len(listing_states))
 
-    selected_states = listing_states if remaining_detail_budget is None else listing_states[:remaining_detail_budget]
+    selected_states = listing_states if source_detail_budget is None else listing_states[:source_detail_budget]
     skipped_for_limit = max(0, len(listing_states) - len(selected_states))
     jobs = [state.job for state in selected_states]
     if not jobs:
@@ -571,7 +601,7 @@ def _prepare_detail_review(
         return DetailReviewResult(states=[], warnings=[warning], skipped_for_limit=len(listing_states))
 
     try:
-        recipe = load_job_board_recipe(resolve_project_path(root, recipe_path))
+        recipe = load_project_job_board_recipe(root, recipe_path)
     except (OSError, ValueError) as exc:
         warning = SourceWarning(source_fetch.source_name, f"Detail review could not load recipe: {exc}")
         return DetailReviewResult(states=[], warnings=[warning], skipped_for_limit=len(listing_states))
@@ -605,6 +635,8 @@ def _prepare_detail_review(
     )
 
     detail_progress = {"requested": 0, "read": 0}
+    pause_every_jobs = max(0, int(pause_every_jobs or 0))
+    pause_seconds = max(0.0, float(pause_seconds or 0))
 
     def emit_detail_step(step) -> None:
         phase = str(getattr(step, "phase", "") or "")
@@ -627,6 +659,30 @@ def _prepare_detail_review(
                 "reviewed_in_detail_count": len(jobs),
             },
         )
+        if (
+            pause_every_jobs
+            and pause_seconds
+            and phase in {"Detail page read", "Detail page failed"}
+            and detail_progress["read"] < len(jobs)
+            and detail_progress["read"] % pause_every_jobs == 0
+        ):
+            emit(
+                "detail_review_pause",
+                (
+                    f"Pausing {int(pause_seconds)}s after {detail_progress['read']} detail page(s) "
+                    f"for {source_fetch.source_name}."
+                ),
+                "source_processing",
+                current_source=source_fetch.source_name,
+                counts={
+                    "source_index": source_fetch.source_index,
+                    "source_count": source_fetch.source_count,
+                    "detail_read_count": detail_progress["read"],
+                    "detail_total": len(jobs),
+                    "pause_seconds": int(pause_seconds),
+                },
+            )
+            time.sleep(pause_seconds)
 
     warnings, attempts = enrich_jobs_with_detail_pages_with_trace(
         jobs,
@@ -713,17 +769,32 @@ def _summary_for_record(summary: dict, existing_totals: dict[str, int], generate
 
 
 def _new_source_counts(source_fetch: SourceFetchResult) -> dict:
+    metadata = source_fetch.result.metadata
+    pagination_fetch_count = int(metadata.get("pagination_fetch_count") or 0)
+    pagination_max_pages = int(metadata.get("pagination_max_pages") or 0)
+    visible_total = int(metadata.get("visible_total_job_count") or 0)
+    page_explored_count = max(1 if source_fetch.result.jobs or metadata else 0, 1 + pagination_fetch_count)
+    page_total = max(page_explored_count, pagination_max_pages)
+    observed = int(metadata.get("listing_extracted_count") or len(source_fetch.result.jobs) or 0)
+    if visible_total and observed and page_explored_count:
+        per_page = max(1, round(observed / page_explored_count))
+        page_total = max(page_total, (visible_total + per_page - 1) // per_page)
     return {
         "source_index": source_fetch.source_index,
         "source_count": source_fetch.source_count,
         "jobs_found": len(source_fetch.result.jobs),
         "warnings_count": len(source_fetch.result.warnings),
-        "listing_observed_count": int(source_fetch.result.metadata.get("listing_observed_count") or 0),
-        "listing_extracted_count": int(source_fetch.result.metadata.get("listing_extracted_count") or 0),
-        "listing_limit_skipped_count": int(source_fetch.result.metadata.get("listing_limit_skipped_count") or 0),
-        "pagination_fetch_count": int(source_fetch.result.metadata.get("pagination_fetch_count") or 0),
-        "detail_fetch_count": int(source_fetch.result.metadata.get("detail_fetch_count") or 0),
-        "detail_enriched_count": int(source_fetch.result.metadata.get("detail_enriched_count") or 0),
+        "listing_observed_count": int(metadata.get("listing_observed_count") or 0),
+        "listing_extracted_count": int(metadata.get("listing_extracted_count") or 0),
+        "listing_limit_skipped_count": int(metadata.get("listing_limit_skipped_count") or 0),
+        "pagination_fetch_count": pagination_fetch_count,
+        "pagination_duplicate_page_count": int(metadata.get("pagination_duplicate_page_count") or 0),
+        "pagination_max_pages": pagination_max_pages,
+        "visible_total_job_count": visible_total,
+        "page_explored_count": page_explored_count,
+        "page_total": page_total,
+        "detail_fetch_count": int(metadata.get("detail_fetch_count") or 0),
+        "detail_enriched_count": int(metadata.get("detail_enriched_count") or 0),
         "detail_limit_skipped_count": 0,
         "reviewed_in_detail_count": 0,
         "new_roles": 0,

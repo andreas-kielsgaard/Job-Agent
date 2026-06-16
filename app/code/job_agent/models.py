@@ -165,3 +165,7 @@ class GeneratedPackage:
     selected_experience: list[dict[str, str]]
     top_skills: list[str]
     generation_notes: list[str] = field(default_factory=list)
+    focused_cv: str = ""
+    focused_cv_html: str = ""
+    focused_cv_tex: str = ""
+    focused_cv_pdf: bytes = b""

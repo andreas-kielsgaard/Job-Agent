@@ -6,7 +6,6 @@ from pathlib import Path
 from job_agent.digest import write_job_package
 from job_agent.models import GeneratedPackage, Job, MatchResult
 
-
 EURSAP_SOURCE = {
     "id": "eursap-jobs",
     "name": "Eursap Jobs",
@@ -76,7 +75,18 @@ def write_sample_package(
             application_url=f"https://example.com/{stable_id}/apply",
         ),
         MatchResult(total_score=82, category="strong", recommended_angle="Lead with ABAP", concerns=["Confirm rate"]),
-        GeneratedPackage("cv", "app", "forms", "analysis", [], []),
+        GeneratedPackage(
+            cv="cv",
+            application="app",
+            form_answers="forms",
+            match_analysis="analysis",
+            selected_experience=[],
+            top_skills=[],
+            focused_cv="# Focused One-Page CV\n\nSample focused CV.\n",
+            focused_cv_html="<!doctype html><html><body>Sample focused CV.</body></html>\n",
+            focused_cv_tex="\\documentclass{article}\n\\begin{document}\nSample focused CV.\n\\end{document}\n",
+            focused_cv_pdf=b"%PDF-1.4\n%%EOF\n",
+        ),
         run_date,
         root=root,
         run_id=run_id,

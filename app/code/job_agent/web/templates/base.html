@@ -8,6 +8,7 @@
     <link rel="alternate icon" href="/static/icons/job-agent-icon-minimal-autumn.ico?v={{ asset_version }}">
     <link rel="apple-touch-icon" href="/static/icons/job-agent-icon-minimal-autumn-256.png?v={{ asset_version }}">
     <link rel="stylesheet" href="/static/app.css?v={{ asset_version }}">
+    <script src="/static/execution_ui.js?v={{ asset_version }}"></script>
     <script>
       function copyText(id) {
         const el = document.getElementById(id);
@@ -19,16 +20,174 @@
 
       let aiEditState = {};
       let externalAgentState = {};
+      let llmModelPickerState = {};
       let localWorkStatusItems = [];
       const WORK_STATUS_LOCAL_KEY = "job-agent:local-work-status";
+      const WORK_STATUS_MINIMIZED_KEY = "job-agent:work-status-minimized";
 
       async function copyValueToClipboard(value) {
+        const text = value || "";
         try {
-          await navigator.clipboard.writeText(value || "");
+          await navigator.clipboard.writeText(text);
           return true;
         } catch {
-          return false;
+          const fallback = document.createElement("textarea");
+          fallback.value = text;
+          fallback.setAttribute("readonly", "");
+          fallback.style.position = "fixed";
+          fallback.style.left = "-9999px";
+          fallback.style.top = "0";
+          document.body.appendChild(fallback);
+          fallback.focus();
+          fallback.select();
+          try {
+            return document.execCommand("copy");
+          } catch {
+            return false;
+          } finally {
+            document.body.removeChild(fallback);
+          }
         }
+      }
+
+      async function copyJobContext(button) {
+        const form = button.closest("form");
+        const status = form?.querySelector("[data-copy-context-status]");
+        const originalText = button.innerText;
+        if (status) status.innerText = "Preparing...";
+        button.disabled = true;
+        button.innerText = "Copying...";
+        try {
+          if (button.dataset.contextTarget) {
+            const target = document.getElementById(button.dataset.contextTarget);
+            const contextText = target?.value || target?.innerText || "";
+            const copied = await copyValueToClipboard(contextText);
+            if (status) status.innerText = copied ? "Copied." : "Context opened.";
+            if (!copied) showCopyContextFallback(contextText);
+            return;
+          }
+          const response = await fetch(button.dataset.contextUrl, {
+            method: "POST",
+            body: form ? new FormData(form) : new FormData()
+          });
+          const data = await response.json();
+          if (!data.ok) {
+            if (status) status.innerText = data.error || "Could not prepare context.";
+            return;
+          }
+          const copied = await copyValueToClipboard(data.context || "");
+          if (status) status.innerText = copied ? "Copied." : "Context opened.";
+          if (!copied) showCopyContextFallback(data.context || "");
+        } catch {
+          if (status) status.innerText = "Could not copy context.";
+        } finally {
+          button.disabled = false;
+          button.innerText = originalText;
+        }
+      }
+
+      function showCopyContextFallback(contextText) {
+        const modal = document.getElementById("external-agent-modal");
+        if (!modal) return;
+        modal.style.display = "flex";
+        document.getElementById("external-agent-title").innerText = "Copy job context";
+        document.getElementById("external-agent-instructions").innerText = "Clipboard access was blocked. The context is selected below; press Ctrl+C to copy it.";
+        const prompt = document.getElementById("external-agent-prompt");
+        prompt.value = contextText || "";
+        prompt.focus();
+        prompt.select();
+        document.getElementById("external-agent-response").value = "";
+        document.getElementById("external-agent-error").innerText = "";
+        document.getElementById("external-agent-status").innerText = "";
+        document.getElementById("external-agent-success").innerHTML = "";
+        document.getElementById("external-agent-response-panel").hidden = true;
+        document.getElementById("external-agent-apply-button").hidden = true;
+      }
+
+      function defaultLlmModelValue() {
+        const select = document.getElementById("llm-model-select");
+        return select?.dataset.defaultModel || select?.value || "";
+      }
+
+      function controlIsChecked(form, name) {
+        return [...form.querySelectorAll(`[name="${name}"]`)].some((control) => control.checked);
+      }
+
+      function llmModelPickerApplies(form, submitter) {
+        if (!form.matches("[data-llm-model-picker]")) return false;
+        if (submitter?.dataset.noLlmModel === "1") return false;
+        const grouped = (form.dataset.llmModelRequiresAnyGroups || "")
+          .split(";")
+          .map((group) => group.split("+").map((item) => item.trim()).filter(Boolean))
+          .filter((group) => group.length);
+        if (grouped.length) {
+          return grouped.some((group) => group.every((name) => controlIsChecked(form, name)));
+        }
+        const required = (form.dataset.llmModelRequires || "").split(",").map((item) => item.trim()).filter(Boolean);
+        if (required.length && !required.every((name) => controlIsChecked(form, name))) return false;
+        const requiresAny = (form.dataset.llmModelRequiresAny || "").split(",").map((item) => item.trim()).filter(Boolean);
+        if (requiresAny.length && !requiresAny.some((name) => controlIsChecked(form, name))) return false;
+        return true;
+      }
+
+      function ensureLlmModelInput(form) {
+        let input = form.querySelector('input[name="llm_model"]');
+        if (!input) {
+          input = document.createElement("input");
+          input.type = "hidden";
+          input.name = "llm_model";
+          form.appendChild(input);
+        }
+        return input;
+      }
+
+      function openLlmModelPicker(form, submitter) {
+        llmModelPickerState = { form, submitter };
+        const select = document.getElementById("llm-model-select");
+        const existing = form.querySelector('input[name="llm_model"]')?.value || "";
+        if (select) select.value = existing || defaultLlmModelValue();
+        document.getElementById("llm-model-title").innerText = form.dataset.llmModelTitle || "Choose AI power";
+        document.getElementById("llm-model-modal").style.display = "flex";
+      }
+
+      function closeLlmModelPicker() {
+        document.getElementById("llm-model-modal").style.display = "none";
+        llmModelPickerState = {};
+      }
+
+      function confirmLlmModelSubmit() {
+        const form = llmModelPickerState.form;
+        if (!form) {
+          closeLlmModelPicker();
+          return;
+        }
+        const select = document.getElementById("llm-model-select");
+        ensureLlmModelInput(form).value = select?.value || defaultLlmModelValue();
+        form.dataset.llmModelConfirmed = "1";
+        const submitter = llmModelPickerState.submitter;
+        closeLlmModelPicker();
+        if (form.requestSubmit) {
+          form.requestSubmit(submitter || undefined);
+        } else {
+          form.submit();
+        }
+      }
+
+      function attachLlmModelPickerForms() {
+        if (document.body.dataset.llmModelPickerAttached === "1") return;
+        document.body.dataset.llmModelPickerAttached = "1";
+        document.addEventListener("submit", (event) => {
+          const form = event.target;
+          if (!(form instanceof HTMLFormElement)) return;
+          if (form.dataset.llmModelConfirmed === "1") {
+            delete form.dataset.llmModelConfirmed;
+            return;
+          }
+          if (!llmModelPickerApplies(form, event.submitter)) return;
+          event.preventDefault();
+          event.stopImmediatePropagation();
+          openLlmModelPicker(form, event.submitter);
+        }, true);
       }
 
       async function openExternalAgent(button) {
@@ -151,6 +310,8 @@
         document.getElementById("ai-new-text").value = "";
         document.getElementById("ai-error").innerText = "";
         document.getElementById("ai-context-list").innerHTML = "Loading context...";
+        const modelSelect = document.getElementById("ai-edit-llm-model");
+        if (modelSelect) modelSelect.value = modelSelect.dataset.defaultModel || modelSelect.value;
         const params = new URLSearchParams({ field_id: aiEditState.fieldId, button_id: aiEditState.buttonId, job_id: aiEditState.jobId, run_id: aiEditState.runId });
         const response = await fetch(`/api/ai-edit/context?${params.toString()}`);
         const data = await response.json();
@@ -190,7 +351,8 @@
             current_text: document.getElementById("ai-old-text").value,
             user_instruction: document.getElementById("ai-user-instruction").value,
             selected_blocks: selected,
-            disabled_blocks: disabled
+            disabled_blocks: disabled,
+            llm_model: document.getElementById("ai-edit-llm-model")?.value || ""
           })
         });
         const data = await response.json();
@@ -260,6 +422,7 @@
       function startWorkStatusDock() {
         const dock = document.getElementById("work-status-dock");
         if (!dock) return;
+        window.renderWorkStatusDock = renderWorkStatus;
 
         async function refreshWorkStatus() {
           try {
@@ -273,13 +436,79 @@
 
         function renderWorkStatus(items) {
           dock.hidden = !items.length;
-          dock.innerHTML = items.map(renderWorkStatusCard).join("");
+          if (!items.length) {
+            dock.innerHTML = "";
+            maybeRefreshCompletedSourceWork(items);
+            return;
+          }
+          const minimized = workStatusMinimized();
+          const counts = workStatusCounts(items);
+          dock.classList.toggle("minimized", minimized);
+          dock.innerHTML = minimized ? renderWorkStatusMini(counts) : renderWorkStatusPanel(items, counts);
+          dock.querySelector("[data-work-status-toggle]")?.addEventListener("click", () => {
+            setWorkStatusMinimized(!workStatusMinimized());
+            renderWorkStatus(items);
+          });
           maybeRefreshCompletedSourceWork(items);
+        }
+
+        function workStatusMinimized() {
+          try {
+            return localStorage.getItem(WORK_STATUS_MINIMIZED_KEY) === "1";
+          } catch {
+            return false;
+          }
+        }
+
+        function setWorkStatusMinimized(minimized) {
+          try {
+            localStorage.setItem(WORK_STATUS_MINIMIZED_KEY, minimized ? "1" : "0");
+          } catch {
+            // Ignore storage failures; the dock still toggles for this render.
+          }
+        }
+
+        function workStatusCounts(items) {
+          const running = items.filter((item) => Boolean(item.is_running) || ["pending", "running"].includes(String(item.status || "").toLowerCase())).length;
+          return {
+            total: items.length,
+            running,
+            complete: Math.max(0, items.length - running)
+          };
+        }
+
+        function renderWorkStatusMini(counts) {
+          const label = `${counts.running} running, ${counts.complete} done`;
+          return `
+            <button class="work-status-mini" type="button" data-work-status-toggle aria-label="Show work status (${escapeHtml(label)})">
+              <span class="work-status-mini-dot" aria-hidden="true"></span>
+              <span class="work-status-mini-text">Work</span>
+              <span class="work-status-mini-counts"><strong>${counts.running}</strong> running, <strong>${counts.complete}</strong> done</span>
+            </button>
+          `;
+        }
+
+        function renderWorkStatusPanel(items, counts) {
+          return `
+            <section class="work-status-panel" aria-label="Background work status">
+              <div class="work-status-header">
+                <div>
+                  <strong>Background work</strong>
+                  <span>${counts.running} running, ${counts.complete} done</span>
+                </div>
+                <button class="work-status-toggle" type="button" data-work-status-toggle aria-label="Minimize background work">Minimize</button>
+              </div>
+              <div class="work-status-list">
+                ${items.map(renderWorkStatusCard).join("")}
+              </div>
+            </section>
+          `;
         }
 
         function renderWorkStatusCard(item) {
           if (item.kind === "profile" || item.progress_percent !== undefined) {
             const status = String(item.status || "running").toLowerCase();
+            const running = Boolean(item.is_running);
             const progress = Math.max(8, Math.min(100, Math.round(Number(item.progress_percent || 18))));
             const statusLine = item.stage || item.message || "Working on profile settings.";
             const href = item.href || item.url || "";
@@ -291,7 +520,7 @@
                   <span>${escapeHtml(item.title || "Drafting profile from CV")}</span>
                   <span class="badge ${escapeHtml(status)}">${escapeHtml(item.status || "running")}</span>
                 </div>
-                <p class="work-status-line">${escapeHtml(statusLine)}</p>
+                <p class="work-status-line">${executionUi.line(statusLine, { running })}</p>
                 ${item.message && item.message !== statusLine ? `<p class="work-status-line">${escapeHtml(item.message)}</p>` : ""}
                 <div class="work-status-bar"><span style="width:${progress}%"></span></div>
               </${tag}>
@@ -316,13 +545,14 @@
             ? Math.max(8, Math.min(100, Math.round((detailRead / detailTotal) * 100)))
             : total > 0 ? Math.max(8, Math.min(100, Math.round((explored / total) * 100))) : 18;
           const status = String(item.status || "running").toLowerCase();
+          const running = Boolean(item.is_running);
           return `
             <article class="work-status-card ${escapeHtml(status)}">
               <div class="work-status-title">
                 <span>${escapeHtml(title)}</span>
                 <span class="badge ${escapeHtml(status)}">${escapeHtml(item.status || "running")}</span>
               </div>
-              <p class="work-status-line">${escapeHtml(statusLine)}</p>
+              <p class="work-status-line">${executionUi.line(statusLine, { running })}</p>
               ${item.message ? `<p class="work-status-line">${escapeHtml(item.message)}</p>` : ""}
               <div class="work-status-bar"><span style="width:${progress}%"></span></div>
             </article>
@@ -330,11 +560,25 @@
         }
 
         function maybeRefreshCompletedSourceWork(items) {
+          const overviewMatch = window.location.pathname === "/sources";
+          const finishedStatuses = new Set(["completed", "completed_with_warnings", "failed", "blocked"]);
+          if (overviewMatch && typeof window.refreshSourceOverviewDynamic === "function") {
+            items.forEach((item) => {
+              const status = String(item.status || "").toLowerCase();
+              if (!item.task_id || !["index", "auto_setup", "session"].includes(item.kind) || !finishedStatuses.has(status)) {
+                return;
+              }
+              const key = `source-overview-refresh:${item.task_id}`;
+              if (sessionStorage.getItem(key)) return;
+              sessionStorage.setItem(key, "1");
+              window.setTimeout(() => window.refreshSourceOverviewDynamic(), 600);
+            });
+            return;
+          }
           const match = window.location.pathname.match(/^\/sources\/([^/]+)$/);
           const sessionMatch = window.location.pathname.match(/^\/sources\/([^/]+)\/session$/);
           if (!match && !sessionMatch) return;
           const sourceId = decodeURIComponent((match || sessionMatch)[1]);
-          const finishedStatuses = new Set(["completed", "completed_with_warnings", "failed", "blocked"]);
           items.forEach((item) => {
             const status = String(item.status || "").toLowerCase();
             const refreshableKind = match ? ["index", "auto_setup"].includes(item.kind) : item.kind === "session";
@@ -355,6 +599,8 @@
       function attachAsyncWorkForms() {
         document.querySelectorAll("form[data-work-status-form]").forEach((form) => {
           form.addEventListener("submit", async (event) => {
+            const submitter = event.submitter;
+            if (submitter?.dataset.noWorkStatus === "1") return;
             const requiredField = form.dataset.workRequires || "";
             if (requiredField) {
               const control = form.querySelector(`[name="${requiredField}"]`);
@@ -364,15 +610,18 @@
             const taskId = ensureWorkTaskId(form);
             const title = form.dataset.workTitle || "Drafting profile from CV";
             const workHref = form.dataset.workHref || "";
+            const workKind = form.dataset.workKind || "profile";
+            const pendingMessage = form.dataset.workMessage || "Sending CV data to the profile draft flow.";
             localWorkStatusItems = [
               ...localWorkStatusItems.filter((item) => item.task_id !== taskId),
               {
-                kind: "profile",
+                kind: workKind,
                 task_id: taskId,
                 title,
                 status: "running",
+                is_running: true,
                 stage: "Submitting",
-                message: "Sending CV data to the profile draft flow.",
+                message: pendingMessage,
                 progress_percent: 8,
                 href: workHref,
                 started_at_ms: Date.now()
@@ -382,8 +631,10 @@
             renderExternalWorkStatus();
             setFormBusy(form, true);
             try {
-              const response = await fetch(form.action, {
-                method: form.method || "POST",
+              const action = submitter?.formAction || form.action;
+              const method = (submitter?.formMethod || form.method || "POST").toUpperCase();
+              const response = await fetch(action, {
+                method,
                 body: new FormData(form),
                 cache: "no-store"
               });
@@ -398,24 +649,29 @@
               }
               if (contentType.includes("text/html")) {
                 const html = await response.text();
+                const completeStage = form.dataset.workCompleteStage || "Ready for review";
+                const completeMessage = form.dataset.workCompleteMessage
+                  || "A CV profile draft is waiting for you to apply or discard it.";
+                const completeHref = workHref || "/setup#cv-profile-draft";
+                const scrollId = form.dataset.workScrollId || "cv-profile-draft";
                 localWorkStatusItems = localWorkStatusItems.map((item) => item.task_id === taskId
-                  ? { ...item, status: "completed", stage: "Ready for review", message: "A CV profile draft is waiting for you to apply or discard it.", progress_percent: 100, href: workHref || "/setup#cv-profile-draft", finished_at: Date.now() }
+                  ? { ...item, status: "completed", is_running: false, stage: completeStage, message: completeMessage, progress_percent: 100, href: completeHref, finished_at: Date.now() }
                   : item
                 );
                 saveLocalWorkStatusItems();
                 document.open();
                 document.write(html);
                 document.close();
-                window.history.replaceState(null, "", workHref || "/setup#cv-profile-draft");
+                window.history.replaceState(null, "", completeHref);
                 window.setTimeout(() => {
-                  document.getElementById("cv-profile-draft")?.scrollIntoView({ block: "start" });
+                  if (scrollId) document.getElementById(scrollId)?.scrollIntoView({ block: "start" });
                 }, 0);
                 return;
               }
               window.location.reload();
             } catch (error) {
               localWorkStatusItems = localWorkStatusItems.map((item) => item.task_id === taskId
-                ? { ...item, status: "failed", stage: "Failed", message: error.message || "Profile draft failed.", progress_percent: 100, finished_at: Date.now() }
+                ? { ...item, status: "failed", is_running: false, stage: "Failed", message: error.message || "Request failed.", progress_percent: 100, finished_at: Date.now() }
                 : item
               );
               saveLocalWorkStatusItems();
@@ -430,26 +686,11 @@
         const dock = document.getElementById("work-status-dock");
         if (!dock) return;
         const items = mergeLocalWorkStatus([]);
+        if (window.renderWorkStatusDock) {
+          window.renderWorkStatusDock(items);
+          return;
+        }
         dock.hidden = !items.length;
-        dock.innerHTML = items.map((item) => {
-          const status = String(item.status || "running").toLowerCase();
-          const progress = Math.max(8, Math.min(100, Math.round(Number(item.progress_percent || 18))));
-          const statusLine = item.stage || item.message || "Working.";
-          const href = item.href || item.url || "";
-          const tag = href ? "a" : "article";
-          const hrefAttr = href ? ` href="${escapeHtml(href)}"` : "";
-          return `
-            <${tag} class="work-status-card ${escapeHtml(status)} ${href ? "actionable" : ""}"${hrefAttr}>
-              <div class="work-status-title">
-                <span>${escapeHtml(item.title || "Working")}</span>
-                <span class="badge ${escapeHtml(status)}">${escapeHtml(item.status || "running")}</span>
-              </div>
-              <p class="work-status-line">${escapeHtml(statusLine)}</p>
-              ${item.message && item.message !== statusLine ? `<p class="work-status-line">${escapeHtml(item.message)}</p>` : ""}
-              <div class="work-status-bar"><span style="width:${progress}%"></span></div>
-            </${tag}>
-          `;
-        }).join("");
       }
 
       function ensureWorkTaskId(form) {
@@ -556,7 +797,6 @@
 
       function debugFeatureName() {
         if (window.location.pathname.startsWith("/compatibility")) return "compatibility_browser";
-        if (window.location.pathname.startsWith("/recipe-preview")) return "recipe_preview_browser";
         return "";
       }
 
@@ -620,7 +860,8 @@
             current_text: document.getElementById("ai-old-text").value,
             user_instruction: document.getElementById("ai-user-instruction").value,
             selected_blocks: selected,
-            disabled_blocks: disabled
+            disabled_blocks: disabled,
+            llm_model: document.getElementById("ai-edit-llm-model")?.value || ""
           })
         });
         const data = await response.json();
@@ -704,6 +945,7 @@
           form.addEventListener("submit", () => sendFrontendDebug("form_submitted"));
         });
         sendFrontendDebug("page_loaded");
+        attachLlmModelPickerForms();
         attachAsyncWorkForms();
         loadLocalWorkStatusItems();
         startWorkStatusDock();
@@ -732,13 +974,12 @@
           <summary>Advanced</summary>
           <div>
             <a href="/compatibility">Compatibility</a>
-            <a href="/recipe-preview">Source review</a>
             <a href="/recipe-editor">Recipe editor</a>
           </div>
         </details>
       </nav>
     </header>
-    <main class="shell">
+    <main class="shell {% block shell_class %}{% endblock %}">
       {% block content %}{% endblock %}
     </main>
     {% if setup_guide and setup_guide.show_companion and setup_guide.active_step %}
@@ -766,6 +1007,25 @@
     </aside>
     {% endif %}
     <div class="work-status-dock" id="work-status-dock" hidden></div>
+    <div class="modal-backdrop" id="llm-model-modal">
+      <div class="modal small-modal">
+        <div class="row">
+          <h2 id="llm-model-title" style="margin-right:auto;">Choose AI power</h2>
+          <button class="light" type="button" onclick="closeLlmModelPicker()">Close</button>
+        </div>
+        <p class="muted">This choice applies only to this prompt. The saved setup default is unchanged.</p>
+        <label>AI power</label>
+        <select id="llm-model-select" data-default-model="{{ default_llm_model }}">
+          {% for model in llm_model_options %}
+          <option value="{{ model.value }}" {% if default_llm_model == model.value %}selected{% endif %}>{{ model.label }} - {{ model.quality }} / Cost {{ model.price }} / Speed {{ model.speed }}</option>
+          {% endfor %}
+        </select>
+        <div class="row">
+          <button type="button" onclick="confirmLlmModelSubmit()">Continue</button>
+          <button class="secondary" type="button" onclick="closeLlmModelPicker()">Cancel</button>
+        </div>
+      </div>
+    </div>
     <div class="modal-backdrop" id="external-agent-modal">
       <div class="modal small-modal">
         <div class="row">
@@ -798,6 +1058,12 @@
           <button class="light" type="button" onclick="closeAiEdit()">Close</button>
         </div>
         <p id="ai-field-context" class="muted"></p>
+        <label>AI power</label>
+        <select id="ai-edit-llm-model" data-default-model="{{ default_llm_model }}">
+          {% for model in llm_model_options %}
+          <option value="{{ model.value }}" {% if default_llm_model == model.value %}selected{% endif %}>{{ model.label }} - {{ model.quality }} / Cost {{ model.price }} / Speed {{ model.speed }}</option>
+          {% endfor %}
+        </select>
         <label>Your instruction</label>
         <textarea id="ai-user-instruction" placeholder="Example: I updated my CV. Add anything important that is missing, but preserve structure and do not invent details."></textarea>
         <details>

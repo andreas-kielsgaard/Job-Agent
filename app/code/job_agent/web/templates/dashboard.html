@@ -16,9 +16,14 @@
 {% endif %}
 
 <div class="panel hero-status {% if dashboard_stats.active_run %}running{% elif dashboard_stats.latest_is_today %}today{% endif %}">
-  <h1>Overview</h1>
+  <h1>Today</h1>
   {% if dashboard_stats.active_run %}
-  <p><span class="badge exploratory">Run in progress</span> {{ dashboard_stats.active_run.run_id }}</p>
+  <p>
+    <span class="execution-line {% if dashboard_stats.active_run.status == 'running' %}execution-running{% endif %}">
+      <span class="execution-spinner" aria-hidden="true"></span>
+      <span><span class="badge exploratory">Run in progress</span> {{ dashboard_stats.active_run.run_id }}</span>
+    </span>
+  </p>
   {% elif dashboard_stats.latest_is_today %}
   <p><span class="badge strong">Daily run completed today</span></p>
   {% else %}
@@ -27,25 +32,38 @@
   {% if latest_run %}
   <p class="muted">Latest run: {{ latest_run.started_at }} / {{ latest_run.status }}</p>
   {% endif %}
+  {% if dashboard_stats.active_run %}
+  <p class="muted">You can leave this page while it runs. Return from the dashboard active-run link or the Runs page.</p>
+  {% endif %}
 
   <div class="grid">
-    <div class="stat"><span>Jobs found today</span><strong>{{ dashboard_stats.jobs_found_today }}</strong></div>
-    <div class="stat"><span>New roles today</span><strong>{{ dashboard_stats.new_roles_today }}</strong></div>
-    <div class="stat"><span>Unreviewed new/changed jobs</span><strong>{{ dashboard_stats.unseen_jobs }}</strong></div>
+    <div class="stat"><span>Source listings read</span><strong>{{ dashboard_stats.listings_read_today }}</strong></div>
+    <div class="stat"><span>New/changed roles</span><strong>{{ dashboard_stats.new_changed_roles_today }}</strong><span>{{ dashboard_stats.new_roles_today }} new / {{ dashboard_stats.changed_roles_today }} changed</span></div>
+    <div class="stat"><span>Review picks today</span><strong>{{ dashboard_stats.review_picks_today }}</strong></div>
+    <div class="stat"><span>Unreviewed picks today</span><strong>{{ dashboard_stats.unreviewed_review_picks_today }}</strong></div>
+    <div class="stat"><span>Known/repeated listings</span><strong>{{ dashboard_stats.known_or_repeated_listings_today }}</strong></div>
+    <div class="stat"><span>Source issues today</span><strong>{{ dashboard_stats.source_issues_today }}</strong></div>
     <div class="stat"><span>Applied last 7 days</span><strong>{{ dashboard_stats.applied_last_7 }}</strong></div>
   </div>
 
   <div class="row">
+    <a class="button" href="{{ dashboard_stats.today_review_url }}">Review today's picks</a>
+    <a class="button light" href="{{ dashboard_stats.today_jobs_url }}">View jobs found today</a>
+    <a class="button light" href="{{ dashboard_stats.unreviewed_jobs_url }}">View unreviewed picks</a>
     <button class="big-action {% if dashboard_stats.latest_is_today and not dashboard_stats.active_run %}faded{% endif %}" type="button" onclick="document.getElementById('run-settings-modal').style.display='flex'">Perform daily run</button>
+    <form method="post" action="/api/run/ingest-all" class="inline-form">
+      <button class="button light" type="submit" {% if dashboard_stats.active_run %}disabled{% endif %}>Ingest all ready sources</button>
+    </form>
     {% if dashboard_stats.active_run %}<a class="button light" href="/runs/{{ dashboard_stats.active_run.run_id }}">Open active run</a>{% endif %}
   </div>
+  <p class="muted">Source listings are raw rows returned by job boards. New/changed roles are deduped and classified after seen-state checks, so repeated listings and overlapping sources can make the raw listing count higher.</p>
 </div>
 
 <div class="panel">
   <h2>Recent Runs</h2>
   {% if runs %}
   <table>
-    <thead><tr><th>Started</th><th>Status</th><th>Found</th><th>New</th><th>Matches</th><th>Warnings</th><th>Tokens</th><th></th></tr></thead>
+    <thead><tr><th>Started</th><th>Status</th><th>Listings</th><th>New</th><th>Changed</th><th>Matches</th><th>Warnings</th><th>Tokens</th><th></th></tr></thead>
     <tbody>
       {% for run in runs %}
       <tr>
@@ -53,6 +71,7 @@
         <td><span class="badge {{ run.status }}">{{ run.status }}</span></td>
         <td>{{ run.total_loaded }}</td>
         <td>{{ run.new_roles }}</td>
+        <td>{{ run.changed_roles }}</td>
         <td>{{ run.strong_matches }} strong / {{ run.exploratory_matches }} exploratory</td>
         <td>{{ run.source_warnings }}</td>
         <td>{{ run.token_usage.get("input_tokens", 0) }} in / {{ run.token_usage.get("output_tokens", 0) }} out</td>
@@ -73,7 +92,7 @@
       <button class="light" type="button" onclick="document.getElementById('run-settings-modal').style.display='none'">Close</button>
     </div>
     <p class="muted">Settings are prefilled from the latest run when available.</p>
-    <form method="post" action="/api/run" class="grid">
+    <form method="post" action="/api/run" class="grid" data-llm-model-picker data-llm-model-requires-any-groups="ai_enhanced_search;generate_materials_option+use_llm" data-llm-model-title="Choose AI power for this run">
       <div>
         {% if llm_configured %}
         <label class="check"><input type="checkbox" name="use_llm" {% if default_options.get("use_llm") %}checked{% endif %}> Use Claude for material generation</label>

@@ -89,6 +89,35 @@ class ScoringTests(unittest.TestCase):
         self.assertEqual(match.category, "excluded")
         self.assertIn("remote", match.exclusion_reason.lower())
 
+    def test_remote_required_does_not_exclude_unknown_remote_setup(self) -> None:
+        profile = {**PROFILE, "match_engine": {**SAP_MATCH_ENGINE, "remote_policy": "required"}}
+        job = Job(
+            title="SAP ABAP RAP Consultant",
+            description="ABAP RAP CDS OData Gateway contract role.",
+        )
+
+        match = score_job(job, profile, today=date(2026, 5, 6))
+
+        self.assertNotEqual(match.category, "excluded")
+        self.assertNotIn("remote", match.exclusion_reason.lower())
+
+    def test_missing_freshness_and_rate_are_not_negative_match_signals(self) -> None:
+        job = Job(
+            title="SAP ABAP RAP Consultant",
+            remote="Remote",
+            description="ABAP RAP CDS OData Gateway contract role.",
+        )
+
+        match = score_job(job, PROFILE, today=date(2026, 5, 6))
+
+        self.assertEqual(match.components["freshness_risk"], 0)
+        self.assertEqual(match.components["rate_visibility_or_rate_fit"], 0)
+        self.assertNotIn(
+            "Freshness is uncertain because no reliable posting date or deadline was found.",
+            match.concerns,
+        )
+        self.assertNotIn("Rate or salary is not listed.", match.concerns)
+
     def test_required_keyword_group_excludes_when_missing(self) -> None:
         profile = {
             **PROFILE,

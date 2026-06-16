@@ -162,6 +162,32 @@ class LlmServiceTests(unittest.TestCase):
             self.assertEqual(calls, [DEFAULT_CLAUDE_MODEL])
             self.assertEqual(completion.model, DEFAULT_CLAUDE_MODEL)
 
+    def test_complete_can_override_configured_model_for_one_request(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / ".env").write_text(
+                "ANTHROPIC_API_KEY=test-key\nCLAUDE_MODEL=saved-default-model\n",
+                encoding="utf-8",
+            )
+            original = sys.modules.get("anthropic")
+            fake_module, calls = self._fake_anthropic_records_models_module()
+            sys.modules["anthropic"] = fake_module
+            try:
+                completion = LlmService(root).complete(
+                    "prompt",
+                    max_tokens=10,
+                    purpose="source_suggestion",
+                    model="one-shot-model",
+                )
+            finally:
+                if original is None:
+                    sys.modules.pop("anthropic", None)
+                else:
+                    sys.modules["anthropic"] = original
+
+            self.assertEqual(calls, ["one-shot-model"])
+            self.assertEqual(completion.model, "one-shot-model")
+
     def test_external_agent_service_persists_prompt_and_returns_completion(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

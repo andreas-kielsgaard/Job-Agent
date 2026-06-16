@@ -101,6 +101,7 @@ def test_ai_search_service_uses_llm_service(monkeypatch, template_project: Path)
         ["strong match category"],
         run_id="run-1",
         stable_id="stable-1",
+        llm_model="claude-opus-4-8",
     )
 
     assert isinstance(evaluation, AiSearchEvaluation)
@@ -110,6 +111,7 @@ def test_ai_search_service_uses_llm_service(monkeypatch, template_project: Path)
     assert calls[0]["purpose"] == "ai_search_evaluation"
     assert calls[0]["run_id"] == "run-1"
     assert calls[0]["associated_job_id"] == "stable-1"
+    assert calls[0]["model"] == "claude-opus-4-8"
 
 
 def test_ai_search_prompt_handles_yaml_date_values(monkeypatch, template_project: Path) -> None:

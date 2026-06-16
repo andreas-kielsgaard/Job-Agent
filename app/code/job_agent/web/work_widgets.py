@@ -7,6 +7,8 @@ from job_agent.config import ROOT
 from job_agent.run_store import RunRecord, RunStore
 from job_agent.web.view_models.runs import build_source_progress
 
+RUNNING_STATUS = "running"
+
 
 class WorkStatusWidgetHandler:
     """Build global work-status widgets from raw runtime work.
@@ -53,15 +55,19 @@ class WorkStatusWidgetHandler:
         else:
             stage = "Starting daily run"
             message = str(latest.get("message") or "Preparing source checks.")
+        title = "Full source ingestion" if active_run.options.get("full_source_ingestion") else "Daily run"
+        if active_run.is_test:
+            title = "Test daily run"
         return [
             {
                 "kind": "run",
                 "task_id": f"run-{active_run.run_id}",
                 "run_id": active_run.run_id,
                 "source_id": "",
-                "source_name": "Daily run",
-                "title": "Test daily run" if active_run.is_test else "Daily run",
+                "source_name": title,
+                "title": title,
                 "status": active_run.status,
+                "is_running": active_run.status == RUNNING_STATUS,
                 "stage": stage,
                 "message": message,
                 "progress_percent": int(
@@ -72,13 +78,19 @@ class WorkStatusWidgetHandler:
         ]
 
     def _source_index_widgets(self, tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        return list(tasks)
+        return [_with_running_state(task) for task in tasks]
 
     def _source_session_widgets(self, tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        return list(tasks)
+        return [_with_running_state(task) for task in tasks]
 
     def _source_auto_setup_widgets(self, tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        return list(tasks)
+        return [_with_running_state(task) for task in tasks]
 
     def _profile_widgets(self, tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        return list(tasks)
+        return [_with_running_state(task) for task in tasks]
+
+
+def _with_running_state(task: dict[str, Any]) -> dict[str, Any]:
+    item = dict(task)
+    item["is_running"] = str(item.get("status") or "").lower() == RUNNING_STATUS
+    return item

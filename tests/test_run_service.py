@@ -35,6 +35,8 @@ def test_run_daily_agent_completes_and_writes_outputs(local_yaml_source_project:
 def test_run_options_ai_enhanced_search_defaults_false() -> None:
     assert RunOptions().ai_enhanced_search is False
     assert RunOptions().generate_materials is False
+    assert RunOptions().full_source_ingestion is False
+    assert RunOptions().include_disabled_sources is False
 
 
 def test_default_run_writes_placeholder_package_without_calling_generator(
@@ -301,6 +303,91 @@ def test_daily_run_reviews_only_unseen_details_and_leaves_over_limit_jobs_unseen
     assert second_source["counts"]["detail_limit_skipped_count"] == 0
 
 
+def test_daily_run_detail_review_limit_is_per_source(
+    monkeypatch: pytest.MonkeyPatch, template_project: Path
+) -> None:
+    _write_multi_recipe_source_project(template_project, source_count=2, job_count=3)
+    detail_calls = []
+
+    def fake_fetch_static(url: str, timeout_seconds: int):
+        return _listing_html(3), url, []
+
+    def fake_detail_get(url: str, *args, **kwargs):
+        detail_calls.append(url)
+        return _FakeResponse(
+            f"<main><div class='detail'>Strong ABAP RAP CDS OData Gateway S/4HANA contract role from {url}.</div></main>",
+            url=url,
+        )
+
+    monkeypatch.setattr("job_agent.services.job_board_recipe_service._fetch_static_html", fake_fetch_static)
+    monkeypatch.setattr("requests.get", fake_detail_get)
+
+    result = run_daily_agent(
+        RunOptions(mark_seen=True, generate_materials=False, detail_extraction_limit=2),
+        root=template_project,
+    )
+
+    assert len(detail_calls) == 4
+    assert sum("source-1.example.com" in url for url in detail_calls) == 2
+    assert sum("source-2.example.com" in url for url in detail_calls) == 2
+
+    events = RunStore(template_project).read_events(result.record.run_id)
+    processed = {
+        event["current_source"]: event["counts"]
+        for event in events
+        if event["event_type"] == "source_processed"
+    }
+    assert set(processed) == {"Detail Source 1", "Detail Source 2"}
+    assert all(counts["reviewed_in_detail_count"] == 2 for counts in processed.values())
+    assert all(counts["detail_limit_skipped_count"] == 1 for counts in processed.values())
+
+    limit_events = [event for event in events if event["event_type"] == "detail_limit_reached"]
+    assert {event["current_source"] for event in limit_events} == {"Detail Source 1", "Detail Source 2"}
+
+
+def test_full_source_ingestion_reviews_all_detail_pages_with_batch_pause(
+    monkeypatch: pytest.MonkeyPatch, template_project: Path
+) -> None:
+    _write_recipe_source_project(template_project, job_count=3)
+    detail_calls = []
+    pauses = []
+
+    def fake_fetch_static(url: str, timeout_seconds: int):
+        return _listing_html(3), url, []
+
+    def fake_detail_get(url: str, *args, **kwargs):
+        detail_calls.append(url)
+        return _FakeResponse(
+            f"<main><div class='detail'>Strong ABAP RAP CDS OData Gateway S/4HANA contract role from {url}.</div></main>",
+            url=url,
+        )
+
+    monkeypatch.setattr("job_agent.services.job_board_recipe_service._fetch_static_html", fake_fetch_static)
+    monkeypatch.setattr("requests.get", fake_detail_get)
+    monkeypatch.setattr("job_agent.run_service.time.sleep", lambda seconds: pauses.append(seconds))
+
+    result = run_daily_agent(
+        RunOptions(
+            mark_seen=True,
+            generate_materials=False,
+            detail_extraction_limit=None,
+            full_source_ingestion=True,
+            include_disabled_sources=True,
+            detail_pause_every_jobs=2,
+            detail_pause_seconds=3.0,
+        ),
+        root=template_project,
+    )
+
+    assert [url.rsplit("/", 1)[-1] for url in detail_calls] == ["job-1", "job-2", "job-3"]
+    assert pauses == [3.0]
+    events = RunStore(template_project).read_events(result.record.run_id)
+    source = next(event for event in events if event["event_type"] == "source_processed")
+    assert source["counts"]["reviewed_in_detail_count"] == 3
+    assert source["counts"]["detail_limit_skipped_count"] == 0
+    assert any(event["event_type"] == "detail_review_pause" for event in events)
+
+
 def test_daily_run_reuses_connected_session_for_authenticated_detail_review(
     monkeypatch: pytest.MonkeyPatch, template_project: Path
 ) -> None:
@@ -533,6 +620,102 @@ def _write_recipe_source_project(root: Path, *, job_count: int, requires_session
             )
             for index in range(1, job_count + 1)
         ],
+    )
+
+
+def _write_multi_recipe_source_project(root: Path, *, source_count: int, job_count: int) -> None:
+    source_lines = ["sources:"]
+    registry_lines = ["sources:"]
+    readiness_lines = ["sources:"]
+    for source_index in range(1, source_count + 1):
+        source_id = f"detail-source-{source_index}"
+        source_name = f"Detail Source {source_index}"
+        source_url = f"https://source-{source_index}.example.com/jobs"
+        recipe_path = root / "sources" / "recipes" / f"{source_id}.yaml"
+        recipe_path.parent.mkdir(parents=True, exist_ok=True)
+        recipe_path.write_text(
+            f"source_name: {source_name}\n"
+            "mode: static_html\n"
+            "listing:\n"
+            "  card_selector: article.job-card\n"
+            "  title_selector: a.job-link\n"
+            "  link_selector: a.job-link\n"
+            "  description_selector: .summary\n"
+            "detail:\n"
+            "  follow: true\n"
+            "  description_selector: .detail\n"
+            "  request_delay_seconds: 0\n"
+            "accept:\n"
+            "  url_contains:\n"
+            "    - /jobs/\n",
+            encoding="utf-8",
+        )
+        relative_recipe_path = recipe_path.relative_to(root).as_posix()
+        source_lines.extend(
+            [
+                f"  - name: {source_name}",
+                f"    source_id: {source_id}",
+                "    type: recipe_html",
+                f"    url: {source_url}",
+                f"    recipe_path: {relative_recipe_path}",
+                "    enabled: true",
+            ]
+        )
+        registry_lines.extend(
+            [
+                f"  - id: {source_id}",
+                f"    name: {source_name}",
+                "    kind: recipe",
+                "    status: testing",
+                f"    url: {source_url}",
+                f"    recipe_path: {relative_recipe_path}",
+                "    enabled: true",
+            ]
+        )
+        readiness_lines.extend(
+            [
+                f"  {source_id}:",
+                "    last_checked_at: '2999-01-01T00:00:00+00:00'",
+                "    dry_run_status: success",
+                f"    dry_run_job_count: {job_count}",
+                "    dry_run_warning_count: 0",
+                "    dry_run_warnings: []",
+                "    dry_run_capability_checks: []",
+                "    dry_run_pagination_duplicate_page_count: 0",
+                "    dry_run_pagination_duplicate_ratio: 0.0",
+                f"    dry_run_pagination_unique_jobs_from_fetched_pages: {job_count}",
+                "    readiness_status: ready",
+                "    readiness_summary: Ready.",
+                "    checks: {}",
+                "    blockers: []",
+                "    warnings: []",
+            ]
+        )
+        SourceListingIndexStore(root).record_index(
+            source_id=source_id,
+            source_name=source_name,
+            jobs=[
+                Job(
+                    title=f"SAP ABAP Consultant {source_index}-{job_index}",
+                    source=source_name,
+                    source_id=source_id,
+                    url=f"{source_url}/job-{job_index}",
+                )
+                for job_index in range(1, job_count + 1)
+            ],
+        )
+
+    (root / "sources" / "recruiting-sites.yaml").write_text(
+        "\n".join(source_lines) + "\n",
+        encoding="utf-8",
+    )
+    (root / "sources" / "source-registry.yaml").write_text(
+        "\n".join(registry_lines) + "\n",
+        encoding="utf-8",
+    )
+    (root / "sources" / "source-execution-readiness.yaml").write_text(
+        "\n".join(readiness_lines) + "\n",
+        encoding="utf-8",
     )
 
 
