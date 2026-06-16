@@ -513,7 +513,9 @@ def load_recipe_suggestion_evidence(
         "observed_application_entries": selector_report.get("observed_application_entries", [])[:10]
         if isinstance(selector_report, dict)
         else [],
-        "learning_exploration": selector_report.get("learning_exploration", {}) if isinstance(selector_report, dict) else {},
+        "learning_exploration": selector_report.get("learning_exploration", {})
+        if isinstance(selector_report, dict)
+        else {},
         "source_session_used": bool(selector_report.get("source_session_used"))
         if isinstance(selector_report, dict)
         else False,
@@ -645,7 +647,9 @@ def _ai_oversight_payload(payload: dict[str, Any], learning_gaps: list[dict[str,
 
 def _ai_oversight_instructions(level: int, insight: dict[str, Any]) -> list[str]:
     if level <= 0:
-        return ["Use deterministic recipe evidence when it passes validation and source-test insight does not contradict it."]
+        return [
+            "Use deterministic recipe evidence when it passes validation and source-test insight does not contradict it."
+        ]
     instructions = [
         "Start from deterministic evidence and listed learning gaps; do not invent endpoints, credentials, cookies, or source access.",
         "If no reliable listing access is visible in evidence, return not_recommended with the specific missing evidence.",
@@ -892,7 +896,9 @@ def _no_recipe_evidence_result(evidence: RecipeSuggestionEvidence) -> RecipeSugg
             "The captured page did not expose repeated job cards or a job-detail link. "
             "Try a browser-rendered capture if the job list is loaded by JavaScript."
         )
-        explanation = "The saved calibration artifact did not contain enough job-list evidence to generate a reading plan."
+        explanation = (
+            "The saved calibration artifact did not contain enough job-list evidence to generate a reading plan."
+        )
         validation_errors = ["No stable repeated listing card selector was found."]
     return RecipeSuggestionResult(
         source_name=evidence.source_name,

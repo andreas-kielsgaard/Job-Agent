@@ -192,7 +192,9 @@ class SourceAutoSetupWorkflowHandler:
                     self._append_event(run_id, "Retrying safe source test", str(run["message"]))
                     self._notify(progress_callback, run)
                     continue
-                should_regenerate = bool(decision.get("should_regenerate_recipe")) or self._source_test_proposes_regeneration(insight)
+                should_regenerate = bool(
+                    decision.get("should_regenerate_recipe")
+                ) or self._source_test_proposes_regeneration(insight)
                 recipe_attempts = int(run.get("recipe_attempts") or 0)
                 max_attempts = int(run.get("max_recipe_attempts") or 3)
                 if should_regenerate and not self.is_configured():
@@ -251,7 +253,9 @@ class SourceAutoSetupWorkflowHandler:
                     run_id,
                     status="blocked",
                     stage="Needs attention",
-                    message=str(decision.get("summary") or insight.get("recommendation") or run.get("readiness_summary") or ""),
+                    message=str(
+                        decision.get("summary") or insight.get("recommendation") or run.get("readiness_summary") or ""
+                    ),
                     error_message=str(run.get("readiness_summary") or ""),
                     progress_percent=100,
                     progress_callback=progress_callback,
@@ -293,7 +297,9 @@ class SourceAutoSetupWorkflowHandler:
         setup_complete = bool(auto_state.get("setup_complete"))
         resume_run_id = (
             str(latest.get("run_id") or "")
-            if latest and latest_status in _RESUMABLE_STATUSES and (latest_status in _ACTIVE_STATUSES or not setup_complete)
+            if latest
+            and latest_status in _RESUMABLE_STATUSES
+            and (latest_status in _ACTIVE_STATUSES or not setup_complete)
             else ""
         )
         if resume_run_id:
@@ -347,7 +353,9 @@ class SourceAutoSetupWorkflowHandler:
             runs = [run for run in runs if str(run.get("source_id") or "") == source_id]
         runs = _latest_run_per_source(runs)[:50]
         source_ids = {str(run.get("source_id") or "") for run in runs if str(run.get("source_id") or "")}
-        sources = [source for source in self.source.registry.list_saved_sources(include_stats=False) if source.id in source_ids]
+        sources = [
+            source for source in self.source.registry.list_saved_sources(include_stats=False) if source.id in source_ids
+        ]
         source_by_id = {source.id: source for source in sources}
         execution_by_id = self.source.saved_execution_by_source(sources)
         readiness_by_id = self.source.current_readiness_by_source(sources)
@@ -479,9 +487,7 @@ class SourceAutoSetupWorkflowHandler:
             "max_recipe_attempts": int(run.get("max_recipe_attempts") or 3),
             "source_test_attempts": source_test_attempts,
             "readiness_status": readiness_status or "untested",
-            "readiness_summary": str(
-                getattr(readiness, "readiness_summary", "") or run.get("readiness_summary") or ""
-            ),
+            "readiness_summary": str(getattr(readiness, "readiness_summary", "") or run.get("readiness_summary") or ""),
             "execution_enabled": execution_enabled,
             "indexed_count": int(getattr(index, "indexed_count", 0) or 0),
             "applied_label": applied_label,

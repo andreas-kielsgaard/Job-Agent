@@ -4,9 +4,6 @@ import json
 from pathlib import Path
 
 import pytest
-
-from job_agent.io.yaml_store import read_yaml
-from job_agent.services.source_registry_service import SourceRegistryService
 from tests.helpers import (
     EURSAP_SOURCE,
     MANUAL_SOURCE,
@@ -14,6 +11,9 @@ from tests.helpers import (
     seed_common_sources,
     seed_source_registry,
 )
+
+from job_agent.io.yaml_store import read_yaml
+from job_agent.services.source_registry_service import SourceRegistryService
 
 
 def test_default_source_registry_creation_and_listing(project_root: Path) -> None:
@@ -194,6 +194,7 @@ def test_archive_and_restore_source_hide_without_deleting(project_root: Path) ->
 def test_registry_includes_saved_source_health(project_root: Path) -> None:
     from job_agent.services.recipe_preview_service import RecipePreviewResult
     from job_agent.services.source_health_service import SourceHealthService
+
     seed_common_sources(project_root)
 
     preview = RecipePreviewResult(

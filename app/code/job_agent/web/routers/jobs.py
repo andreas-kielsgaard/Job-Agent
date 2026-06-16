@@ -103,7 +103,9 @@ def _set_job_application_status(
             company=str(package.get("company") or "Unknown"),
             source=str(package.get("source") or package.get("source_id") or "Unknown"),
             url=str(package.get("source_url") or package.get("url") or ""),
-            application_url=str(package.get("application_url") or package.get("source_url") or package.get("url") or ""),
+            application_url=str(
+                package.get("application_url") or package.get("source_url") or package.get("url") or ""
+            ),
         )
         store.update_status(job_id, status, notes=notes, not_interesting_reason=not_interesting_reason)
     package_service().refresh_package_status(job_id, status)

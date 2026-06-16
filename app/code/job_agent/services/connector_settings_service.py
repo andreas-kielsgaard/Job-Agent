@@ -63,7 +63,9 @@ class ConnectorSettingsService:
         canva.update(
             {
                 "enabled": _truthy(form.get("canva_enabled")) or bool(canva.get("access_token")),
-                "preferred_output": str(form.get("canva_preferred_output") or canva.get("preferred_output") or "doc").strip(),
+                "preferred_output": str(
+                    form.get("canva_preferred_output") or canva.get("preferred_output") or "doc"
+                ).strip(),
                 "mcp_server_url": CANVA_MCP_SERVER_URL,
             }
         )
@@ -109,16 +111,20 @@ class ConnectorSettingsService:
         )
         store["canva"] = canva
         write_yaml(self.path, store)
-        return CANVA_AUTHORIZATION_URL + "?" + urlencode(
-            {
-                "code_challenge": code_challenge,
-                "code_challenge_method": "S256",
-                "scope": " ".join(scopes),
-                "response_type": "code",
-                "client_id": config["client_id"],
-                "state": state,
-                "redirect_uri": config["redirect_uri"],
-            }
+        return (
+            CANVA_AUTHORIZATION_URL
+            + "?"
+            + urlencode(
+                {
+                    "code_challenge": code_challenge,
+                    "code_challenge_method": "S256",
+                    "scope": " ".join(scopes),
+                    "response_type": "code",
+                    "client_id": config["client_id"],
+                    "state": state,
+                    "redirect_uri": config["redirect_uri"],
+                }
+            )
         )
 
     def complete_canva_oauth(self, code: str, state: str) -> dict[str, Any]:
@@ -307,7 +313,9 @@ def _normalize_canva(data: dict[str, Any], config: dict[str, Any]) -> dict[str, 
         "enabled": bool(data.get("enabled") or connected),
         "mcp_server_url": url,
         "oauth_client_id": str(data.get("oauth_client_id") or config.get("client_id") or "").strip(),
-        "oauth_redirect_uri": str(data.get("oauth_redirect_uri") or config.get("redirect_uri") or DEFAULT_CANVA_REDIRECT_URI).strip(),
+        "oauth_redirect_uri": str(
+            data.get("oauth_redirect_uri") or config.get("redirect_uri") or DEFAULT_CANVA_REDIRECT_URI
+        ).strip(),
         "connected_display_name": display_name,
         "connected_user_id": user_id,
         "connected_team_id": str(data.get("connected_team_id") or "").strip(),

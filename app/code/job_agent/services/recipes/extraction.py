@@ -45,7 +45,9 @@ def extract_jobs_with_recipe_with_stats(
         if not title and fallback_link:
             title = compact_title(fallback_link.get_text(" ", strip=True), fallback_link)
         url = urljoin(base_url, link) if link else ""
-        description = select_text(card, recipe.listing.description_selector) if recipe.listing.description_selector else ""
+        description = (
+            select_text(card, recipe.listing.description_selector) if recipe.listing.description_selector else ""
+        )
         raw_text = card.get_text("\n", strip=True)
         if not description:
             description = raw_text

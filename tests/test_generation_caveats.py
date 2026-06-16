@@ -131,7 +131,9 @@ def test_focused_cv_llm_json_is_normalized_without_new_skill_names(monkeypatch, 
 
     package = generate_materials(
         Job(title="SAP ABAP Consultant", description="ABAP OData QM"),
-        MatchResult(total_score=82, category="strong", matched_keywords=["SAP ABAP"], recommended_angle="Lead with ABAP"),
+        MatchResult(
+            total_score=82, category="strong", matched_keywords=["SAP ABAP"], recommended_angle="Lead with ABAP"
+        ),
         profile,
         use_llm=True,
         root=template_project,

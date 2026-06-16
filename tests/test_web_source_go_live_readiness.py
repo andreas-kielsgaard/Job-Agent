@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from tests.helpers import seed_common_sources
 
 from job_agent.io.yaml_store import read_yaml
 from job_agent.models import Job
@@ -14,7 +15,6 @@ from job_agent.services.source_health_service import SourceHealthService
 from job_agent.services.source_listing_index_store import SourceListingIndexStore
 from job_agent.services.source_registry_service import SourceRegistryService
 from job_agent.services.source_test_service import SourceTestJobPreview, SourceTestResult
-from tests.helpers import seed_common_sources
 
 
 @pytest.fixture(autouse=True)

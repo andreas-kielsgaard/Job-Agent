@@ -19,15 +19,19 @@ def build_dashboard_view(root: Path = ROOT) -> dict:
     latest_run = runs[0] if runs else None
     env = load_env(root)
     llm_configured = LlmService(root).is_configured()
-    default_options = latest_run.options if latest_run else {
-        "use_llm": env.get("CLAUDE_USE_BY_DEFAULT") == "true",
-        "ai_enhanced_search": False,
-        "include_seen": False,
-        "include_weak": False,
-        "mark_seen": False,
-        "generate_materials": False,
-        "detail_extraction_limit": 25,
-    }
+    default_options = (
+        latest_run.options
+        if latest_run
+        else {
+            "use_llm": env.get("CLAUDE_USE_BY_DEFAULT") == "true",
+            "ai_enhanced_search": False,
+            "include_seen": False,
+            "include_weak": False,
+            "mark_seen": False,
+            "generate_materials": False,
+            "detail_extraction_limit": 25,
+        }
+    )
     if not llm_configured:
         default_options = {**default_options, "use_llm": False, "ai_enhanced_search": False}
     return {

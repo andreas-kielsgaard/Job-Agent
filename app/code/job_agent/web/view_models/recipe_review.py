@@ -68,7 +68,10 @@ def build_generation_run_reading_plan_review(run: dict[str, Any], source: Any | 
         schema_valid
         and has_yaml
         and not clearly_failed
-        and (str(run.get("quality_status") or "") == "poor" or (run.get("refinement_used") and not run.get("refinement_accepted")))
+        and (
+            str(run.get("quality_status") or "") == "poor"
+            or (run.get("refinement_used") and not run.get("refinement_accepted"))
+        )
     )
     can_use_generated = bool(schema_valid and has_yaml and not has_quality_blockers and not clearly_failed)
     can_test_generated = bool(schema_valid and has_yaml and not clearly_failed)
@@ -85,9 +88,13 @@ def build_generation_run_reading_plan_review(run: dict[str, Any], source: Any | 
             )
         )
     if source_has_selected_recipe and not clearly_failed:
-        actions.append(_source_test_action(source_id, label="Run source test for selected plan", button_class="button light"))
+        actions.append(
+            _source_test_action(source_id, label="Run source test for selected plan", button_class="button light")
+        )
     if run.get("compatibility_url"):
-        actions.append(_link_action(str(run["compatibility_url"]), "Compatibility evidence", button_class="button light"))
+        actions.append(
+            _link_action(str(run["compatibility_url"]), "Compatibility evidence", button_class="button light")
+        )
     if source_id:
         actions.append(_link_action(f"/sources/{source_id}", "Back to source", button_class="button light"))
 

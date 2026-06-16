@@ -437,7 +437,9 @@ def _looks_like_listing_expansion(label: str, href: str, haystack: str) -> bool:
     )
     all_count_label = bool(re.search(r"\ball\s+\d{1,5}\b", normalized_label))
     category_hint = any(token in haystack for token in ["view-all", "show-all", "all-jobs", "/categor"])
-    return bool((count_with_term and (expansion_verb or all_count_label or category_hint)) or (expansion_verb and category_hint))
+    return bool(
+        (count_with_term and (expansion_verb or all_count_label or category_hint)) or (expansion_verb and category_hint)
+    )
 
 
 def _looks_like_feed_link(href: str, haystack: str) -> bool:
@@ -492,7 +494,9 @@ def _feed_selector(matches: list[Tag]) -> str:
     names = {str(match.name or "") for match in matches}
     hrefs = [str(match.get("href") or "").lower().strip() for match in matches]
     suffixes = [
-        suffix for suffix in [".rss", ".atom", ".xml"] if hrefs and all(urlparse(href).path.endswith(suffix) for href in hrefs)
+        suffix
+        for suffix in [".rss", ".atom", ".xml"]
+        if hrefs and all(urlparse(href).path.endswith(suffix) for href in hrefs)
     ]
     suffix_selector = f'[href$="{suffixes[0]}"]' if suffixes else "[href]"
     if names == {"a"}:
@@ -533,7 +537,7 @@ def _common_href_selector(matches: list[Tag]) -> str:
     for match in matches[1:]:
         common_classes.intersection_update(_stable_classes(match))
     if common_classes:
-        return f'a.{sorted(common_classes)[0]}[href]'
+        return f"a.{sorted(common_classes)[0]}[href]"
     return "a[href]"
 
 
@@ -546,11 +550,7 @@ def _first_stable_path_segment(href: str) -> str:
 
 
 def _stable_classes(tag: Tag) -> list[str]:
-    return [
-        str(item).strip()
-        for item in tag.get("class", [])
-        if is_stable_css_class(str(item))
-    ]
+    return [str(item).strip() for item in tag.get("class", []) if is_stable_css_class(str(item))]
 
 
 def _looks_like_next_link(label: str, match: Tag) -> bool:

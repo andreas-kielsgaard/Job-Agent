@@ -235,12 +235,7 @@ class SetupService:
         evidence = _fetch_professional_link_evidence(urls)
         if not evidence:
             return cv_text
-        return (
-            cv_text.rstrip()
-            + "\n\n## Public professional link evidence\n"
-            + "\n\n".join(evidence)
-            + "\n"
-        )
+        return cv_text.rstrip() + "\n\n## Public professional link evidence\n" + "\n\n".join(evidence) + "\n"
 
     def auto_configure_profile_from_cv(
         self,

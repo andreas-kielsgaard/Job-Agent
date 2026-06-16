@@ -252,10 +252,7 @@ def build_focused_cv_model(
         "headline": title,
         "target": job.title,
         "positioning": _clip(role_summary, 230),
-        "skills": [
-            {"name": skill, "detail": _skill_detail(skill, selected_experience)}
-            for skill in top_skills[:6]
-        ],
+        "skills": [{"name": skill, "detail": _skill_detail(skill, selected_experience)} for skill in top_skills[:6]],
         "experience": [
             {
                 "company": str(item.get("company") or "").strip(),
@@ -653,10 +650,7 @@ def _pdf_document(content: str) -> bytes:
     for offset in offsets:
         parts.append(f"{offset:010d} 00000 n \n".encode("ascii"))
     parts.append(
-        (
-            f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\n"
-            f"startxref\n{xref_offset}\n%%EOF\n"
-        ).encode("ascii")
+        (f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref_offset}\n%%EOF\n").encode("ascii")
     )
     return b"".join(parts)
 
@@ -702,9 +696,7 @@ def _normalize_focused_cv_model(
     allowed_skills: list[str],
 ) -> dict[str, Any]:
     allowed_skill_lookup = {skill.lower(): skill for skill in allowed_skills}
-    fallback_experience = [
-        item for item in fallback.get("experience", []) if isinstance(item, dict)
-    ]
+    fallback_experience = [item for item in fallback.get("experience", []) if isinstance(item, dict)]
     experience_by_key = {
         (str(item.get("company") or "").lower(), str(item.get("role") or "").lower()): item
         for item in fallback_experience
@@ -774,7 +766,9 @@ def _skill_detail(skill: str, selected_experience: list[dict[str, Any]]) -> str:
 
 def _experience_bullets(relevance: str) -> list[str]:
     parts = [part.strip() for part in relevance.replace("\n", " ").split(".") if part.strip()]
-    return [_sentence(_clip(part, 120)) for part in parts[:2]] or ["Relevant delivery experience selected from the master CV."]
+    return [_sentence(_clip(part, 120)) for part in parts[:2]] or [
+        "Relevant delivery experience selected from the master CV."
+    ]
 
 
 def _clip(value: str, limit: int) -> str:

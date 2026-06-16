@@ -137,8 +137,7 @@ def test_generation_page_offers_source_test_actions_for_selected_source_plan(
     assert run["quality_status"] == "poor"
     assert run["generated_recipe_path"] == ""
     assert any(
-        action["label"] == "Run source test for selected plan"
-        for action in run["reading_plan_review"]["actions"]
+        action["label"] == "Run source test for selected plan" for action in run["reading_plan_review"]["actions"]
     )
     assert any(
         field["name"] == "allow_quality_warnings" and field["value"] == "1"
@@ -360,9 +359,7 @@ def test_generation_service_uses_rendered_capture_for_duplicate_pagination_insig
     assert captured["rendered"] is True
 
 
-def test_generation_retry_repeats_live_capture_settings(
-    monkeypatch: pytest.MonkeyPatch, project_root: Path
-) -> None:
+def test_generation_retry_repeats_live_capture_settings(monkeypatch: pytest.MonkeyPatch, project_root: Path) -> None:
     source = SourceRegistryService(project_root).add_source(name="Example Jobs", url="https://example.com/jobs")
     artifact = _write_artifact(project_root)
     captures: list[dict[str, object]] = []

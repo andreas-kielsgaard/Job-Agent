@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from tests.helpers import EURSAP_SOURCE, seed_source_registry
 
 from job_agent.cli import adopt_approved_recipe
 from job_agent.io.yaml_store import read_yaml, write_yaml
@@ -10,7 +11,6 @@ from job_agent.services.approved_recipe_adoption_service import ApprovedRecipeAd
 from job_agent.services.recipe_candidate_service import RecipeCandidateStore
 from job_agent.services.recipe_suggestion_service import RecipeSuggestionResult
 from job_agent.services.source_registry_service import SourceRegistryService
-from tests.helpers import EURSAP_SOURCE, seed_source_registry
 
 VALID_RECIPE_YAML = """source_name: Example Jobs
 mode: static_html

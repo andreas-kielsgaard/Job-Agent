@@ -1315,7 +1315,9 @@ def _cards_have_job_like_evidence(cards: list[Tag]) -> bool:
     for card in cards[:5]:
         text = card.get_text(" ", strip=True)
         lowered = text.lower()
-        if any(term in lowered for term in TEXT_TERMS) or any(re.search(pattern, text, re.I) for pattern in META_PATTERNS):
+        if any(term in lowered for term in TEXT_TERMS) or any(
+            re.search(pattern, text, re.I) for pattern in META_PATTERNS
+        ):
             observed += 1
     return observed >= min(2, len(cards[:5]))
 

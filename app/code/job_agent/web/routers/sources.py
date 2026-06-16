@@ -369,7 +369,9 @@ def api_start_all_source_auto_setups(llm_model: str = Form("")) -> JSONResponse:
     except (RuntimeError, ValueError) as exc:
         return JSONResponse({"ok": False, "warning": f"Automatic setup could not start: {exc}"}, status_code=400)
     if not tasks:
-        return JSONResponse({"ok": True, "queued_count": 0, "warning": "No setup-ready source URLs need automatic setup."})
+        return JSONResponse(
+            {"ok": True, "queued_count": 0, "warning": "No setup-ready source URLs need automatic setup."}
+        )
     return JSONResponse(
         {
             "ok": True,
@@ -1028,9 +1030,7 @@ def retry_recipe_generation_run(
 
 
 @router.get("/sources/{source_id}/recipe-generation/{run_id}", response_class=HTMLResponse)
-def recipe_generation_run_detail(
-    request: Request, source_id: str, run_id: str, warning: str = ""
-) -> HTMLResponse:
+def recipe_generation_run_detail(request: Request, source_id: str, run_id: str, warning: str = "") -> HTMLResponse:
     source = _registry_source_or_404(source_id)
     try:
         run = workflow_handler().recipe.load_source_run(source_id, run_id)

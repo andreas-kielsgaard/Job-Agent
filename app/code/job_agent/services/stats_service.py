@@ -42,9 +42,7 @@ class StatsService:
                 applied_last_7 += 1
         all_packages = self.package_service.list_packages()
         today_packages = [
-            package
-            for package in all_packages
-            if self.package_service.infer_package_date(package).isoformat() == today
+            package for package in all_packages if self.package_service.infer_package_date(package).isoformat() == today
         ]
         today_review_picks = [
             package

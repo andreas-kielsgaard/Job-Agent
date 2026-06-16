@@ -110,8 +110,7 @@ class SourceSuggestionService:
             for source in self.registry.list_saved_sources(include_health=False, include_stats=False)
         ]
         disqualified_domains = [
-            {"domain": record.domain, "reason": record.reason}
-            for record in self.disqualifications.list_domains()
+            {"domain": record.domain, "reason": record.reason} for record in self.disqualifications.list_domains()
         ]
         focus_text = focus.strip() or "No extra focus was provided."
         payload = {
@@ -180,13 +179,15 @@ class SourceSuggestionService:
         try:
             parsed = self.parse_response_with_disqualifications(
                 completion.text,
-                repair_callback=lambda raw_json, error: self.llm.complete(
-                    _json_repair_prompt(raw_json, error),
-                    max_tokens=4200,
-                    purpose="source_suggestion_repair",
-                    run_id="manual",
-                    model=llm_model,
-                ).text,
+                repair_callback=lambda raw_json, error: (
+                    self.llm.complete(
+                        _json_repair_prompt(raw_json, error),
+                        max_tokens=4200,
+                        purpose="source_suggestion_repair",
+                        run_id="manual",
+                        model=llm_model,
+                    ).text
+                ),
             )
         except ValueError as exc:
             raise SourceSuggestionParseError(str(exc), completion.text) from exc

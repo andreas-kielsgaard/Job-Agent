@@ -227,7 +227,7 @@ def test_jobs_filters_by_source_run_date_and_low_relevance(client: TestClient, p
     assert "job-detail-preview-row" in response.text
     assert "job-preview-description" in response.text
     assert "Posting Text" in response.text
-    assert 'data-job-row' in response.text
+    assert "data-job-row" in response.text
     assert "job-status-control" in response.text
     assert "job-status-display" in response.text
     assert 'data-row-status="interesting"' in response.text
@@ -547,9 +547,9 @@ def test_job_review_bundle_uses_external_agent_controller(client: TestClient, pr
     assert "/jobs/stable-1/files/focused_cv_tex?run_id=run-1&amp;download=1" in detail.text
     assert "View posting on external website" in detail.text
     assert "Quick status" not in detail.text
-    assert "data-status-choice=\"interesting\"" in detail.text
-    assert "data-status-choice=\"not_interesting\"" in detail.text
-    assert "data-status-choice=\"applied\"" in detail.text
+    assert 'data-status-choice="interesting"' in detail.text
+    assert 'data-status-choice="not_interesting"' in detail.text
+    assert 'data-status-choice="applied"' in detail.text
     assert "Decision notes for this job" in detail.text
     assert "status-modal" in detail.text
     assert "Open source link" not in detail.text

@@ -1507,11 +1507,7 @@ def test_project_recipe_loader_resolves_sources_path_in_new_layout(tmp_path: Pat
     recipe_path = root / "user" / "sources" / "recipes" / "experimental" / "example.yaml"
     recipe_path.parent.mkdir(parents=True)
     recipe_path.write_text(
-        "source_name: Example\n"
-        "listing:\n"
-        "  card_selector: article\n"
-        "  title_selector: h2\n"
-        "  link_selector: a\n",
+        "source_name: Example\nlisting:\n  card_selector: article\n  title_selector: h2\n  link_selector: a\n",
         encoding="utf-8",
     )
 

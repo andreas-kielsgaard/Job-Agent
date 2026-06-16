@@ -15,9 +15,7 @@ def candidate_is_reviewable(candidate: RecipeCandidate) -> bool:
 
 def candidate_has_testable_recipe(candidate: RecipeCandidate) -> bool:
     return (
-        candidate.status == "pending"
-        and bool(candidate.suggested_recipe_yaml.strip())
-        and bool(candidate.schema_valid)
+        candidate.status == "pending" and bool(candidate.suggested_recipe_yaml.strip()) and bool(candidate.schema_valid)
     )
 
 

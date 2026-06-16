@@ -649,7 +649,10 @@ def test_auto_setup_ui_is_api_key_gated_and_offers_continue(
     assert checkbox and "disabled" not in checkbox.group(0)
 
     configured_overview = client.get("/sources")
-    overview_button = re.search(r'<form method="post" action="/sources/example-jobs/auto-setup/start"[\s\S]*?<button[^>]*>Automatically set up</button>', configured_overview.text)
+    overview_button = re.search(
+        r'<form method="post" action="/sources/example-jobs/auto-setup/start"[\s\S]*?<button[^>]*>Automatically set up</button>',
+        configured_overview.text,
+    )
     assert overview_button and "disabled" not in overview_button.group(0)
 
     run = SourceAutoSetupWorkflowHandler(project_root).prepare(source.id)

@@ -328,7 +328,7 @@ def test_refinement_accepts_deterministic_feed_blueprint_from_saved_feeds(projec
     assert client.prompts == []
     assert result.final_result.selected_strategy == "selector_based"
     assert "card_selector: item" in result.final_result.suggested_recipe_yaml
-    assert "page_link_selector: a[href$=\".rss\"]" in result.final_result.suggested_recipe_yaml
+    assert 'page_link_selector: a[href$=".rss"]' in result.final_result.suggested_recipe_yaml
     assert "feed-listing-response-1.xml" in result.final_result.referenced_artifact_files
     assert result.attempts[0].extracted_job_count == 2
     assert result.attempts[0].unique_urls == 2

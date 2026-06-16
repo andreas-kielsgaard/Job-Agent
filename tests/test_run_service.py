@@ -303,9 +303,7 @@ def test_daily_run_reviews_only_unseen_details_and_leaves_over_limit_jobs_unseen
     assert second_source["counts"]["detail_limit_skipped_count"] == 0
 
 
-def test_daily_run_detail_review_limit_is_per_source(
-    monkeypatch: pytest.MonkeyPatch, template_project: Path
-) -> None:
+def test_daily_run_detail_review_limit_is_per_source(monkeypatch: pytest.MonkeyPatch, template_project: Path) -> None:
     _write_multi_recipe_source_project(template_project, source_count=2, job_count=3)
     detail_calls = []
 
@@ -333,9 +331,7 @@ def test_daily_run_detail_review_limit_is_per_source(
 
     events = RunStore(template_project).read_events(result.record.run_id)
     processed = {
-        event["current_source"]: event["counts"]
-        for event in events
-        if event["event_type"] == "source_processed"
+        event["current_source"]: event["counts"] for event in events if event["event_type"] == "source_processed"
     }
     assert set(processed) == {"Detail Source 1", "Detail Source 2"}
     assert all(counts["reviewed_in_detail_count"] == 2 for counts in processed.values())

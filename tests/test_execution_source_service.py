@@ -3,10 +3,10 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from tests.helpers import EURSAP_SOURCE, MANUAL_SOURCE, seed_common_sources, seed_source_registry
 
 from job_agent.services.execution_source_service import ExecutionSourceService
 from job_agent.services.source_registry_service import SourceRegistryService
-from tests.helpers import EURSAP_SOURCE, MANUAL_SOURCE, seed_common_sources, seed_source_registry
 
 
 def test_execution_service_loads_existing_sources(project_root: Path) -> None:

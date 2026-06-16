@@ -51,7 +51,10 @@ DISQUALIFIED_NAME_TERMS: tuple[tuple[str, str], ...] = (
     ("github jobs", "GitHub Jobs was discontinued and should not be suggested as a job source."),
     ("stack overflow jobs", "Stack Overflow Jobs/Careers was discontinued and should not be suggested."),
     ("stackoverflow jobs", "Stack Overflow Jobs/Careers was discontinued and should not be suggested."),
-    ("indeed", "Indeed suggestions were manually disqualified because supplied links did not show relevant current jobs."),
+    (
+        "indeed",
+        "Indeed suggestions were manually disqualified because supplied links did not show relevant current jobs.",
+    ),
     ("linkedin", "LinkedIn suggestions are skipped because prior LinkedIn sources overlapped or failed setup."),
 )
 
@@ -80,7 +83,9 @@ class SourceDisqualificationService:
             )
         return sorted(deduped.values(), key=lambda item: (item.source != "default", item.domain))
 
-    def add_domain(self, domain_or_url: str, *, reason: str = "", source: str = "manual") -> SourceDomainDisqualification:
+    def add_domain(
+        self, domain_or_url: str, *, reason: str = "", source: str = "manual"
+    ) -> SourceDomainDisqualification:
         domain = normalize_domain(domain_or_url)
         if not domain:
             raise ValueError("Enter a domain or public source URL to disqualify.")
@@ -98,7 +103,11 @@ class SourceDisqualificationService:
         if not isinstance(domains, list):
             domains = []
             data["domains"] = domains
-        domains = [item for item in domains if not isinstance(item, dict) or normalize_domain(str(item.get("domain") or "")) != domain]
+        domains = [
+            item
+            for item in domains
+            if not isinstance(item, dict) or normalize_domain(str(item.get("domain") or "")) != domain
+        ]
         domains.append(
             {
                 "domain": record.domain,

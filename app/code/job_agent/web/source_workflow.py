@@ -162,9 +162,7 @@ class SourceWorkflowHandler:
             if card["auto_setup"].get("can_start") and card["auto_setup"].get("stale_recipe_source_test")
         )
         auto_setup_learning_count = sum(
-            1
-            for card in source_cards
-            if card["auto_setup"].get("can_start") and card["auto_setup"].get("requires_llm")
+            1 for card in source_cards if card["auto_setup"].get("can_start") and card["auto_setup"].get("requires_llm")
         )
         stale_recipe_source_count = sum(
             1 for card in source_cards if card["run_eligibility"].get("stale_recipe_source_test")
@@ -386,12 +384,16 @@ class SourceWorkflowHandler:
             assessment = assess_source_setup_url(source.url) if not has_recipe else None
             if not disabled_reason and assessment and not assessment.can_auto_setup:
                 disabled_reason = assessment.message
-        label = "Setup complete" if setup_complete else (
-            "Refresh source test"
-            if stale_recipe_source_test
-            else "Run source test"
-            if has_recipe
-            else "Automatically set up"
+        label = (
+            "Setup complete"
+            if setup_complete
+            else (
+                "Refresh source test"
+                if stale_recipe_source_test
+                else "Run source test"
+                if has_recipe
+                else "Automatically set up"
+            )
         )
         return {
             "show": show,

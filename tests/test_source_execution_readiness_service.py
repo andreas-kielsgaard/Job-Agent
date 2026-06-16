@@ -4,6 +4,8 @@ import os
 import time
 from pathlib import Path
 
+from tests.helpers import seed_common_sources
+
 from job_agent.cli import enable_source_when_ready, source_go_live_status
 from job_agent.cli import test_source as run_source_test_cli
 from job_agent.io.yaml_store import read_yaml
@@ -15,7 +17,6 @@ from job_agent.services.source_listing_index_store import SourceListingIndexStor
 from job_agent.services.source_registry_service import SourceRegistryService
 from job_agent.services.source_session_service import SourceSessionService
 from job_agent.services.source_test_service import SourceTestJobPreview, SourceTestResult
-from tests.helpers import seed_common_sources
 
 
 def test_successful_source_test_saves_ready_readiness_with_samples(project_root: Path) -> None:

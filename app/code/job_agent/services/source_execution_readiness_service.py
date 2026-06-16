@@ -84,7 +84,9 @@ class SourceExecutionReadinessService:
             if isinstance(record, dict)
         }
 
-    def with_current_recipe_file_checks(self, source, saved: SourceExecutionReadiness | None = None) -> SourceExecutionReadiness:
+    def with_current_recipe_file_checks(
+        self, source, saved: SourceExecutionReadiness | None = None
+    ) -> SourceExecutionReadiness:
         source_id = str(getattr(source, "id", "") or "").strip()
         readiness = saved or self.load(source_id)
         if not source_id:

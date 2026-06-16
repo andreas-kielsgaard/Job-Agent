@@ -309,7 +309,9 @@ def test_bulk_source_auto_setup_queues_stale_recipe_refresh_without_llm_key(proj
     SourceListingIndexStore(project_root).record_index(
         source_id=source.id,
         source_name=source.name,
-        jobs=[Job(title="SAP Basis Consultant", source=source.name, source_id=source.id, url="https://stale.example/1")],
+        jobs=[
+            Job(title="SAP Basis Consultant", source=source.name, source_id=source.id, url="https://stale.example/1")
+        ],
     )
     future_timestamp = recipe_path.stat().st_mtime + 60
     os.utime(recipe_path, (future_timestamp, future_timestamp))

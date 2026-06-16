@@ -786,7 +786,7 @@ def test_source_overview_and_detail_routes_render(client: TestClient) -> None:
     assert "Setup status" in overview.text
     assert "Indexing" in overview.text
     assert "Detail review" in overview.text
-    assert 'data-source-overview-dynamic' in overview.text
+    assert "data-source-overview-dynamic" in overview.text
     assert "/api/sources/overview" in overview.text
     assert "Manual Intake" in overview.text
     assert "Eursap Jobs" in overview.text

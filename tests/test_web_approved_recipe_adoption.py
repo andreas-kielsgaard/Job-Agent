@@ -4,12 +4,12 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from tests.helpers import seed_common_sources
 
 from job_agent.io.yaml_store import read_yaml
 from job_agent.services.recipe_candidate_service import RecipeCandidateStore
 from job_agent.services.recipe_suggestion_service import RecipeSuggestionResult
 from job_agent.services.source_registry_service import SourceRegistryService
-from tests.helpers import seed_common_sources
 
 VALID_RECIPE_YAML = """source_name: Eursap Jobs
 mode: static_html

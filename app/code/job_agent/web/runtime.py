@@ -867,11 +867,7 @@ def utc_now() -> str:
 def _auto_setup_worker_limit(root: Path) -> int:
     try:
         runtime_config = load_profile(root).get("runtime", {})
-        configured = (
-            int(runtime_config.get("max_parallel_sources") or 10)
-            if isinstance(runtime_config, dict)
-            else 10
-        )
+        configured = int(runtime_config.get("max_parallel_sources") or 10) if isinstance(runtime_config, dict) else 10
     except (TypeError, ValueError):
         configured = 10
     return max(1, min(50, configured))

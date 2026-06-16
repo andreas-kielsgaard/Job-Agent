@@ -200,9 +200,7 @@ def test_poor_schema_valid_candidate_without_override_still_fails_approval(
     assert loaded.status == "pending"
 
 
-def test_invalid_candidate_does_not_show_proceed_to_source_test(
-    client: TestClient, project_root: Path
-) -> None:
+def test_invalid_candidate_does_not_show_proceed_to_source_test(client: TestClient, project_root: Path) -> None:
     candidate = _save_invalid_candidate(project_root)
 
     response = client.get(f"/recipe-candidates/{candidate.candidate_id}?source_id=eursap-jobs")
