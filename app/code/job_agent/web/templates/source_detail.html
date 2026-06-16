@@ -12,6 +12,7 @@
   </div>
   <div class="source-header-actions">
     {% if source.status == "archived" %}<span class="badge low">Archived</span>{% endif %}
+    <span class="badge {{ source_run_eligibility.badge_class }}">{{ source_run_eligibility.label }}</span>
     <a class="button light" href="{{ source_jobs_url }}">View all jobs from this source</a>
     <a class="button light" href="/sources">Back to sources</a>
   </div>
@@ -29,7 +30,15 @@
   <div class="section-heading-row">
     <div>
       <h2>Automatic Setup</h2>
-      <p class="muted">Use the connected LLM to learn a reading plan, run the safe source test, and keep the source out of daily runs until you explicitly include it.</p>
+      <p class="muted">
+        {% if source_auto_setup.stale_recipe_source_test %}
+        Refresh the safe source test for the updated reading plan. AI is only needed if the retest proves the plan must be rebuilt.
+        {% elif source_auto_setup.requires_llm %}
+        Use the connected LLM to learn a reading plan, run the safe source test, and keep the source out of daily runs until you explicitly include it.
+        {% else %}
+        Run the safe source test for the selected reading plan and keep the source out of daily runs until you explicitly include it.
+        {% endif %}
+      </p>
     </div>
     {% if source_auto_setup.latest_run %}
     {% set auto_status = source_auto_setup.latest_run.status %}
@@ -68,7 +77,7 @@
   {% endif %}
   {% endif %}
   <div class="action-row">
-    <form method="post" action="/sources/{{ source.id }}/auto-setup/{% if source_auto_setup.resume_run_id %}continue{% else %}start{% endif %}" class="inline-form">
+    <form method="post" action="/sources/{{ source.id }}/auto-setup/{% if source_auto_setup.resume_run_id %}continue{% else %}start{% endif %}" class="inline-form" data-llm-model-picker data-llm-model-title="Choose AI power for automatic setup">
       {% if source_auto_setup.resume_run_id %}
       <input type="hidden" name="run_id" value="{{ source_auto_setup.resume_run_id }}">
       {% endif %}
@@ -89,7 +98,7 @@
     {% if source_card.lifecycle.state == "implemented" %}
     <span class="badge high">Implemented</span>
     <h2>Running in daily checks</h2>
-    <p class="muted">This source has completed setup and is included in the daily run.</p>
+    <p class="muted">{{ source_run_eligibility.summary }}</p>
     <div class="action-row">
       <form method="post" action="/sources/{{ source.id }}/run-now" class="inline-form">
         <button type="submit" class="button">Run daily check now</button>
@@ -120,6 +129,11 @@
   {% if source_card.lifecycle.state == "implemented" %}
   <div class="source-progress-grid">
     <div>
+      <span>Run eligibility</span>
+      <strong>{{ source_run_eligibility.title }}</strong>
+      <p>{{ source_run_eligibility.summary }}</p>
+    </div>
+    <div>
       <span>Indexing</span>
       <strong>{{ source_card.index.status_label }}</strong>
       <p>{{ source_card.index.indexed_count }} job posting{% if source_card.index.indexed_count != 1 %}s{% endif %} indexed.</p>
@@ -146,9 +160,9 @@
   {% else %}
   <div class="source-progress-grid">
     <div>
-      <span>Review evidence</span>
+      <span>Source-test evidence</span>
       <strong>{{ source_status.preview_label }}</strong>
-      <p>{% if go_live_readiness.last_checked_at %}Source-test proof is available from {{ go_live_readiness.last_checked_at }}.{% else %}Run the safe source test to create review evidence.{% endif %}</p>
+      <p>{% if go_live_readiness.last_checked_at %}Source-test proof is available from {{ go_live_readiness.last_checked_at }}.{% else %}Run the safe source test to verify extraction.{% endif %}</p>
     </div>
     <div>
       <span>Safe source test</span>
@@ -161,9 +175,9 @@
       <p>{{ source_session.summary }}</p>
     </div>
     <div>
-      <span>Daily run</span>
-      <strong>{{ source_status.automation_label }}</strong>
-      <p>{% if execution_entry and execution_entry.enabled %}Included in automatic job checks.{% else %}Not included until you explicitly turn it on.{% endif %}</p>
+      <span>Run eligibility</span>
+      <strong>{{ source_run_eligibility.title }}</strong>
+      <p>{% if source_run_eligibility.blockers %}{{ source_run_eligibility.blockers|join(" ") }}{% else %}{{ source_run_eligibility.summary }}{% endif %}</p>
     </div>
   </div>
   {% endif %}
@@ -226,9 +240,6 @@
       <h2>Reading Plan</h2>
       <p class="muted">The reading plan tells the app how to find job cards, follow pagination, open one job detail page at a time, and fill job-report fields.</p>
     </div>
-    {% if source.recipe_path and recipe_preview_url and go_live_readiness.last_checked_at %}
-    <a class="button light" href="{{ recipe_preview_url }}">Review found contents</a>
-    {% endif %}
   </div>
 
   {% if recipe_generation_status.warnings %}
@@ -260,21 +271,18 @@
     {% if go_live_readiness.readiness_status != "ready" %}
     <a class="button" href="/sources/{{ source.id }}/test-run?start=1">Test source safely</a>
     {% else %}
-    <a class="button" href="{{ recipe_preview_url }}">Review found contents</a>
+    <a class="button" href="/sources/{{ source.id }}/test-run">View source test</a>
     {% endif %}
     <a class="button light" href="{{ recipe_editor_url }}">Edit rules</a>
   </div>
   {% else %}
   <div class="empty-state">
     <h3>No reading plan selected yet</h3>
-    <p class="muted">Start by letting the app inspect one source page and one representative job detail page. It will create a plan for you to review before anything is used automatically.</p>
+    <p class="muted">Start by letting the app inspect one source page and one representative job detail page. It will create a plan you can select for the safe source test before anything is used automatically.</p>
     {% if source.status != "archived" and source.url %}
-    <form method="post" action="/sources/{{ source.id }}/reading-plan/learn" class="inline-form">
+    <form method="post" action="/sources/{{ source.id }}/reading-plan/learn" class="inline-form" data-llm-model-picker data-llm-model-title="Choose AI power for source learning">
       <button type="submit" class="button">Learn source</button>
     </form>
-    {% endif %}
-    {% if recipe_generation_status.latest_reviewable_candidate_id %}
-    <a class="button light" href="/recipe-candidates/{{ recipe_generation_status.latest_reviewable_candidate_id }}?source_id={{ source.id }}">Review latest generated plan</a>
     {% endif %}
   </div>
   {% endif %}
@@ -349,7 +357,7 @@
     </form>
     {% endif %}
     {% if recipe_artifacts %}
-    <form method="post" action="/sources/{{ source.id }}/recipe-candidates/generate">
+    <form method="post" action="/sources/{{ source.id }}/recipe-candidates/generate" data-llm-model-picker data-llm-model-title="Choose AI power for reading-plan generation">
       <label>Saved sample</label>
       <select name="artifact_dir">
         {% for artifact in recipe_artifacts %}
@@ -416,7 +424,7 @@
             <td>{{ candidate.status }}</td>
             <td>{{ candidate.quality_status or ("schema valid" if candidate.schema_valid else "needs review") }}</td>
             <td>{{ candidate.extracted_job_count }} extracted / {{ candidate.useful_titles }} useful / {{ candidate.unique_urls }} URLs</td>
-            <td><a class="button light" href="/recipe-candidates/{{ candidate.candidate_id }}?source_id={{ source.id }}">Open</a></td>
+            <td><a class="button light" href="/recipe-candidates/{{ candidate.candidate_id }}?source_id={{ source.id }}">Details</a></td>
           </tr>
           {% endfor %}
         </tbody>
@@ -430,7 +438,6 @@
       <summary>Advanced checks and tools</summary>
       <div class="action-row" style="margin-top:12px;">
         <a class="button light" href="{{ compatibility_url }}">Compatibility evidence</a>
-        <a class="button light" href="{{ recipe_preview_url }}">Review found contents</a>
         <a class="button light" href="{{ recipe_editor_url }}">Recipe editor</a>
       </div>
     </details>
@@ -455,7 +462,7 @@
     <div class="stat"><span>Source test</span><strong>{{ source_status.source_test_label }}</strong></div>
     <div class="stat"><span>Jobs found in test</span><strong>{{ go_live_readiness.dry_run_job_count }}</strong></div>
     <div class="stat"><span>Last source test</span><strong>{{ go_live_readiness.last_checked_at or "Never" }}</strong></div>
-    <div class="stat"><span>Daily run</span><strong>{{ source_status.automation_label }}</strong></div>
+    <div class="stat"><span>Run eligibility</span><strong>{{ source_run_eligibility.title }}</strong></div>
   </div>
   {% if source_test_is_stale %}
   <p><span class="badge medium">Previous source-test details are from an older reading plan.</span></p>
@@ -494,10 +501,14 @@
   {% endfor %}
 
   <div class="action-row">
-    {% if execution_entry and execution_entry.enabled %}
+    {% if source_run_eligibility.eligible %}
     <form method="post" action="/sources/{{ source.id }}/run-now" class="inline-form">
       <button type="submit" class="button">Run daily check now</button>
     </form>
+    {% elif execution_entry and execution_entry.enabled %}
+    <span class="badge warning">Current checks would skip this source; run the safe source test first.</span>
+    {% endif %}
+    {% if execution_entry and execution_entry.enabled %}
     <form method="post" action="/sources/{{ source.id }}/execution/disable" class="inline-form">
       <button type="submit" class="button light">Remove from daily run</button>
     </form>

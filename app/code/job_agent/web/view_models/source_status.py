@@ -3,12 +3,83 @@ from __future__ import annotations
 from typing import Any
 
 
+def build_source_run_eligibility(
+    source,
+    execution_entry,
+    readiness,
+    *,
+    index_status: dict[str, object] | None = None,
+) -> dict[str, Any]:
+    index_status = index_status or {}
+    source_kind = str(getattr(source, "kind", "") or "")
+    source_status = str(getattr(source, "status", "") or "")
+    archived = source_status == "archived"
+    local_or_manual = source_kind in {"manual", "local_yaml"}
+    configured = bool(execution_entry)
+    enabled = bool(execution_entry and execution_entry.get("enabled", True))
+    readiness_ready = bool(local_or_manual or getattr(readiness, "readiness_status", "") == "ready")
+    index_complete = bool(local_or_manual or index_status.get("complete"))
+    stale_recipe_source_test = readiness_has_stale_recipe_test(readiness)
+    eligible = bool(enabled and readiness_ready and index_complete and not archived)
+    blockers: list[str] = []
+    if archived:
+        blockers.append("Archived sources are skipped.")
+    if not configured:
+        blockers.append("No daily-run execution entry is configured.")
+    elif not enabled:
+        blockers.append("Daily-run execution is turned off.")
+    if not readiness_ready and not local_or_manual:
+        blockers.extend(_readiness_blockers(readiness))
+    if readiness_ready and not index_complete:
+        blockers.append("Listing index is missing or stale.")
+    if eligible:
+        label = "Will run"
+        badge_class = "high"
+        title = "Eligible now"
+        summary = "Enabled, source-test proof is current, and the listing index is ready."
+    elif enabled:
+        label = "Will be skipped"
+        badge_class = "warning"
+        title = "Configured but blocked"
+        summary = "Enabled in the daily-run config, but current checks would skip it."
+    elif configured:
+        label = "Configured off"
+        badge_class = "medium"
+        title = "Configured but off"
+        summary = "A daily-run entry exists, but it is turned off."
+    else:
+        label = "Not configured"
+        badge_class = "waiting"
+        title = "Not in daily run"
+        summary = "No daily-run execution entry exists for this source."
+    return {
+        "eligible": eligible,
+        "configured": configured,
+        "enabled": enabled,
+        "readiness_ready": readiness_ready,
+        "index_complete": index_complete,
+        "stale_recipe_source_test": stale_recipe_source_test,
+        "label": label,
+        "badge_class": badge_class,
+        "title": title,
+        "summary": summary,
+        "blockers": blockers[:4],
+    }
+
+
+def readiness_has_stale_recipe_test(readiness) -> bool:
+    checks = getattr(readiness, "checks", {}) or {}
+    if isinstance(checks, dict) and checks.get("recipe_changed_after_source_test"):
+        return True
+    blockers = [str(item).lower() for item in getattr(readiness, "blockers", []) or []]
+    return any("reading plan changed since the saved source test" in blocker for blocker in blockers)
+
+
 def build_source_page_status(
     source,
     execution_entry,
     readiness,
     *,
-    recipe_preview_url: str,
     generation_status=None,
     session_status=None,
     index_status: dict[str, object] | None = None,
@@ -21,6 +92,12 @@ def build_source_page_status(
     )
     reviewable_pending_candidates = (
         int(getattr(generation_status, "reviewable_pending_candidates", 0) or 0) if generation_status else 0
+    )
+    latest_testable_candidate_id = (
+        getattr(generation_status, "latest_testable_candidate_id", "") if generation_status else ""
+    )
+    testable_pending_candidates = (
+        int(getattr(generation_status, "testable_pending_candidates", 0) or 0) if generation_status else 0
     )
     latest_approved_candidate_id = (
         getattr(generation_status, "latest_approved_candidate_id", "") if generation_status else ""
@@ -36,7 +113,7 @@ def build_source_page_status(
         "badge_class": "medium",
         "primary_action": None,
         "secondary_action": {"type": "link", "label": "Edit settings", "href": "#source-settings"},
-        "preview_label": _review_evidence_label(readiness),
+        "preview_label": _source_test_evidence_label(readiness),
         "source_test_label": _status_label(readiness.readiness_status),
         "automation_label": "Included"
         if execution_enabled
@@ -99,14 +176,30 @@ def build_source_page_status(
         if reviewable_pending_candidates and latest_reviewable_candidate_id:
             status.update(
                 {
-                    "title": "Review generated reading plan",
-                    "summary": "A generated reading plan is waiting for you to review and select.",
-                    "badge": "Review plan",
+                    "title": "Use generated reading plan",
+                    "summary": "A generated reading plan is ready to select before running the safe source test.",
+                    "badge": "Select plan",
                     "badge_class": "medium",
                     "primary_action": {
                         "type": "link",
-                        "label": "Review reading plan",
+                        "label": "Use plan and test",
                         "href": f"/recipe-candidates/{latest_reviewable_candidate_id}?source_id={source.id}",
+                    },
+                    "blockers": ["No reading plan is selected yet."],
+                }
+            )
+            return status
+        if testable_pending_candidates and latest_testable_candidate_id:
+            status.update(
+                {
+                    "title": "Generated reading plan has warnings",
+                    "summary": "A generated reading plan has local quality warnings. Select it only if you want the safe source test to be the next gate.",
+                    "badge": "Warnings",
+                    "badge_class": "medium",
+                    "primary_action": {
+                        "type": "link",
+                        "label": "Use plan and test",
+                        "href": f"/recipe-candidates/{latest_testable_candidate_id}?source_id={source.id}",
                     },
                     "blockers": ["No reading plan is selected yet."],
                 }
@@ -116,7 +209,7 @@ def build_source_page_status(
             status.update(
                 {
                     "title": "Use saved reading plan",
-                    "summary": "A reviewed reading plan exists, but this source is not using it yet.",
+                    "summary": "A saved reading plan exists, but this source is not using it yet.",
                     "badge": "Select plan",
                     "badge_class": "medium",
                     "primary_action": {
@@ -226,9 +319,9 @@ def build_source_page_status(
         else:
             status.update(
                 {
-                    "title": "Included in daily run",
-                    "summary": "This source is enabled for the daily run.",
-                    "badge": "Enabled",
+                    "title": "Eligible for daily run",
+                    "summary": "This source is enabled, its source-test proof is current, and its listing index is ready.",
+                    "badge": "Will run",
                     "badge_class": "high",
                     "primary_action": {
                         "type": "post",
@@ -246,7 +339,6 @@ def build_source_setup_steps(
     readiness,
     generation_status,
     *,
-    recipe_preview_url: str,
     index_status: dict[str, object] | None = None,
     detail_status: dict[str, object] | None = None,
     session_status=None,
@@ -279,6 +371,12 @@ def build_source_setup_steps(
     reviewable_pending_candidates = (
         int(getattr(generation_status, "reviewable_pending_candidates", 0) or 0) if generation_status else 0
     )
+    latest_testable_candidate_id = (
+        getattr(generation_status, "latest_testable_candidate_id", "") if generation_status else ""
+    )
+    testable_pending_candidates = (
+        int(getattr(generation_status, "testable_pending_candidates", 0) or 0) if generation_status else 0
+    )
     execution_enabled = bool(execution_entry and execution_entry.get("enabled", True))
     index_status = index_status or {}
     detail_status = detail_status or {}
@@ -288,7 +386,7 @@ def build_source_setup_steps(
     steps = [
         {
             "title": "Add source",
-            "summary": "The job-board URL is saved for review.",
+            "summary": "The job-board URL is saved.",
             "badge": "Done" if source.url else "Needs URL",
             "badge_class": "high" if source.url else "medium",
             "state": "complete" if source.url else "todo",
@@ -301,14 +399,23 @@ def build_source_setup_steps(
         learn_action = None
         learn_summary = "A reading plan is selected for this source."
     elif reviewable_pending_candidates and latest_reviewable_candidate_id:
-        learn_badge = "Review"
+        learn_badge = "Select"
         learn_state = "active"
         learn_action = {
             "type": "link",
-            "label": "Review plan",
+            "label": "Use plan and test",
             "href": f"/recipe-candidates/{latest_reviewable_candidate_id}?source_id={source.id}",
         }
-        learn_summary = "A generated reading plan is waiting for review."
+        learn_summary = "A generated reading plan is ready to select before running the safe source test."
+    elif testable_pending_candidates and latest_testable_candidate_id:
+        learn_badge = "Warnings"
+        learn_state = "active"
+        learn_action = {
+            "type": "link",
+            "label": "Inspect warnings",
+            "href": f"/recipe-candidates/{latest_testable_candidate_id}?source_id={source.id}",
+        }
+        learn_summary = "A generated reading plan has local quality warnings."
     else:
         learn_badge = "Next"
         learn_state = "active" if source.url else "blocked"
@@ -361,24 +468,6 @@ def build_source_setup_steps(
             if test_blocked_by_issue
             else ("active" if source.recipe_path and source.status != "archived" else "blocked"),
             "action": test_action,
-        }
-    )
-    has_source_test_evidence = bool(getattr(readiness, "last_checked_at", ""))
-    review_action = (
-        {"type": "link", "label": "Review found contents", "href": recipe_preview_url}
-        if source.recipe_path and has_source_test_evidence
-        else None
-    )
-    steps.append(
-        {
-            "title": "Review found contents",
-            "summary": readiness.readiness_summary
-            if has_source_test_evidence
-            else "Run the safe source test first; the review will show that proof and the sampled jobs it found.",
-            "badge": "Passed" if test_ready else "Available" if has_source_test_evidence else "Waiting",
-            "badge_class": "high" if test_ready else "medium",
-            "state": "complete" if test_ready else ("active" if has_source_test_evidence else "blocked"),
-            "action": review_action if not test_ready else review_action,
         }
     )
     index_available = bool(source.recipe_path and test_ready and source.status != "archived" and not pagination_issue)
@@ -467,12 +556,22 @@ def _status_label(status: str) -> str:
     }.get(str(status or "").strip(), str(status or "Unknown").replace("_", " ").title())
 
 
-def _review_evidence_label(readiness) -> str:
+def _source_test_evidence_label(readiness) -> str:
     if getattr(readiness, "readiness_status", "") == "ready":
         return "Passed"
     if getattr(readiness, "last_checked_at", ""):
         return "Available"
     return "Waiting"
+
+
+def _readiness_blockers(readiness) -> list[str]:
+    blockers = [str(item).strip() for item in getattr(readiness, "blockers", []) or [] if str(item).strip()]
+    if blockers:
+        return blockers
+    summary = str(getattr(readiness, "readiness_summary", "") or "").strip()
+    if summary:
+        return [summary]
+    return ["Safe source test has not passed for the current reading plan."]
 
 
 def _pagination_access_issue(readiness, *, source=None, session_status=None) -> dict[str, Any] | None:

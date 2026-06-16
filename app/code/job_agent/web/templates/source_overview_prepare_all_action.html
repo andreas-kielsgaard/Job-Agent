@@ -1,0 +1,7 @@
+{% if auto_setup_all.show %}
+<form method="post" action="/sources/auto-setup/start-all" class="inline-form" data-llm-model-picker data-llm-model-title="Choose AI power for automatic setup">
+  <button type="submit" class="button light" {% if not auto_setup_all.can_start %}disabled{% endif %}>
+    {% if auto_setup_all.stale_refresh_count and not auto_setup_all.learning_count %}Refresh stale tests{% else %}Prepare all{% endif %}
+  </button>
+</form>
+{% endif %}

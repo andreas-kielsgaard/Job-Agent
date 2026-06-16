@@ -41,6 +41,19 @@ def source_overview(
     )
 
 
+@router.get("/api/sources/overview")
+def source_overview_payload(request: Request) -> JSONResponse:
+    context = {"request": request, **workflow_handler().source.overview_context()}
+    response = JSONResponse(
+        {
+            "overview_html": _render_template_fragment("source_overview_dynamic.html", context),
+            "prepare_all_html": _render_template_fragment("source_overview_prepare_all_action.html", context),
+        }
+    )
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
 @router.get("/sources/new", response_class=HTMLResponse)
 def new_source_form(
     request: Request,
@@ -102,9 +115,10 @@ def suggest_sources_form(
 def generate_source_suggestions(
     request: Request,
     focus: str = Form(""),
+    llm_model: str = Form(""),
 ) -> HTMLResponse:
     try:
-        result = workflow_handler().source.suggest_sources_with_llm(focus=focus)
+        result = workflow_handler().source.suggest_sources_with_llm(focus=focus, llm_model=llm_model)
         context = workflow_handler().source.suggestion_context(
             focus=focus,
             raw_response=result.raw_response,
@@ -187,7 +201,18 @@ def save_suggested_source(
     notes: str = Form(""),
 ) -> JSONResponse:
     handler = workflow_handler().source
+    disqualification = handler.source_disqualification(url)
+    if disqualification:
+        return JSONResponse(
+            {
+                "ok": False,
+                "error": f"Domain is disqualified from source suggestions: {disqualification.reason}",
+            },
+            status_code=400,
+        )
     existing = handler.existing_source_by_url(url)
+    if not existing:
+        existing = handler.existing_source_by_domain(url)
     if existing:
         return JSONResponse(
             {
@@ -225,6 +250,37 @@ def save_suggested_source(
             "message": "Added to pending setup. It is not included in daily runs yet.",
         }
     )
+
+
+@router.post("/sources/suggest/disqualify")
+def disqualify_suggested_domain(
+    domain: str = Form(""),
+    reason: str = Form(""),
+) -> JSONResponse:
+    try:
+        record = workflow_handler().source.disqualify_domain(domain, reason=reason)
+    except ValueError as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+    return JSONResponse(
+        {
+            "ok": True,
+            "domain": record.domain,
+            "reason": record.reason,
+            "message": f"Disqualified {record.domain} from future source suggestions.",
+        }
+    )
+
+
+@router.post("/sources/disqualify-domain")
+def disqualify_domain(
+    domain: str = Form(""),
+    reason: str = Form(""),
+) -> RedirectResponse:
+    try:
+        record = workflow_handler().source.disqualify_domain(domain, reason=reason)
+    except ValueError as exc:
+        return _redirect_to_sources(warning=f"Could not disqualify domain: {exc}")
+    return _redirect_to_sources(message=f"Disqualified {record.domain} from future source suggestions.")
 
 
 @router.post("/sources/new", response_class=HTMLResponse)
@@ -278,6 +334,51 @@ def create_source(
     return _redirect_to_source(created.id, message=message)
 
 
+@router.get("/sources/auto-setup", response_class=HTMLResponse)
+def source_auto_setup_monitor(
+    request: Request,
+    source_id: str = "",
+    queue: str = "",
+    llm_model: str = "",
+    message: str = "",
+    warning: str = "",
+) -> HTMLResponse:
+    context = workflow_handler().auto_setup.monitor_context(
+        source_id=source_id,
+        message=message,
+        warning=warning,
+    )
+    response = templates.TemplateResponse(
+        request,
+        "source_auto_setup_runs.html",
+        {"request": request, "auto_setup_queue": queue, "auto_setup_llm_model": llm_model, **context},
+    )
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+@router.get("/api/sources/auto-setup/status")
+def source_auto_setup_status(source_id: str = "") -> JSONResponse:
+    return JSONResponse(workflow_handler().auto_setup.monitor_payload(source_id=source_id))
+
+
+@router.post("/api/sources/auto-setup/start-all")
+def api_start_all_source_auto_setups(llm_model: str = Form("")) -> JSONResponse:
+    try:
+        tasks = runtime.launch_all_source_auto_setups(llm_model=llm_model)
+    except (RuntimeError, ValueError) as exc:
+        return JSONResponse({"ok": False, "warning": f"Automatic setup could not start: {exc}"}, status_code=400)
+    if not tasks:
+        return JSONResponse({"ok": True, "queued_count": 0, "warning": "No setup-ready source URLs need automatic setup."})
+    return JSONResponse(
+        {
+            "ok": True,
+            "queued_count": len(tasks),
+            "message": f"Automatic setup queued for {len(tasks)} source(s).",
+        }
+    )
+
+
 @router.get("/sources/{source_id}", response_class=HTMLResponse)
 def source_detail(request: Request, source_id: str, message: str = "", warning: str = "") -> HTMLResponse:
     handler = workflow_handler()
@@ -303,30 +404,40 @@ def source_detail(request: Request, source_id: str, message: str = "", warning: 
 
 
 @router.post("/sources/{source_id}/auto-setup/start")
-def start_source_auto_setup(source_id: str) -> RedirectResponse:
+def start_source_auto_setup(source_id: str, llm_model: str = Form("")) -> RedirectResponse:
     try:
-        task = runtime.launch_source_auto_setup(source_id)
+        task = runtime.launch_source_auto_setup(source_id, llm_model=llm_model)
     except (RuntimeError, ValueError) as exc:
         return _redirect_to_source(source_id, warning=f"Automatic setup could not start: {exc}", fragment="auto-setup")
-    return _redirect_to_source(
-        source_id,
-        message=f"Automatic setup started for {task.source_name}.",
-        fragment="auto-setup",
+    return RedirectResponse(
+        f"/sources/auto-setup?{urlencode({'source_id': source_id, 'message': f'Automatic setup started for {task.source_name}.'})}",
+        status_code=303,
+    )
+
+
+@router.post("/sources/auto-setup/start-all")
+def start_all_source_auto_setups(llm_model: str = Form("")) -> RedirectResponse:
+    return RedirectResponse(
+        f"/sources/auto-setup?{urlencode({'queue': 'all', 'llm_model': llm_model, 'message': 'Automatic setup overview opened. Queuing source setup...'})}",
+        status_code=303,
     )
 
 
 @router.post("/sources/{source_id}/auto-setup/continue")
-def continue_source_auto_setup(source_id: str, run_id: str = Form("")) -> RedirectResponse:
+def continue_source_auto_setup(
+    source_id: str,
+    run_id: str = Form(""),
+    llm_model: str = Form(""),
+) -> RedirectResponse:
     try:
-        task = runtime.launch_source_auto_setup(source_id, run_id=run_id)
+        task = runtime.launch_source_auto_setup(source_id, run_id=run_id, llm_model=llm_model)
     except (RuntimeError, ValueError) as exc:
         return _redirect_to_source(
             source_id, warning=f"Automatic setup could not continue: {exc}", fragment="auto-setup"
         )
-    return _redirect_to_source(
-        source_id,
-        message=f"Automatic setup continuing for {task.source_name}.",
-        fragment="auto-setup",
+    return RedirectResponse(
+        f"/sources/auto-setup?{urlencode({'source_id': source_id, 'message': f'Automatic setup continuing for {task.source_name}.'})}",
+        status_code=303,
     )
 
 
@@ -410,6 +521,7 @@ def learn_source_reading_plan(
     max_candidates: int = Form(30),
     refine: str = Form("1"),
     max_attempts: int = Form(3),
+    llm_model: str = Form(""),
 ) -> RedirectResponse:
     source = _registry_source_or_404(source_id)
     _require_not_archived(source)
@@ -424,6 +536,7 @@ def learn_source_reading_plan(
             max_candidates=bounded_candidates,
             refine=bool(refine),
             max_attempts=max_attempts,
+            llm_model=llm_model,
         )
     except (RuntimeError, ValueError) as exc:
         return _redirect_to_source(source_id, warning=f"Could not learn this source yet: {exc}")
@@ -431,7 +544,7 @@ def learn_source_reading_plan(
 
 
 @router.post("/sources/{source_id}/reading-plan/rebuild-from-test")
-def rebuild_source_reading_plan_from_test(source_id: str) -> RedirectResponse:
+def rebuild_source_reading_plan_from_test(source_id: str, llm_model: str = Form("")) -> RedirectResponse:
     workflow = _source_workflow(source_id)
     if not workflow:
         raise HTTPException(status_code=404, detail="Source not found.")
@@ -454,6 +567,7 @@ def rebuild_source_reading_plan_from_test(source_id: str) -> RedirectResponse:
             refine=True,
             max_attempts=4,
             source_test_insight=insight.get("generation_clues", insight),
+            llm_model=llm_model,
         )
     except (RuntimeError, ValueError) as exc:
         return _redirect_to_source(source_id, warning=f"Could not rebuild this reading plan yet: {exc}")
@@ -583,17 +697,17 @@ def clear_source_session(source_id: str) -> RedirectResponse:
 
 
 @router.post("/sources/{source_id}/execution/enable")
-def enable_execution_source(source_id: str) -> RedirectResponse:
+def enable_execution_source(source_id: str, return_to: str = Form("")) -> RedirectResponse:
     try:
         result = workflow_handler().source.enable_when_ready(source_id)
     except RuntimeError as exc:
-        return _redirect_to_source(source_id, warning=str(exc))
+        return _redirect_to_source_action(source_id, return_to=return_to, warning=str(exc))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if not result.enabled:
         warning = " ".join(result.check.blockers[:3]) or "Source is not ready for daily-run enablement."
-        return _redirect_to_source(source_id, warning=warning)
-    return _redirect_to_source(source_id, message="Source included in daily runs.")
+        return _redirect_to_source_action(source_id, return_to=return_to, warning=warning)
+    return _redirect_to_source_action(source_id, return_to=return_to, message="Source included in daily runs.")
 
 
 @router.post("/sources/{source_id}/execution/disable")
@@ -669,17 +783,21 @@ def run_source_test_stream(source_id: str) -> StreamingResponse:
 
 
 @router.post("/sources/{source_id}/enable-when-ready")
-def enable_source_when_ready(source_id: str) -> RedirectResponse:
+def enable_source_when_ready(source_id: str, return_to: str = Form("")) -> RedirectResponse:
     try:
         result = workflow_handler().source.enable_when_ready(source_id)
     except RuntimeError as exc:
-        return _redirect_to_source(source_id, warning=str(exc))
+        return _redirect_to_source_action(source_id, return_to=return_to, warning=str(exc))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if not result.enabled:
         warning = " ".join(result.check.blockers[:3]) or "Source is not ready for daily-run enablement."
-        return _redirect_to_source(source_id, warning=warning)
-    return _redirect_to_source(source_id, message="Source included in daily runs after readiness checks passed.")
+        return _redirect_to_source_action(source_id, return_to=return_to, warning=warning)
+    return _redirect_to_source_action(
+        source_id,
+        return_to=return_to,
+        message="Source included in daily runs after readiness checks passed.",
+    )
 
 
 @router.post("/sources/{source_id}/run-now")
@@ -720,6 +838,7 @@ def generate_recipe_candidate(
     artifact_dir: str = Form(...),
     refine: str = Form(""),
     max_attempts: int = Form(3),
+    llm_model: str = Form(""),
 ) -> RedirectResponse:
     try:
         run = workflow_handler().recipe.start_from_artifact(
@@ -727,6 +846,7 @@ def generate_recipe_candidate(
             artifact_dir=artifact_dir,
             refine=bool(refine),
             max_attempts=max_attempts,
+            llm_model=llm_model,
         )
     except (RuntimeError, ValueError) as exc:
         return _redirect_to_source(source_id, warning=f"Recipe candidate generation failed: {exc}")
@@ -889,8 +1009,28 @@ def apply_external_recipe_candidate_batch(
     )
 
 
+@router.post("/sources/{source_id}/recipe-generation/{run_id}/retry")
+def retry_recipe_generation_run(
+    source_id: str,
+    run_id: str,
+    llm_model: str = Form(""),
+) -> RedirectResponse:
+    source = _registry_source_or_404(source_id)
+    _require_not_archived(source)
+    try:
+        run = workflow_handler().recipe.retry_run(source_id, run_id, llm_model=llm_model)
+    except (RuntimeError, ValueError) as exc:
+        return RedirectResponse(
+            f"/sources/{source_id}/recipe-generation/{run_id}?{urlencode({'warning': str(exc)})}",
+            status_code=303,
+        )
+    return RedirectResponse(f"/sources/{source_id}/recipe-generation/{run['run_id']}", status_code=303)
+
+
 @router.get("/sources/{source_id}/recipe-generation/{run_id}", response_class=HTMLResponse)
-def recipe_generation_run_detail(request: Request, source_id: str, run_id: str) -> HTMLResponse:
+def recipe_generation_run_detail(
+    request: Request, source_id: str, run_id: str, warning: str = ""
+) -> HTMLResponse:
     source = _registry_source_or_404(source_id)
     try:
         run = workflow_handler().recipe.load_source_run(source_id, run_id)
@@ -904,6 +1044,7 @@ def recipe_generation_run_detail(request: Request, source_id: str, run_id: str) 
             "title": f"Reading Plan - {source.name}",
             "source": source,
             "run": run,
+            "warning": warning,
         },
     )
     response.headers["Cache-Control"] = "no-store"
@@ -976,6 +1117,7 @@ def approve_recipe_candidate(
     source_id: str = Form(""),
     overwrite: str = Form(""),
     next_action: str = Form(""),
+    allow_quality_warnings: str = Form(""),
 ) -> RedirectResponse:
     try:
         result = workflow_handler().recipe.approve_candidate(
@@ -983,6 +1125,7 @@ def approve_recipe_candidate(
             recipe_path,
             source_id=source_id,
             overwrite=bool(overwrite),
+            allow_quality_warnings=bool(allow_quality_warnings),
         )
     except ValueError as exc:
         if source_id:
@@ -1056,6 +1199,25 @@ def _redirect_to_source(
     return RedirectResponse(f"/sources/{source_id}{suffix}{anchor}", status_code=303)
 
 
+def _redirect_to_source_action(
+    source_id: str,
+    *,
+    return_to: str = "",
+    message: str = "",
+    warning: str = "",
+    fragment: str = "",
+) -> RedirectResponse:
+    safe_return_to = _safe_sources_return_to(return_to)
+    if not safe_return_to:
+        return _redirect_to_source(source_id, message=message, warning=warning, fragment=fragment)
+    params = {}
+    if message:
+        params["message"] = message
+    if warning:
+        params["warning"] = warning
+    return RedirectResponse(_append_query_params(safe_return_to, params), status_code=303)
+
+
 def _redirect_to_sources(
     *,
     message: str = "",
@@ -1070,8 +1232,30 @@ def _redirect_to_sources(
     return RedirectResponse(f"/sources{suffix}", status_code=303)
 
 
+def _safe_sources_return_to(value: str) -> str:
+    text = str(value or "").strip()
+    if not text or not text.startswith("/") or text.startswith("//") or "://" in text:
+        return ""
+    if text == "/sources" or text.startswith("/sources?") or text.startswith("/sources#"):
+        return text
+    return ""
+
+
+def _append_query_params(return_to: str, params: dict[str, str]) -> str:
+    if not params:
+        return return_to
+    base, separator, fragment = return_to.partition("#")
+    query_separator = "&" if "?" in base else "?"
+    suffix = f"{query_separator}{urlencode(params)}"
+    return f"{base}{suffix}{separator}{fragment}" if separator else f"{base}{suffix}"
+
+
 def _display_path(path, root) -> str:
     try:
         return path.relative_to(root).as_posix()
     except ValueError:
         return path.as_posix()
+
+
+def _render_template_fragment(template_name: str, context: dict) -> str:
+    return templates.env.get_template(template_name).render(**context)

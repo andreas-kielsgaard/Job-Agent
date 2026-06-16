@@ -9,7 +9,7 @@ import yaml
 
 from job_agent.config import ROOT
 from job_agent.paths import display_path, output_dir, recipes_dir, resolve_project_path
-from job_agent.services.recipe_candidate_policy import candidate_is_reviewable
+from job_agent.services.recipe_candidate_policy import candidate_has_testable_recipe, candidate_is_reviewable
 from job_agent.services.recipe_candidate_service import RecipeCandidate, RecipeCandidateStore
 from job_agent.services.recipe_preview_service import RecipePreviewResult, preview_recipe
 from job_agent.services.recipe_suggestion_service import validate_suggested_recipe_yaml
@@ -39,11 +39,14 @@ class RecipeCandidateApprovalService:
         source_id: str = "",
         overwrite: bool = False,
         base_url: str = "",
+        allow_quality_warnings: bool = False,
     ) -> RecipeCandidateApprovalResult:
         candidate = self.store.load_candidate(candidate_id)
         if candidate.status != "pending":
             raise ValueError(f"Only pending recipe candidates can be approved. Current status: {candidate.status}.")
-        if not candidate_is_reviewable(candidate):
+        if not candidate_is_reviewable(candidate) and (
+            not allow_quality_warnings or not candidate_has_testable_recipe(candidate)
+        ):
             raise ValueError(
                 "Candidate did not pass local extraction quality checks. Regenerate it from a better source capture."
             )

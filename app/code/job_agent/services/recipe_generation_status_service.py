@@ -7,7 +7,11 @@ from urllib.parse import urlparse
 from job_agent.config import ROOT
 from job_agent.services.execution_source_service import ExecutionSourceService
 from job_agent.services.recipe_artifact_service import RecipeArtifactService, RecipeArtifactSummary
-from job_agent.services.recipe_candidate_policy import candidate_is_reviewable
+from job_agent.services.recipe_candidate_policy import (
+    candidate_has_quality_blockers,
+    candidate_has_testable_recipe,
+    candidate_is_reviewable,
+)
 from job_agent.services.recipe_candidate_service import RecipeCandidate, RecipeCandidateStore
 from job_agent.services.source_registry_service import SourceRegistryEntry, SourceRegistryService
 
@@ -28,6 +32,9 @@ class RecipeGenerationStatus:
     reviewable_pending_candidates: int = 0
     latest_reviewable_candidate_id: str = ""
     latest_reviewable_candidate_status: str = ""
+    testable_pending_candidates: int = 0
+    latest_testable_candidate_id: str = ""
+    latest_testable_candidate_status: str = ""
     latest_approved_candidate_id: str = ""
     latest_approved_recipe_path: str = ""
     approved_matches_source_recipe_path: bool = False
@@ -54,8 +61,10 @@ class RecipeGenerationStatusService:
         candidates = self._matching_candidates(source, artifacts)
         approved = [candidate for candidate in candidates if candidate.status == "approved"]
         reviewable_pending = [candidate for candidate in candidates if candidate_is_reviewable(candidate)]
+        testable_pending = [candidate for candidate in candidates if candidate_has_testable_recipe(candidate)]
         latest = candidates[0] if candidates else None
         latest_reviewable = reviewable_pending[0] if reviewable_pending else None
+        latest_testable = testable_pending[0] if testable_pending else None
         latest_approved = approved[0] if approved else None
         execution_entry = self.execution.find_by_source_id(source.id)
         status = RecipeGenerationStatus(
@@ -73,6 +82,9 @@ class RecipeGenerationStatusService:
             reviewable_pending_candidates=len(reviewable_pending),
             latest_reviewable_candidate_id=latest_reviewable.candidate_id if latest_reviewable else "",
             latest_reviewable_candidate_status=latest_reviewable.status if latest_reviewable else "",
+            testable_pending_candidates=len(testable_pending),
+            latest_testable_candidate_id=latest_testable.candidate_id if latest_testable else "",
+            latest_testable_candidate_status=latest_testable.status if latest_testable else "",
             latest_approved_candidate_id=latest_approved.candidate_id if latest_approved else "",
             latest_approved_recipe_path=latest_approved.approved_recipe_path if latest_approved else "",
             approved_matches_source_recipe_path=bool(
@@ -122,13 +134,13 @@ def _warnings(status: RecipeGenerationStatus, source: SourceRegistryEntry, lates
             "Source health is good, but daily-run execution is disabled. Enablement remains a separate guarded step."
         )
     if latest and latest.status == "pending" and (not latest.schema_valid or latest.quality_status == "poor"):
-        if candidate_is_reviewable(latest):
+        if candidate_has_quality_blockers(latest):
             warnings.append(
-                "Latest pending candidate has invalid schema or poor local quality; review before approval."
+                "Latest generated plan is schema-valid, but local quality checks flagged issues; review it before trying the safe source test."
             )
-        else:
+        elif not candidate_has_testable_recipe(latest):
             warnings.append(
-                "Latest generation attempt did not produce a usable reading plan; learn the source again with a better capture."
+                "Latest generation attempt did not produce schema-valid reading-plan YAML; learn the source again with a better capture."
             )
     if latest and latest.status == "approved" and not latest.preview_saved:
         warnings.append("Latest approved candidate did not save preview health.")

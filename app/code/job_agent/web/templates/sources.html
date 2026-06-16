@@ -8,6 +8,9 @@
   </div>
   <div class="source-header-actions">
     <a class="button light" href="/sources/suggest">Suggest sources</a>
+    <span id="source-overview-prepare-all-action">
+      {% include "source_overview_prepare_all_action.html" %}
+    </span>
     <a class="button" href="/sources/new">Add source</a>
   </div>
 </div>
@@ -18,172 +21,79 @@
 <div class="panel"><span class="badge low">{{ warning }}</span></div>
 {% endif %}
 
-<div class="panel">
-  <div class="grid">
-    <div class="stat"><span>Daily-run sources</span><strong>{{ daily_run_enabled_count }}</strong></div>
-    <div class="stat"><span>Saved sources</span><strong>{{ sources|length }}</strong></div>
-    <div class="stat"><span>Implemented</span><strong>{{ implemented_source_count }}</strong></div>
-    <div class="stat"><span>Indexed</span><strong>{{ indexed_source_count }}</strong></div>
-    <div class="stat"><span>Detail complete</span><strong>{{ detail_complete_source_count }}</strong></div>
-    <div class="stat"><span>With reading plan</span><strong>{{ sources|selectattr("recipe_path")|list|length }}</strong></div>
-    <div class="stat"><span>Archived</span><strong>{{ archived_sources|length }}</strong></div>
-  </div>
+<div id="source-overview-dynamic" data-source-overview-dynamic aria-live="polite">
+  {% include "source_overview_dynamic.html" %}
 </div>
 
-<div class="source-list">
-  {% for card in source_cards %}
-  {% set source = card.source %}
-  {% set execution = card.execution %}
-  {% set status = card.status %}
-  {% set index = card.index %}
-  {% set detail = card.detail %}
-  {% set lifecycle = card.lifecycle %}
-  {% set auto_setup = card.auto_setup %}
-  <article class="source-card {{ lifecycle.state }}{% if source.status == 'archived' %} archived{% endif %}">
-    <div class="source-card-main">
-      <div class="source-title-row">
-        <div>
-          <h2>{{ source.name }}</h2>
-          <div class="muted">{{ source.id }}</div>
-        </div>
-        <div class="badge-row">
-          <span class="badge {{ lifecycle.badge_class }}">{{ lifecycle.label }}</span>
-          <span class="badge {{ status.badge_class }}">{{ status.badge }}</span>
-          {% if source.recipe_path %}
-          <span class="badge high">reading plan</span>
-          {% endif %}
-          {% if execution and execution.enabled %}
-          <span class="badge high">daily run</span>
-          {% endif %}
-        </div>
-      </div>
-      {% if lifecycle.state == "implemented" %}
-        <div class="source-fact-grid operational">
-          <div>
-            <span class="fact-label">Indexing</span>
-            <strong>{{ index.status_label }}</strong>
-            <span>{{ index.summary }}</span>
-          </div>
-          <div>
-            <span class="fact-label">Detail review</span>
-            <strong>{{ detail.reviewed_count }}/{{ detail.total_count or index.indexed_count or detail.reviewed_count }}</strong>
-            <span>{{ detail.summary }}</span>
-          </div>
-          <div>
-            <span class="fact-label">High matches</span>
-            <strong>{{ source.stats.strong_matches }}</strong>
-            <span>{{ source.stats.exploratory_matches }} exploratory, best {{ source.stats.best_match_score }}%</span>
-          </div>
-          <div>
-            <span class="fact-label">Follow-up</span>
-            <strong>{{ source.stats.interesting_count }} interesting</strong>
-            <span>{{ source.stats.applied_count }} applied, {{ source.stats.not_interesting_count }} not interesting</span>
-          </div>
-        </div>
-      {% else %}
-        <div class="source-fact-grid setup">
-          <div>
-            <span class="fact-label">Setup status</span>
-            <strong>{{ status.title }}</strong>
-            <span>{{ status.summary }}</span>
-          </div>
-          <div>
-            <span class="fact-label">Indexing</span>
-            <strong>{{ index.status_label }}</strong>
-            <span>{{ index.summary }}</span>
-          </div>
-          <div>
-            <span class="fact-label">Detail review</span>
-            <strong>{{ detail.status_label }}</strong>
-            <span>{{ detail.summary }}</span>
-          </div>
-          <div>
-            <span class="fact-label">Reading plan</span>
-            <strong>{{ status.preview_label }}</strong>
-            <span>{{ status.source_test_label }} source test</span>
-          </div>
-          <div>
-            <span class="fact-label">Match history</span>
-            <strong>{{ source.stats.value_label }}</strong>
-            <span>{{ source.stats.strong_matches }} high, {{ source.stats.interesting_count }} interesting</span>
-          </div>
-        </div>
-      {% endif %}
-      {% if source.url %}
-      <a class="source-url" href="{{ source.url }}" target="_blank" rel="noreferrer">{{ source.url }}</a>
-      {% endif %}
-      {% if source.notes %}
-      <p class="muted source-note">{{ source.notes }}</p>
-      {% endif %}
+<details class="panel diagnostic-panel">
+  <summary>Disqualified domains ({{ disqualified_domains|length }})</summary>
+  <p class="muted">Disqualified domains are filtered out of future source suggestions. Manual source entry remains available when you explicitly want to investigate a domain anyway.</p>
+  <form method="post" action="/sources/disqualify-domain" class="source-suggestion-focus">
+    <label>Domain or URL</label>
+    <input name="domain" placeholder="https://example.com/jobs">
+    <label>Reason</label>
+    <input name="reason" placeholder="Discontinued, overlapping, no relevant current jobs, or protected source">
+    <div class="form-actions">
+      <button type="submit" class="button light">Disqualify domain</button>
     </div>
-    <div class="source-card-actions">
-      <a class="button light" href="/sources/{{ source.id }}">Open</a>
-      {% if auto_setup and auto_setup.show %}
-      <form method="post" action="{{ auto_setup.action }}" class="inline-form">
-        <button type="submit" class="button" {% if not auto_setup.can_start %}disabled{% endif %}>{{ auto_setup.label }}</button>
-      </form>
-      {% if not auto_setup.configured %}
-      <a class="button light" href="/setup#ai-writing">Add API key</a>
-      {% endif %}
-      {% if auto_setup.disabled_reason %}
-      <p class="muted source-action-note">{{ auto_setup.disabled_reason }}</p>
-      {% endif %}
-      {% endif %}
-      {% if source.status != "archived" and status.primary_action %}
-        {% if status.primary_action.type == "post" %}
-        <form method="post" action="{{ status.primary_action.action }}" class="inline-form">
-          <button type="submit" class="button">{{ status.primary_action.label }}</button>
-        </form>
-        {% else %}
-        <a class="button" href="{{ status.primary_action.href }}">{{ status.primary_action.label }}</a>
-        {% endif %}
-      {% endif %}
-      {% if source.status == "archived" %}
-      <form method="post" action="/sources/{{ source.id }}/restore" class="inline-form">
-        <button type="submit" class="button light">Restore</button>
-      </form>
-      {% else %}
-      <form method="post" action="/sources/{{ source.id }}/archive" class="inline-form">
-        <button type="submit" class="button light">Archive</button>
-      </form>
-      {% endif %}
-    </div>
-  </article>
-  {% endfor %}
-</div>
-
-{% if archived_source_cards %}
-<details class="panel diagnostic-panel archived-source-list">
-  <summary>Archived sources ({{ archived_source_cards|length }})</summary>
-  <p class="muted">Archived sources are hidden from normal source dropdowns and cannot be included in the daily run. Restore a source if you want to review or use it again.</p>
-  <div class="source-list">
-    {% for card in archived_source_cards %}
-    {% set source = card.source %}
-    <article class="source-card archived">
-      <div class="source-card-main">
-        <div class="source-title-row">
-          <div>
-            <h2>{{ source.name }}</h2>
-            <div class="muted">{{ source.id }}</div>
-          </div>
-          <span class="badge low">Archived</span>
-        </div>
-        {% if source.url %}
-        <a class="source-url" href="{{ source.url }}" target="_blank" rel="noreferrer">{{ source.url }}</a>
-        {% endif %}
-        {% if source.notes %}
-        <p class="muted source-note">{{ source.notes }}</p>
-        {% endif %}
-      </div>
-      <div class="source-card-actions">
-        <a class="button light" href="/sources/{{ source.id }}">Open</a>
-        <form method="post" action="/sources/{{ source.id }}/restore" class="inline-form">
-          <button type="submit" class="button light">Restore</button>
-        </form>
-      </div>
-    </article>
+  </form>
+  {% if disqualified_domains %}
+  <ul>
+    {% for item in disqualified_domains %}
+    <li><strong>{{ item.domain }}</strong>{% if item.reason %}: {{ item.reason }}{% endif %}</li>
     {% endfor %}
-  </div>
+  </ul>
+  {% endif %}
 </details>
-{% endif %}
+<script>
+  (function () {
+    const dynamic = document.querySelector("[data-source-overview-dynamic]");
+    const prepareAction = document.getElementById("source-overview-prepare-all-action");
+    if (!dynamic) return;
+    let inFlight = false;
+
+    function modalOpen() {
+      const modal = document.getElementById("llm-model-modal");
+      return Boolean(modal && getComputedStyle(modal).display !== "none");
+    }
+
+    function activeTextControlInside(element) {
+      const active = document.activeElement;
+      return Boolean(
+        active
+        && element.contains(active)
+        && ["INPUT", "SELECT", "TEXTAREA"].includes(active.tagName)
+      );
+    }
+
+    function replaceIfChanged(element, html) {
+      if (!element || typeof html !== "string") return;
+      if (element.innerHTML.trim() === html.trim()) return;
+      element.innerHTML = html;
+    }
+
+    async function refreshSourceOverviewDynamic() {
+      if (inFlight || document.hidden || modalOpen() || activeTextControlInside(dynamic)) return;
+      inFlight = true;
+      try {
+        const response = await fetch("/api/sources/overview", { cache: "no-store" });
+        if (!response.ok) return;
+        const data = await response.json();
+        replaceIfChanged(dynamic, data.overview_html || "");
+        replaceIfChanged(prepareAction, data.prepare_all_html || "");
+      } catch {
+        // Keep the last rendered source overview when a transient poll fails.
+      } finally {
+        inFlight = false;
+      }
+    }
+
+    window.refreshSourceOverviewDynamic = refreshSourceOverviewDynamic;
+    refreshSourceOverviewDynamic();
+    window.setInterval(refreshSourceOverviewDynamic, 3000);
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden) refreshSourceOverviewDynamic();
+    });
+  })();
+</script>
 {% endblock %}

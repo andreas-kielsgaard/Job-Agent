@@ -36,7 +36,11 @@ async def save_contact(request: Request) -> RedirectResponse:
     form = await request.form()
     professional_links = [
         {"label": label, "url": url}
-        for label, url in zip(form.getlist("professional_link_label"), form.getlist("professional_link_url"))
+        for label, url in zip(
+            form.getlist("professional_link_label"),
+            form.getlist("professional_link_url"),
+            strict=False,
+        )
         if str(url or "").strip()
     ]
     workflow_handler().profile.save_contact(
@@ -129,6 +133,47 @@ async def save_ai_policy(request: Request) -> RedirectResponse:
     return RedirectResponse(url="/setup#ai-writing", status_code=303)
 
 
+@router.post("/setup/connectors")
+async def save_connectors(request: Request) -> RedirectResponse:
+    try:
+        workflow_handler().profile.save_connector_settings_from_form(await request.form())
+    except ValueError as exc:
+        return _setup_redirect(warning=str(exc), anchor="advanced-profile-config")
+    return _setup_redirect(message="Connector settings saved.", anchor="advanced-profile-config")
+
+
+@router.post("/connectors/canva/start")
+def start_canva_connection() -> RedirectResponse:
+    try:
+        authorization_url = workflow_handler().profile.start_canva_connection()
+    except ValueError as exc:
+        return _setup_redirect(warning=str(exc), anchor="advanced-profile-config")
+    return RedirectResponse(url=authorization_url, status_code=303)
+
+
+@router.get("/connectors/canva/callback")
+def canva_oauth_callback(
+    code: str = "",
+    state: str = "",
+    error: str = "",
+    error_description: str = "",
+) -> RedirectResponse:
+    if error:
+        message = error_description or error
+        return _setup_redirect(warning=f"Canva sign-in was not completed: {message}", anchor="advanced-profile-config")
+    try:
+        workflow_handler().profile.complete_canva_connection(code, state)
+    except ValueError as exc:
+        return _setup_redirect(warning=str(exc), anchor="advanced-profile-config")
+    return _setup_redirect(message="Canva connected.", anchor="advanced-profile-config")
+
+
+@router.post("/connectors/canva/disconnect")
+def disconnect_canva() -> RedirectResponse:
+    workflow_handler().profile.disconnect_canva()
+    return _setup_redirect(message="Canva disconnected.", anchor="advanced-profile-config")
+
+
 @router.post("/setup/cv-reference", response_model=None)
 async def upload_cv_reference(
     request: Request,
@@ -144,6 +189,7 @@ async def upload_cv_reference(
     configure_preferences: bool = Form(False),
     configure_match_engine: bool = Form(False),
     work_task_id: str = Form(""),
+    llm_model: str = Form(""),
 ) -> HTMLResponse | RedirectResponse:
     task_id = ""
     if auto_configure_profile:
@@ -175,8 +221,15 @@ async def upload_cv_reference(
                 form,
                 task_id,
                 source_label="uploaded CV",
+                llm_model=llm_model,
             )
-        return await _auto_configure_from_cv_text(extracted_text, form, task_id, source_label="uploaded CV")
+        return await _auto_configure_from_cv_text(
+            extracted_text,
+            form,
+            task_id,
+            source_label="uploaded CV",
+            llm_model=llm_model,
+        )
     return _setup_redirect(message="CV reference uploaded.", anchor="cv-reference")
 
 
@@ -197,8 +250,15 @@ async def configure_from_existing_cv(request: Request) -> HTMLResponse | Redirec
             form,
             task_id,
             source_label="current reference CV",
+            llm_model=str(form.get("llm_model") or ""),
         )
-    return await _auto_configure_from_cv_text(cv_text, form, task_id, source_label="current reference CV")
+    return await _auto_configure_from_cv_text(
+        cv_text,
+        form,
+        task_id,
+        source_label="current reference CV",
+        llm_model=str(form.get("llm_model") or ""),
+    )
 
 
 @router.post("/setup/cv-reference/apply-draft")
@@ -312,6 +372,7 @@ async def _auto_configure_from_cv_text(
     task_id: str = "",
     *,
     source_label: str = "CV",
+    llm_model: str = "",
 ) -> RedirectResponse:
     try:
         result = await run_in_threadpool(
@@ -319,6 +380,7 @@ async def _auto_configure_from_cv_text(
             cv_text,
             workflow_handler().profile.auto_config_targets_from_form(form),
             progress_callback=_profile_draft_progress_callback(task_id),
+            llm_model=llm_model,
         )
     except (RuntimeError, ValueError) as exc:
         if task_id:
@@ -338,6 +400,7 @@ async def _preview_auto_configure_from_cv_text(
     form,
     task_id: str = "",
     source_label: str = "CV",
+    llm_model: str = "",
 ) -> HTMLResponse | RedirectResponse:
     try:
         draft = await run_in_threadpool(
@@ -345,6 +408,7 @@ async def _preview_auto_configure_from_cv_text(
             cv_text,
             workflow_handler().profile.auto_config_targets_from_form(form),
             progress_callback=_profile_draft_progress_callback(task_id),
+            llm_model=llm_model,
         )
     except (RuntimeError, ValueError) as exc:
         if task_id:

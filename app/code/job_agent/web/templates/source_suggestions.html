@@ -24,11 +24,25 @@
     <h2>Prompt</h2>
     <p class="muted">The prompt includes app boundaries, profile context, and existing sources so the LLM can suggest useful boards without duplicating what is already saved.</p>
   </div>
-  <form method="post" action="/sources/suggest/generate" class="source-suggestion-focus">
+  <form
+    method="post"
+    action="/sources/suggest/generate"
+    class="source-suggestion-focus"
+    data-work-status-form
+    data-work-kind="source_suggestion"
+    data-work-title="Generating source suggestions"
+    data-work-message="Asking Claude for broad source ideas."
+    data-work-complete-stage="Suggestions ready"
+    data-work-complete-message="Source suggestions are ready to review."
+    data-work-href="/sources/suggest#source-suggestion-results"
+    data-work-scroll-id="source-suggestion-results"
+    data-llm-model-picker
+    data-llm-model-title="Choose AI power for source suggestions"
+  >
     <label>Extra focus</label>
-    <textarea name="focus" class="compact-textarea" placeholder="Example: prioritize Danish or EU contract sources, remote-friendly roles, or a particular industry you want to explore.">{{ focus }}</textarea>
+    <textarea name="focus" class="compact-textarea" placeholder="Example: prioritize Nordic or EU contract sources, SAP consulting marketplaces, or an industry you want to explore.">{{ focus }}</textarea>
     <div class="action-row">
-      <button type="submit" class="button light" formmethod="get" formaction="/sources/suggest">Refresh prompt preview</button>
+      <button type="submit" class="button light" formmethod="get" formaction="/sources/suggest" data-no-work-status="1" data-no-llm-model="1">Refresh prompt preview</button>
       {% if llm_configured %}
       <button type="submit" class="button">Generate with Claude</button>
       {% else %}
@@ -67,8 +81,20 @@
   {% endif %}
 </div>
 
+{% if disqualified_domains %}
+<details class="panel diagnostic-panel">
+  <summary>Disqualified domains ({{ disqualified_domains|length }})</summary>
+  <p class="muted">These domains are filtered out before source suggestions become saveable cards.</p>
+  <ul>
+    {% for item in disqualified_domains %}
+    <li><strong>{{ item.domain }}</strong>{% if item.reason %}: {{ item.reason }}{% endif %}</li>
+    {% endfor %}
+  </ul>
+</details>
+{% endif %}
+
 {% if source_suggestions %}
-<div class="source-list source-suggestion-list">
+<div class="source-list source-suggestion-list" id="source-suggestion-results">
   {% for suggestion in source_suggestions %}
   <article class="source-card source-suggestion-card setup">
     <div class="source-card-main">
@@ -129,12 +155,20 @@
           <button type="submit" class="button" {% if suggestion.existing_source_id %}disabled{% endif %}>{{ "Already added" if suggestion.existing_source_id else "Save source" }}</button>
         </div>
       </form>
+      {% if suggestion.source_url %}
+      <form method="post" action="/sources/suggest/disqualify" class="source-suggestion-disqualify" data-suggestion-disqualify>
+        <input type="hidden" name="domain" value="{{ suggestion.source_url }}">
+        <input type="hidden" name="reason" value="Manually disqualified from source suggestions.">
+        <button type="submit" class="button light">Disqualify domain</button>
+        <span class="muted" data-suggestion-disqualify-status></span>
+      </form>
+      {% endif %}
     </div>
   </article>
   {% endfor %}
 </div>
 {% else %}
-<div class="panel">
+<div class="panel" id="source-suggestion-results">
   <h2>No Suggestions Yet</h2>
   <p class="muted">Use connected Claude, another AI, or paste a JSON response.</p>
 </div>
@@ -171,6 +205,32 @@
         if (button) {
           button.disabled = false;
           button.textContent = original;
+        }
+      }
+    });
+  });
+
+  document.querySelectorAll("[data-suggestion-disqualify]").forEach((form) => {
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const button = form.querySelector('button[type="submit"]');
+      const status = form.querySelector("[data-suggestion-disqualify-status]");
+      const card = form.closest(".source-suggestion-card");
+      if (button) {
+        button.disabled = true;
+        button.textContent = "Disqualifying...";
+      }
+      try {
+        const response = await fetch(form.action, { method: "POST", body: new FormData(form), cache: "no-store" });
+        const data = await response.json();
+        if (!response.ok || !data.ok) throw new Error(data.error || "Could not disqualify domain.");
+        if (status) status.textContent = data.message || "Domain disqualified.";
+        card?.remove();
+      } catch (error) {
+        if (status) status.textContent = error.message || "Could not disqualify domain.";
+        if (button) {
+          button.disabled = false;
+          button.textContent = "Disqualify domain";
         }
       }
     });

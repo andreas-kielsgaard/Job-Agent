@@ -44,6 +44,15 @@ class FakeRecipeSuggestionClient:
         return self.responses[index]
 
 
+class UnavailableRecipeSuggestionClient:
+    def __init__(self) -> None:
+        self.prompts: list[str] = []
+
+    def suggest(self, prompt: str) -> str:
+        self.prompts.append(prompt)
+        raise RuntimeError("ANTHROPIC_API_KEY is missing or placeholder.")
+
+
 def test_evidence_loader_handles_complete_artifact_folder(project_root: Path) -> None:
     artifact = _write_artifact(project_root)
 
@@ -86,7 +95,9 @@ def test_evidence_loader_includes_source_test_insight(project_root: Path) -> Non
     prompt = build_recipe_suggestion_prompt(evidence)
 
     assert evidence.prompt_payload["source_test_insight"] == insight
+    assert evidence.prompt_payload["ai_oversight"]["escalation_level"] >= 0
     assert "source_test_insight" in prompt
+    assert "ai_oversight" in prompt
     assert "duplicate pages" in prompt
 
 
@@ -307,6 +318,22 @@ def test_refinement_accepts_deterministic_api_blueprint_from_saved_json_without_
     assert result.attempts[0].unique_urls == 2
 
 
+def test_refinement_accepts_deterministic_feed_blueprint_from_saved_feeds(project_root: Path) -> None:
+    artifact = _write_feed_blueprint_artifact(project_root)
+    client = FakeRecipeSuggestionClient("{}")
+
+    result = suggest_recipe_with_refinement(artifact, llm_client=client, max_attempts=3)
+
+    assert result.accepted is True
+    assert client.prompts == []
+    assert result.final_result.selected_strategy == "selector_based"
+    assert "card_selector: item" in result.final_result.suggested_recipe_yaml
+    assert "page_link_selector: a[href$=\".rss\"]" in result.final_result.suggested_recipe_yaml
+    assert "feed-listing-response-1.xml" in result.final_result.referenced_artifact_files
+    assert result.attempts[0].extracted_job_count == 2
+    assert result.attempts[0].unique_urls == 2
+
+
 def test_refinement_preserves_working_unique_url_pagination_without_session_inference(project_root: Path) -> None:
     artifact = _write_whitehall_blueprint_artifact(project_root)
     client = FakeRecipeSuggestionClient("{}")
@@ -485,18 +512,34 @@ def test_refinement_rejects_non_positive_max_attempts(project_root: Path) -> Non
         raise AssertionError("Expected ValueError for max_attempts=0")
 
 
-def test_refinement_does_not_call_llm_when_capture_has_no_job_evidence(project_root: Path) -> None:
+def test_refinement_uses_ai_rescue_when_capture_has_no_job_evidence(project_root: Path) -> None:
     artifact = _write_not_recommended_artifact(project_root)
     client = FakeRecipeSuggestionClient(_llm_response(VALID_RECIPE_YAML))
 
     result = suggest_recipe_with_refinement(artifact, llm_client=client, max_attempts=3)
 
-    assert client.prompts == []
+    assert len(client.prompts) == 2
+    assert "ai_oversight" in client.prompts[0]
+    assert result.accepted is False
+    assert result.final_result.selected_strategy == "selector_based"
+    assert result.final_result.schema_valid is True
+    assert result.attempts[0].quality_status == "poor"
+
+
+def test_refinement_keeps_deterministic_failure_when_ai_rescue_unavailable(project_root: Path) -> None:
+    artifact = _write_not_recommended_artifact(project_root)
+    client = UnavailableRecipeSuggestionClient()
+
+    result = suggest_recipe_with_refinement(artifact, llm_client=client, max_attempts=3)
+
+    assert len(client.prompts) == 1
     assert result.accepted is False
     assert result.final_result.selected_strategy == "not_recommended"
     assert result.final_result.schema_valid is False
     assert result.attempts[0].quality_status == "poor"
-    assert "browser-rendered capture" in " ".join(result.final_result.warnings)
+    warning_text = " ".join(result.final_result.warnings)
+    assert "browser-rendered capture" in warning_text
+    assert "AI oversight unavailable" in warning_text
 
 
 def test_refinement_calls_llm_for_salvageable_not_recommended_capture(project_root: Path) -> None:
@@ -867,6 +910,103 @@ def _write_api_blueprint_artifact(project_root: Path) -> Path:
                 "capture_mode": "static_html",
                 "candidates": [],
                 "observed_api_candidates": [{"url": "https://example.com/api/search", "record_count": 2}],
+                "recipe_blueprint": {
+                    "status": "draft",
+                    "confidence": "high",
+                    "recipe": recipe,
+                    "warnings": [],
+                    "validation_errors": [],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    return artifact
+
+
+def _write_feed_blueprint_artifact(project_root: Path) -> Path:
+    artifact = project_root / "output" / "recipe-calibration" / "feed-example"
+    artifact.mkdir(parents=True, exist_ok=True)
+    page_html = """
+    <html><body>
+      <p>Jobs 2</p>
+      <a href="/categories/remote-product-jobs.rss">Product RSS</a>
+      <a href="/categories/remote-engineering-jobs.rss">Engineering RSS</a>
+    </body></html>
+    """
+    feed_1 = """
+    <rss><channel>
+      <item>
+        <title>SAP Product Manager</title>
+        <guid>https://weworkremotely.com/remote-jobs/acme-sap-product-manager</guid>
+        <region>Remote</region>
+        <type>Contract</type>
+        <description>&lt;p&gt;SAP product leadership role with S/4HANA rollout, integration and stakeholder ownership across a distributed programme.&lt;/p&gt;</description>
+      </item>
+    </channel></rss>
+    """
+    feed_2 = """
+    <rss><channel>
+      <item>
+        <title>SAP Platform Engineer</title>
+        <guid>https://weworkremotely.com/remote-jobs/globex-sap-platform-engineer</guid>
+        <region>Anywhere</region>
+        <type>Contract</type>
+        <description>&lt;p&gt;SAP platform engineering role with BTP integration, operations, automation and release support for enterprise teams.&lt;/p&gt;</description>
+      </item>
+    </channel></rss>
+    """
+    (artifact / "summary.md").write_text("# Feed Summary\n", encoding="utf-8")
+    (artifact / "visible-text.txt").write_text("Jobs 2 Product RSS Engineering RSS", encoding="utf-8")
+    (artifact / "candidate-elements.html").write_text("", encoding="utf-8")
+    (artifact / "page.html").write_text(page_html, encoding="utf-8")
+    (artifact / "feed-listing-response-1.xml").write_text(feed_1, encoding="utf-8")
+    (artifact / "feed-listing-response-2.xml").write_text(feed_2, encoding="utf-8")
+    recipe = {
+        "source_name": "WWR Feed Example",
+        "start_url": "https://weworkremotely.com/remote-jobs/search",
+        "mode": "static_html",
+        "listing": {
+            "card_selector": "item",
+            "title_selector": "title",
+            "link_selector": ["guid", "link"],
+            "location_selector": ["region", "state", "country"],
+            "workload_selector": "type",
+            "posted_date_selector": ["pubDate", "pubdate"],
+            "description_selector": "description",
+        },
+        "accept": {"url_contains": ["/remote-jobs/"]},
+        "pagination": {
+            "strategy": "url",
+            "page_link_selector": 'a[href$=".rss"]',
+            "max_pages": 3,
+            "request_delay_seconds": 1.0,
+        },
+        "limits": {"max_cards": 500, "min_title_length": 8, "min_description_length": 0},
+    }
+    (artifact / "selector-report.json").write_text(
+        json.dumps(
+            {
+                "url": "https://weworkremotely.com/remote-jobs/search",
+                "capture_mode": "static_html",
+                "candidates": [],
+                "observed_feed_links": [
+                    {
+                        "label": "Product RSS",
+                        "url": "https://weworkremotely.com/categories/remote-product-jobs.rss",
+                        "is_next": False,
+                    },
+                    {
+                        "label": "Engineering RSS",
+                        "url": "https://weworkremotely.com/categories/remote-engineering-jobs.rss",
+                        "is_next": False,
+                    },
+                ],
+                "observed_feed_selector": 'a[href$=".rss"]',
+                "observed_feed_artifacts": [
+                    {"response_artifact": "feed-listing-response-1.xml"},
+                    {"response_artifact": "feed-listing-response-2.xml"},
+                ],
                 "recipe_blueprint": {
                     "status": "draft",
                     "confidence": "high",

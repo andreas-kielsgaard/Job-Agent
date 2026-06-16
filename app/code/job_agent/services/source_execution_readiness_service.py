@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -83,6 +83,28 @@ class SourceExecutionReadinessService:
             for source_id, record in sources.items()
             if isinstance(record, dict)
         }
+
+    def with_current_recipe_file_checks(self, source, saved: SourceExecutionReadiness | None = None) -> SourceExecutionReadiness:
+        source_id = str(getattr(source, "id", "") or "").strip()
+        readiness = saved or self.load(source_id)
+        if not source_id:
+            return readiness
+        recipe_path = str(getattr(source, "recipe_path", "") or "").strip()
+        if not _recipe_changed_after_source_test(self.root, recipe_path, readiness.last_checked_at):
+            return readiness
+        blocker = "Reading plan changed since the saved source test; rerun the safe source test."
+        blockers = list(readiness.blockers)
+        if blocker not in blockers:
+            blockers.append(blocker)
+        checks = dict(readiness.checks)
+        checks["recipe_changed_after_source_test"] = True
+        return replace(
+            readiness,
+            readiness_status="blocked",
+            readiness_summary=f"Blocked: {blocker}",
+            checks=checks,
+            blockers=blockers,
+        )
 
     def save_from_source_test(self, result: SourceTestResult) -> SourceExecutionReadiness:
         readiness = self.evaluate(result.source_id, source_test_result=result)
@@ -542,9 +564,9 @@ def _source_session_status(root: Path, source) -> tuple[bool, Any | None]:
     if not source or not getattr(source, "recipe_path", ""):
         return False, None
     try:
-        from job_agent.services.recipes.mapping import load_job_board_recipe
+        from job_agent.services.recipes.mapping import load_project_job_board_recipe
 
-        recipe = load_job_board_recipe(resolve_project_path(root, source.recipe_path))
+        recipe = load_project_job_board_recipe(root, source.recipe_path)
     except (OSError, ValueError):
         return False, None
     if not recipe.access.requires_session:

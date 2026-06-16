@@ -8,6 +8,10 @@ from typing import Any
 from job_agent.config import ROOT, load_profile
 from job_agent.llm import ExternalAgentService, LlmRequest, LlmService
 from job_agent.prompt_context import APP_CONTEXT
+from job_agent.services.source_disqualification_service import (
+    SourceDisqualificationService,
+    SourceDomainDisqualification,
+)
 from job_agent.services.source_registry_service import SourceRegistryService
 
 
@@ -71,6 +75,7 @@ class SourceSuggestionResult:
     prompt: str
     raw_response: str = ""
     suggestions: list[SourceSuggestion] = field(default_factory=list)
+    disqualified: list[SourceDomainDisqualification] = field(default_factory=list)
     model: str = ""
     focus: str = ""
 
@@ -85,6 +90,7 @@ class SourceSuggestionService:
     def __init__(self, root: Path = ROOT) -> None:
         self.root = Path(root)
         self.registry = SourceRegistryService(self.root)
+        self.disqualifications = SourceDisqualificationService(self.root)
         self.llm = LlmService(self.root)
         self.external = ExternalAgentService(self.root)
 
@@ -103,11 +109,16 @@ class SourceSuggestionService:
             }
             for source in self.registry.list_saved_sources(include_health=False, include_stats=False)
         ]
+        disqualified_domains = [
+            {"domain": record.domain, "reason": record.reason}
+            for record in self.disqualifications.list_domains()
+        ]
         focus_text = focus.strip() or "No extra focus was provided."
         payload = {
             "app_context": APP_CONTEXT,
             "profile": profile,
             "existing_sources": existing_sources,
+            "disqualified_domains": disqualified_domains,
             "extra_focus": focus_text,
         }
         return (
@@ -118,13 +129,21 @@ class SourceSuggestionService:
             "Task:\n"
             "- Suggest 6 to 10 job boards, recruiter job pages, or company career search pages that fit the profile.\n"
             "- Prefer recurring job-result pages over one-off postings.\n"
-            "- Prefer broad source URLs that can reveal adjacent or unexpected good-fit roles; use optional filters and "
-            "search terms as guidance instead of saving a URL so narrow that profile matching never sees nearby roles.\n"
-            "- Avoid duplicates of the existing sources.\n"
+            "- Prefer broad source URLs that can reveal adjacent or unexpected good-fit roles. Do not save URLs narrowed "
+            "to one skill, one work mode, or one location unless the site requires a minimal category to show jobs.\n"
+            "- Do not use profile job preferences such as remote/onsite, availability, thresholds, score settings, or "
+            "preferred work mode as source filters. Use the professional profile only to judge broad source relevance.\n"
+            "- If the profile mentions a specific technology, keep source discovery at the broader role-family level and "
+            "put narrow terms only in optional search_terms.\n"
+            "- Avoid duplicates and regional overlaps of existing sources; prefer one root domain unless the source is a "
+            "materially different platform or business unit.\n"
+            "- Never suggest disqualified domains, discontinued job boards, or domains listed in disqualified_domains.\n"
             "- For each source, guide a non-technical user to visit the site and find the actual job listing page.\n"
             "- If useful filters can be pre-applied in the browser, describe the exact filters or search terms to try.\n"
-            "- Prefer a public listing URL with visible query/filter parameters when you know it. If you do not know "
-            "the exact filtered URL, use the safest homepage or jobs page and explain how to navigate.\n"
+            "- Prefer a public jobs/search listing URL when you know it. Keep recommended_listing_url broad and avoid "
+            "pre-applied keyword, remote, country, or location filters; put those ideas in suggested_filters instead.\n"
+            "- If you do not know the exact jobs/search page, use the safest homepage or careers page and explain how "
+            "the user should navigate to the listing URL before setup starts.\n"
             "- Flag login-only, account-gated, captcha-heavy, or apply-form-only sites as manual-review caveats.\n\n"
             "Return only strict JSON with this schema:\n"
             "{\n"
@@ -136,7 +155,7 @@ class SourceSuggestionService:
             '      "why_relevant": "Short profile-specific reason",\n'
             '      "expected_signal": "What useful roles this source is likely to contain",\n'
             '      "visit_instructions": "Human steps to reach the filtered job posting page",\n'
-            '      "suggested_filters": ["Contract", "Remote", "Target role"],\n'
+            '      "suggested_filters": ["Contract", "Role family"],\n'
             '      "search_terms": ["profile-derived role", "profile-derived skill"],\n'
             '      "caveats": "Any login, region, seniority, freshness, or automation caution",\n'
             '      "priority": 1\n'
@@ -147,19 +166,26 @@ class SourceSuggestionService:
             f"{json.dumps(payload, indent=2, ensure_ascii=False, default=str)}"
         )
 
-    def suggest_with_llm(self, focus: str = "") -> SourceSuggestionResult:
+    def suggest_with_llm(self, focus: str = "", llm_model: str = "") -> SourceSuggestionResult:
         prompt = self.build_prompt(focus)
         if not self.llm.is_configured():
             raise RuntimeError("ANTHROPIC_API_KEY is missing or placeholder. Use the other-AI prompt instead.")
-        completion = self.llm.complete(prompt, max_tokens=3600, purpose="source_suggestion", run_id="manual")
+        completion = self.llm.complete(
+            prompt,
+            max_tokens=3600,
+            purpose="source_suggestion",
+            run_id="manual",
+            model=llm_model,
+        )
         try:
-            suggestions = self.parse_response(
+            parsed = self.parse_response_with_disqualifications(
                 completion.text,
                 repair_callback=lambda raw_json, error: self.llm.complete(
                     _json_repair_prompt(raw_json, error),
                     max_tokens=4200,
                     purpose="source_suggestion_repair",
                     run_id="manual",
+                    model=llm_model,
                 ).text,
             )
         except ValueError as exc:
@@ -167,7 +193,8 @@ class SourceSuggestionService:
         return SourceSuggestionResult(
             prompt=prompt,
             raw_response=completion.text,
-            suggestions=suggestions,
+            suggestions=parsed.suggestions,
+            disqualified=parsed.disqualified,
             model=completion.model,
             focus=focus,
         )
@@ -189,11 +216,12 @@ class SourceSuggestionService:
         if interaction.request.purpose != "source_suggestion":
             raise ValueError("External-agent response does not belong to source suggestions.")
         completion = self.external.complete(interaction_id, response_text)
-        suggestions = self.parse_response(completion.text)
+        parsed = self.parse_response_with_disqualifications(completion.text)
         return SourceSuggestionResult(
             prompt=interaction.request.prompt,
             raw_response=completion.text,
-            suggestions=suggestions,
+            suggestions=parsed.suggestions,
+            disqualified=parsed.disqualified,
             model=completion.model,
             focus=str(interaction.metadata.get("focus") or ""),
         )
@@ -204,33 +232,71 @@ class SourceSuggestionService:
             raise ValueError("External-agent response does not belong to source suggestions.")
         if interaction.status != "completed":
             raise ValueError("External-agent source suggestion response has not been applied yet.")
-        suggestions = self.parse_response(interaction.response_text)
+        parsed = self.parse_response_with_disqualifications(interaction.response_text)
         return SourceSuggestionResult(
             prompt=interaction.request.prompt,
             raw_response=interaction.response_text,
-            suggestions=suggestions,
+            suggestions=parsed.suggestions,
+            disqualified=parsed.disqualified,
             model="external-agent",
             focus=str(interaction.metadata.get("focus") or ""),
         )
 
     def parse_response(self, raw_response: str, *, repair_callback=None) -> list[SourceSuggestion]:
+        return self.parse_response_with_disqualifications(raw_response, repair_callback=repair_callback).suggestions
+
+    def parse_response_with_disqualifications(
+        self,
+        raw_response: str,
+        *,
+        repair_callback=None,
+    ) -> SourceSuggestionResult:
         data = _load_json_response(raw_response, repair_callback=repair_callback)
         items = data.get("sources") if isinstance(data, dict) else data
         if not isinstance(items, list):
             raise ValueError('LLM response must be a JSON object with a "sources" list.')
         suggestions = [_suggestion_from_mapping(item) for item in items if isinstance(item, dict)]
         suggestions = [suggestion for suggestion in suggestions if suggestion.name and suggestion.source_url]
+        accepted: list[SourceSuggestion] = []
+        disqualified: list[SourceDomainDisqualification] = []
+        for suggestion in suggestions:
+            disqualification = self.disqualifications.disqualification_for_suggestion(
+                name=suggestion.name,
+                url=suggestion.source_url,
+            )
+            if disqualification:
+                disqualified.append(disqualification)
+                continue
+            accepted.append(suggestion)
+        suggestions = accepted
         if not suggestions:
-            raise ValueError("No usable source suggestions were found in the response.")
-        return suggestions
+            detail = ""
+            if disqualified:
+                domains = ", ".join(record.domain for record in disqualified if record.domain)
+                detail = f" {len(disqualified)} suggestion(s) were disqualified: {domains}."
+            raise ValueError(f"No usable source suggestions were found in the response.{detail}")
+        return SourceSuggestionResult(
+            prompt="",
+            raw_response=raw_response,
+            suggestions=suggestions,
+            disqualified=disqualified,
+        )
 
     def annotate_existing(self, suggestions: list[SourceSuggestion]) -> list[SourceSuggestion]:
         for suggestion in suggestions:
             existing = self.registry.find_source_by_url(suggestion.source_url)
+            if not existing:
+                existing = self.registry.find_source_by_domain(suggestion.source_url)
             if existing:
                 suggestion.existing_source_id = existing.id
                 suggestion.existing_source_name = existing.name
         return suggestions
+
+    def list_disqualified_domains(self) -> list[SourceDomainDisqualification]:
+        return self.disqualifications.list_domains()
+
+    def disqualify_domain(self, domain_or_url: str, *, reason: str = "") -> SourceDomainDisqualification:
+        return self.disqualifications.add_domain(domain_or_url, reason=reason, source="manual")
 
 
 def _profile_for_prompt(profile: dict[str, Any]) -> dict[str, Any]:
@@ -239,15 +305,10 @@ def _profile_for_prompt(profile: dict[str, Any]) -> dict[str, Any]:
             profile.get("contact"),
             ["title", "location", "city", "country", "linkedin", "professional_links"],
         ),
-        "availability": profile.get("availability", {}),
-        "location_policy": profile.get("location_policy", {}),
-        "thresholds": profile.get("thresholds", {}),
-        "match_engine": profile.get("match_engine", {}),
         "skills": profile.get("skills", {}),
         "experience_level": profile.get("experience_level", {}),
         "experience": _compact_experience(profile.get("experience")),
         "canonical_cv_excerpt": _truncate(str(profile.get("canonical_cv") or ""), 6000),
-        "writing_style_excerpt": _truncate(str(profile.get("writing_style") or ""), 1200),
     }
 
 

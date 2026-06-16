@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from job_agent.web.view_models.source_status import build_source_page_status, build_source_setup_steps
+from job_agent.web.view_models.source_status import (
+    build_source_page_status,
+    build_source_run_eligibility,
+    build_source_setup_steps,
+)
 
 
 def test_pagination_session_failure_adds_setup_step_and_blocks_indexing() -> None:
@@ -38,14 +42,12 @@ def test_pagination_session_failure_adds_setup_step_and_blocks_indexing() -> Non
         source,
         {"enabled": False},
         readiness,
-        recipe_preview_url="/sources/freelancermap-sap/recipe-preview",
     )
     steps = build_source_setup_steps(
         source,
         {"enabled": False},
         readiness,
         None,
-        recipe_preview_url="/sources/freelancermap-sap/recipe-preview",
     )
 
     assert status["title"] == "Needs a connected source session"
@@ -54,7 +56,6 @@ def test_pagination_session_failure_adds_setup_step_and_blocks_indexing() -> Non
         "Add source",
         "Learn source",
         "Test safely",
-        "Review found contents",
         "Listing index",
         "Include in daily run",
         "Initial ingestion",
@@ -76,7 +77,6 @@ def test_pagination_session_failure_adds_setup_step_and_blocks_indexing() -> Non
         {"enabled": False},
         readiness,
         None,
-        recipe_preview_url="/sources/freelancermap-sap/recipe-preview",
         index_status={"complete": True, "summary": "23 listings indexed."},
     )
     detail_step = next(step for step in indexed_steps if step["title"] == "Initial ingestion")
@@ -113,7 +113,6 @@ def test_connected_unverified_session_prompts_verification() -> None:
         source,
         {"enabled": False},
         readiness,
-        recipe_preview_url="/sources/freelancermap-sap/recipe-preview",
         session_status=session_status,
     )
     steps = build_source_setup_steps(
@@ -121,7 +120,6 @@ def test_connected_unverified_session_prompts_verification() -> None:
         {"enabled": False},
         readiness,
         None,
-        recipe_preview_url="/sources/freelancermap-sap/recipe-preview",
         session_status=session_status,
     )
 
@@ -169,7 +167,6 @@ def test_sign_in_gate_failure_prompts_session_not_recipe_update() -> None:
         source,
         {"enabled": False},
         readiness,
-        recipe_preview_url="/sources/freelancermap-sap/recipe-preview",
     )
 
     assert status["title"] == "Needs a connected source session"
@@ -199,7 +196,6 @@ def test_indexing_waits_for_safe_source_test_even_without_pagination_issue() -> 
         {"enabled": False},
         readiness,
         None,
-        recipe_preview_url="/sources/sample-source/recipe-preview",
     )
 
     index_step = next(step for step in steps if step["title"] == "Listing index")
@@ -230,13 +226,67 @@ def test_enabled_source_with_stale_readiness_is_not_setup_complete() -> None:
         {"enabled": True},
         readiness,
         None,
-        recipe_preview_url="/sources/sample-source/recipe-preview",
     )
 
     include_step = next(step for step in steps if step["title"] == "Include in daily run")
     assert include_step["state"] == "blocked"
     assert include_step["badge"] == "Needs retest"
     assert include_step["action"] is None
+
+
+def test_enabled_source_with_stale_readiness_is_configured_but_not_eligible() -> None:
+    source = SimpleNamespace(
+        id="sample-source",
+        kind="job_board",
+        status="active",
+        url="https://example.com/jobs",
+        recipe_path="sources/recipes/experimental/sample.yaml",
+    )
+    readiness = SimpleNamespace(
+        readiness_status="blocked",
+        readiness_summary="Blocked: reading plan changed.",
+        blockers=["Reading plan changed since the saved source test; rerun the safe source test."],
+    )
+
+    eligibility = build_source_run_eligibility(
+        source,
+        {"enabled": True},
+        readiness,
+        index_status={"complete": True},
+    )
+
+    assert eligibility["configured"] is True
+    assert eligibility["enabled"] is True
+    assert eligibility["eligible"] is False
+    assert eligibility["label"] == "Will be skipped"
+    assert eligibility["title"] == "Configured but blocked"
+    assert "Reading plan changed since the saved source test" in eligibility["blockers"][0]
+
+
+def test_enabled_source_with_current_readiness_and_index_is_eligible() -> None:
+    source = SimpleNamespace(
+        id="sample-source",
+        kind="job_board",
+        status="active",
+        url="https://example.com/jobs",
+        recipe_path="sources/recipes/experimental/sample.yaml",
+    )
+    readiness = SimpleNamespace(
+        readiness_status="ready",
+        readiness_summary="Ready.",
+        blockers=[],
+    )
+
+    eligibility = build_source_run_eligibility(
+        source,
+        {"enabled": True},
+        readiness,
+        index_status={"complete": True},
+    )
+
+    assert eligibility["eligible"] is True
+    assert eligibility["label"] == "Will run"
+    assert eligibility["title"] == "Eligible now"
 
 
 def test_stale_pagination_failure_prompts_retest_not_regeneration() -> None:
@@ -267,14 +317,12 @@ def test_stale_pagination_failure_prompts_retest_not_regeneration() -> None:
         source,
         {"enabled": False},
         readiness,
-        recipe_preview_url="/sources/sample-source/recipe-preview",
     )
     steps = build_source_setup_steps(
         source,
         {"enabled": False},
         readiness,
         None,
-        recipe_preview_url="/sources/sample-source/recipe-preview",
     )
 
     assert status["title"] == "Test the updated reading plan"

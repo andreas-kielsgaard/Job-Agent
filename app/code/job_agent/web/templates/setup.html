@@ -36,6 +36,7 @@
 {% set preferences_state = 'available' if preferences_ready else 'optional' %}
 {% set draft_ready = cv_profile_draft and cv_profile_draft.get('id') %}
 {% set match_engine_state = 'available' if prefs.get('match_engine') else 'default' %}
+{% set connector_state = 'available' if connector_settings.canva.enabled or connector_settings.email.enabled else 'optional' %}
 
 {% macro outline_item(section_id, label, state) -%}
 <a class="setup-outline-item {{ state }}" href="#{{ section_id }}" title="{{ label }}" aria-label="{{ label }} {{ state }}" data-setup-outline-link>
@@ -98,7 +99,7 @@
       {{ outline_item("writing-reference", "Writing", writing_reference_state) }}
       {{ outline_item("match-engine", "Matchmaking", match_engine_state) }}
       {{ outline_item("ai-writing", "AI Review", "available" if env.get('ANTHROPIC_API_KEY') else "optional") }}
-      {{ outline_item("advanced-profile-config", "Advanced", "optional") }}
+      {{ outline_item("advanced-profile-config", "Advanced", connector_state) }}
     </nav>
   </aside>
 
@@ -168,7 +169,7 @@
         </div>
 
         {% if cv_reference %}
-        <form method="post" action="/setup/cv-reference/configure" class="profile-configure-form cv-action-card" data-cv-mode-panel="enhance" data-work-status-form data-work-title="Drafting profile from CV" data-work-href="/setup#cv-profile-draft">
+        <form method="post" action="/setup/cv-reference/configure" class="profile-configure-form cv-action-card" data-cv-mode-panel="enhance" data-work-status-form data-work-title="Drafting profile from CV" data-work-href="/setup#cv-profile-draft" data-llm-model-picker data-llm-model-title="Choose AI power for CV draft">
           <div class="source-title-row">
             <h3>Enhance Profile From Stored CV</h3>
             <button class="light" type="button" data-cv-mode-button="upload">Upload changed CV</button>
@@ -199,7 +200,7 @@
         </form>
         {% endif %}
 
-        <form method="post" action="/setup/cv-reference" enctype="multipart/form-data" class="profile-configure-form cv-action-card" data-cv-mode-panel="upload" {% if cv_reference %}hidden{% endif %} data-work-status-form data-work-requires="auto_configure_profile" data-work-title="Drafting profile from uploaded CV" data-work-href="/setup#cv-profile-draft">
+        <form method="post" action="/setup/cv-reference" enctype="multipart/form-data" class="profile-configure-form cv-action-card" data-cv-mode-panel="upload" {% if cv_reference %}hidden{% endif %} data-work-status-form data-work-requires="auto_configure_profile" data-work-title="Drafting profile from uploaded CV" data-work-href="/setup#cv-profile-draft" data-llm-model-picker data-llm-model-requires="auto_configure_profile" data-llm-model-title="Choose AI power for CV draft">
           <div class="source-title-row">
             <h3>{{ "Upload Changed CV" if cv_reference else "Upload CV" }}</h3>
             {% if cv_reference %}<button class="light" type="button" data-cv-mode-button="enhance">Use stored CV</button>{% endif %}
@@ -685,6 +686,79 @@
     <a class="button light" href="/docs/profile-setup.md" target="_blank" rel="noreferrer">Profile setup notes</a>
     <a class="button light" href="/docs/matching-and-ai-review.md" target="_blank" rel="noreferrer">Matching and AI review notes</a>
   </div>
+
+  <details class="diagnostic-panel advanced-file-group" open>
+    <summary>Connector setup</summary>
+    <p class="muted">Connector settings prepare direct integrations for generated materials. The app can prepare Canva designs and email drafts, but it does not upload CVs, submit applications, or send emails.</p>
+    <div class="profile-policy-grid">
+      <section class="profile-editor-panel">
+        <div class="source-title-row">
+          <h3>Claude</h3>
+          <span class="badge {{ 'generated' if connector_settings.claude.configured else 'missing' }}">{{ "Connected" if connector_settings.claude.configured else "Not connected" }}</span>
+        </div>
+        <div class="profile-signal-list">
+          <span><strong>Model</strong>{{ connector_settings.claude.model }}</span>
+          <span><strong>Default use</strong>{{ "On" if connector_settings.claude.use_by_default else "Off" }}</span>
+        </div>
+        <p class="muted">Claude credentials are managed in AI Review &amp; Writing so text generation keeps using the same local LLM gateway.</p>
+        <a class="button light" href="#ai-writing">Open Claude settings</a>
+      </section>
+
+      <section class="profile-editor-panel">
+        <div class="source-title-row">
+          <h3>Canva</h3>
+          <span class="badge {{ 'generated' if connector_settings.canva.oauth_status == 'connected' else 'missing' }}">{{ "Connected" if connector_settings.canva.oauth_status == "connected" else "Not connected" }}</span>
+        </div>
+        {% if connector_settings.canva.oauth_status == "connected" %}
+        <div class="profile-signal-list">
+          <span><strong>Profile</strong>{{ connector_settings.canva.connected_display_name or "Canva user" }}</span>
+          {% if connector_settings.canva.connected_team_id %}<span><strong>Team</strong>{{ connector_settings.canva.connected_team_id }}</span>{% endif %}
+        </div>
+        <p class="muted">Canva authorization is saved locally and can be used later for job-specific CV design creation.</p>
+        <form method="post" action="/connectors/canva/disconnect" class="inline-form">
+          <button type="submit" class="light">Disconnect Canva</button>
+        </form>
+        {% else %}
+        <p class="muted">Open Canva, approve access, and return here automatically. The app reads your Canva profile after sign-in.</p>
+        <form method="post" action="/connectors/canva/start" class="inline-form">
+          <button type="submit">Connect to Canva</button>
+        </form>
+        {% if not connector_settings.canva.oauth_ready %}
+        <p class="muted">Canva sign-in needs app credentials in this local installation before the button can complete the handoff.</p>
+        {% endif %}
+        {% endif %}
+      </section>
+
+      <form method="post" action="/setup/connectors" class="profile-editor-panel">
+        <div class="source-title-row">
+          <h3>Email Drafts</h3>
+          <span class="badge {{ 'waiting' if connector_settings.email.enabled else 'missing' }}">{{ "Draft handoff enabled" if connector_settings.email.enabled else "Disabled" }}</span>
+        </div>
+        <label class="check"><input type="checkbox" name="email_enabled" {% if connector_settings.email.enabled %}checked{% endif %}> Prepare email draft handoff for reviewed applications</label>
+        <div class="grid">
+          <div>
+            <label>Email provider</label>
+            <select name="email_provider">
+              {% for option in connector_settings.email_provider_options %}
+              <option value="{{ option.value }}" {% if connector_settings.email.provider == option.value %}selected{% endif %}>{{ option.label }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div>
+            <label>Email mode</label>
+            <select name="email_mode">
+              {% for option in connector_settings.email_mode_options %}
+              <option value="{{ option.value }}" {% if connector_settings.email.mode == option.value %}selected{% endif %}>{{ option.label }}</option>
+              {% endfor %}
+            </select>
+          </div>
+        </div>
+        <label class="check"><input type="checkbox" checked disabled> Sending is disabled by the application boundary</label>
+        <p class="muted">Gmail is the best first provider for draft creation later. The generic option should stay to mailto links or local draft files.</p>
+        <button type="submit">Save email draft preference</button>
+      </form>
+    </div>
+  </details>
 
   <details class="diagnostic-panel">
     <summary>Template variable reference</summary>

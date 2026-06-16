@@ -269,7 +269,98 @@ def test_blueprint_detects_job_role_listing_urls() -> None:
     assert jobs[0].rate == "$140/hr"
 
 
-def test_blueprint_detects_we_work_remotely_remote_jobs_urls() -> None:
+def test_blueprint_uses_job_links_when_repeated_cards_only_have_generated_classes() -> None:
+    html = """
+    <!doctype html>
+    <html><body>
+      <main>
+        <div class="results">
+          <div class="sc-AykKG sc-fzXfQZ xNuff">
+            <a class="sc-AykKE fwNdOp" href="/job/a1/sap-btp-consultant">
+              <span>SAP BTP Consultant</span>
+              <span>Germany, Hamburg</span>
+              <span>Contract role with SAP BTP, ABAP and S/4HANA delivery.</span>
+            </a>
+          </div>
+          <div class="sc-AykKG sc-fzXfQZ xNuff">
+            <a class="sc-AykKE fwNdOp" href="/job/a2/sap-fi-consultant">
+              <span>SAP FI Consultant</span>
+              <span>Germany, Berlin</span>
+              <span>Freelance SAP FI role with S/4HANA migration scope.</span>
+            </a>
+          </div>
+        </div>
+      </main>
+    </body></html>
+    """
+
+    blueprint = build_recipe_blueprint(html, "https://www.washingtonfrank.com/erp-jobs?keyword=SAP")
+    recipe = blueprint["recipe"]
+
+    assert recipe["listing"]["card_selector"] == 'a[href*="/job/"]'
+    assert recipe["listing"]["title_selector"] == 'a[href*="/job/"]'
+    assert recipe["listing"]["link_selector"] == 'a[href*="/job/"]'
+    assert "sc-Ayk" not in json.dumps(recipe)
+    assert blueprint["confidence"] == "medium"
+
+
+def test_blueprint_detects_remote_jobs_cards_and_listing_expansion_links() -> None:
+    html = """
+    <!doctype html>
+    <html><body>
+      <section class="jobs">
+        <article id="category-product">
+          <h2>Product jobs</h2>
+          <ul>
+            <li class="feature">
+              <span class="company">Acme</span>
+              <a href="/remote-jobs/acme-sap-product-manager">SAP Product Manager</a>
+              <span class="location">Remote</span>
+            </li>
+            <li class="feature">
+              <span class="company">Contoso</span>
+              <a href="/remote-jobs/contoso-sap-delivery-lead">SAP Delivery Lead</a>
+              <span class="location">EMEA</span>
+            </li>
+            <li class="view-all">
+              <a href="/categories/remote-product-jobs">View all 42 Product jobs</a>
+            </li>
+          </ul>
+        </article>
+        <article id="category-engineering">
+          <h2>Engineering jobs</h2>
+          <ul>
+            <li class="feature">
+              <span class="company">Globex</span>
+              <a href="/remote-jobs/globex-sap-engineer">SAP Engineer</a>
+              <span class="location">Remote</span>
+            </li>
+            <li class="view-all">
+              <a href="/categories/remote-engineering-jobs">View all 51 Engineering jobs</a>
+            </li>
+          </ul>
+        </article>
+      </section>
+    </body></html>
+    """
+
+    blueprint = build_recipe_blueprint(html, "https://weworkremotely.com/remote-jobs/search")
+    recipe = blueprint["recipe"]
+
+    assert blueprint["status"] == "draft"
+    assert recipe["listing"]["card_selector"] == "li.feature"
+    assert recipe["listing"]["title_selector"] == 'a[href*="/remote-jobs/"]'
+    assert recipe["listing"]["link_selector"] == 'a[href*="/remote-jobs/"]'
+    assert recipe["accept"]["url_contains"] == ["/remote-jobs/"]
+    assert recipe["pagination"] == {
+        "strategy": "url",
+        "page_link_selector": 'li.view-all a[href*="/categories/"]',
+        "max_pages": 3,
+        "request_delay_seconds": 1.0,
+    }
+
+
+def test_blueprint_excludes_rss_links_from_listing_expansion_selector() -> None:
     html = """
     <!doctype html>
     <html><body>
@@ -319,6 +410,43 @@ def test_blueprint_detects_we_work_remotely_remote_jobs_urls() -> None:
     jobs = extract_jobs_with_recipe(html, recipe["start_url"], job_board_recipe_from_mapping(recipe))
     assert len(jobs) == 3
     assert jobs[0].url == "https://weworkremotely.com/remote-jobs/acme-sap-product-manager"
+
+
+def test_blueprint_prefers_public_feed_links_for_feed_backed_listing() -> None:
+    html = """
+    <!doctype html>
+    <html><body>
+      <section class="jobs">
+        <article id="category-product">
+          <ul>
+            <li class="feature">
+              <span class="company">Acme</span>
+              <a href="/remote-jobs/acme-sap-product-manager">SAP Product Manager</a>
+              <span class="location">Remote</span>
+            </li>
+            <li class="view-all"><a href="/categories/remote-product-jobs">View all 42 Product jobs</a></li>
+          </ul>
+        </article>
+        <a href="/categories/remote-product-jobs.rss">Product RSS</a>
+        <a href="/categories/remote-engineering-jobs.rss">Engineering RSS</a>
+      </section>
+    </body></html>
+    """
+
+    blueprint = build_recipe_blueprint(html, "https://weworkremotely.com/remote-jobs/search")
+    recipe = blueprint["recipe"]
+
+    assert blueprint["status"] == "draft"
+    assert recipe["listing"]["card_selector"] == "item"
+    assert recipe["listing"]["title_selector"] == "title"
+    assert recipe["listing"]["link_selector"] == ["guid", "link"]
+    assert recipe["accept"]["url_contains"] == ["/remote-jobs/"]
+    assert recipe["pagination"] == {
+        "strategy": "url",
+        "page_link_selector": 'a[href$=".rss"]',
+        "max_pages": 3,
+        "request_delay_seconds": 1.0,
+    }
 
 
 def test_calibration_detail_sample_skips_listing_page_self_links(
@@ -861,6 +989,31 @@ def test_blueprint_detects_click_only_pagination_strategy() -> None:
 
     assert recipe["pagination"]["strategy"] == "browser_click"
     assert recipe["pagination"]["click_selector"] == ".pagination-next"
+
+
+def test_blueprint_does_not_treat_lone_current_page_number_as_click_pagination() -> None:
+    html = """
+    <!doctype html>
+    <html><body>
+      <main>
+        <article class="job-card">
+          <a class="job-link" href="/jobs/sap-abap">SAP ABAP Consultant</a>
+          <p>Remote SAP ABAP contract role.</p>
+        </article>
+        <article class="job-card">
+          <a class="job-link" href="/jobs/sap-basis">SAP Basis Consultant</a>
+          <p>Hybrid SAP Basis contract role.</p>
+        </article>
+        <button type="button">1</button>
+      </main>
+    </body></html>
+    """
+
+    blueprint = build_recipe_blueprint(html, "https://www.xing.com/jobs/search/ki?keywords=SAP")
+    recipe = blueprint["recipe"]
+
+    assert blueprint["status"] == "draft"
+    assert "pagination" not in recipe
 
 
 def test_blueprint_detects_ajax_pagination_template() -> None:

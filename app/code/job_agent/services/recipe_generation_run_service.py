@@ -23,7 +23,7 @@ from job_agent.services.recipe_suggestion_service import (
     suggest_recipe_from_artifact,
     suggest_recipe_with_refinement,
 )
-from job_agent.services.recipes.mapping import load_job_board_recipe
+from job_agent.services.recipes.mapping import load_project_job_board_recipe
 from job_agent.services.source_registry_service import SourceRegistryService
 from job_agent.services.source_session_service import SourceSessionService
 
@@ -45,6 +45,7 @@ class RecipeGenerationRunService:
         refine: bool = True,
         max_attempts: int = 3,
         run_async: bool = True,
+        llm_model: str = "",
     ) -> dict[str, Any]:
         source = SourceRegistryService(self.root).get_source(source_id)
         if not source:
@@ -57,6 +58,7 @@ class RecipeGenerationRunService:
             artifact_dir=relative_artifact,
             refine=bool(refine),
             max_attempts=bounded_attempts,
+            llm_model=llm_model,
         )
         return self._queue_run(run, run_async=run_async)
 
@@ -71,6 +73,7 @@ class RecipeGenerationRunService:
         max_attempts: int = 3,
         source_test_insight: dict[str, Any] | None = None,
         run_async: bool = True,
+        llm_model: str = "",
     ) -> dict[str, Any]:
         source = SourceRegistryService(self.root).get_source(source_id)
         if not source:
@@ -92,6 +95,7 @@ class RecipeGenerationRunService:
             capture_detail=bool(capture_detail),
             max_candidates=bounded_candidates,
             source_test_insight=source_test_insight or {},
+            llm_model=llm_model,
         )
         return self._queue_run(run, run_async=run_async)
 
@@ -111,6 +115,42 @@ class RecipeGenerationRunService:
         if not isinstance(data, dict):
             raise ValueError(f"Recipe generation run is invalid: {run_id}")
         return data
+
+    def retry(
+        self,
+        source_id: str,
+        run_id: str,
+        *,
+        run_async: bool = True,
+        llm_model: str = "",
+    ) -> dict[str, Any]:
+        run = self.load(run_id)
+        if run.get("source_id") != source_id:
+            raise ValueError("Recipe generation run does not belong to this source.")
+        if str(run.get("status") or "") in {"pending", "running"}:
+            raise ValueError("Recipe generation is still running.")
+        selected_model = llm_model or str(run.get("llm_model") or "")
+        if run.get("capture_source"):
+            source_test_insight = run.get("source_test_insight")
+            return self.start_from_source_capture(
+                source_id,
+                rendered=_capture_rendered_value(run.get("capture_rendered")),
+                capture_detail=bool(run.get("capture_detail")),
+                max_candidates=int(run.get("max_candidates") or 30),
+                refine=bool(run.get("refine")),
+                max_attempts=int(run.get("max_attempts") or 3),
+                source_test_insight=source_test_insight if isinstance(source_test_insight, dict) else {},
+                run_async=run_async,
+                llm_model=selected_model,
+            )
+        return self.start(
+            source_id,
+            artifact_dir=str(run.get("artifact_dir") or ""),
+            refine=bool(run.get("refine")),
+            max_attempts=int(run.get("max_attempts") or 3),
+            run_async=run_async,
+            llm_model=selected_model,
+        )
 
     def _run_generation(self, run_id: str) -> None:
         try:
@@ -229,6 +269,7 @@ class RecipeGenerationRunService:
                     source_test_insight=source_test_insight,
                     max_attempts=int(run["max_attempts"]),
                     root=self.root,
+                    llm_model=str(run.get("llm_model") or ""),
                 )
                 result = refinement.final_result
                 candidate = RecipeCandidateStore(self.root).save_candidate_from_refinement(refinement)
@@ -254,6 +295,7 @@ class RecipeGenerationRunService:
                     else None,
                     source_test_insight=source_test_insight,
                     root=self.root,
+                    llm_model=str(run.get("llm_model") or ""),
                 )
                 candidate = RecipeCandidateStore(self.root).save_candidate_from_suggestion(result)
                 self._append_step(
@@ -272,13 +314,13 @@ class RecipeGenerationRunService:
             )
             if ready_for_checks:
                 generated_recipe_path = self._write_generated_recipe(run_id, result.suggested_recipe_yaml)
-                save_detail = f"Saved review item {candidate.candidate_id} and a temporary recipe file for checks."
+                save_detail = f"Saved generated plan {candidate.candidate_id} and a temporary recipe file for checks."
             else:
                 save_detail = (
-                    f"Saved review item {candidate.candidate_id}. No temporary recipe file was created because "
+                    f"Saved generated plan {candidate.candidate_id}. No temporary recipe file was created because "
                     "the generated plan is not ready to execute."
                 )
-            self._append_step(run_id, "Save reading plan for review", "complete", save_detail)
+            self._append_step(run_id, "Save reading plan result", "complete", save_detail)
             payload = _result_payload(
                 run_id=run_id,
                 source_id=source.id,
@@ -296,7 +338,7 @@ class RecipeGenerationRunService:
                 run_id,
                 "Prepare next checks",
                 "complete",
-                "Compatibility evidence, reading review, and source-plan review links are ready.",
+                "Compatibility evidence and source-test actions are ready when the generated plan is testable.",
             )
             self._set_run_status(run_id, "completed", finished_at=_now())
         except Exception as exc:
@@ -341,8 +383,6 @@ class RecipeGenerationRunService:
             "candidate_url": "",
             "generated_recipe_path": "",
             "compatibility_url": "",
-            "recipe_review_url": "",
-            "recipe_rules_url": "",
             "suggested_recipe_yaml": "",
             "explanation": "",
             "confidence": "",
@@ -440,18 +480,11 @@ def _result_payload(
     refinement: RecipeRefinementResult | None,
 ) -> dict[str, Any]:
     params = {}
-    preview_params = {}
     if generated_recipe_path:
         params = {
             "source_mode": "configured",
             "selected_source_id": source_id,
             "url": source_url,
-            "recipe_path": generated_recipe_path,
-        }
-        preview_params = {
-            "source_mode": "configured",
-            "selected_source_id": source_id,
-            "input_path_or_url": source_url,
             "recipe_path": generated_recipe_path,
         }
     approval_recipe_path = (
@@ -482,12 +515,6 @@ def _result_payload(
         "approval_recipe_path": approval_recipe_path,
         "generated_recipe_path": generated_recipe_path,
         "compatibility_url": f"/compatibility?{urlencode(params)}" if generated_recipe_path else "",
-        "recipe_review_url": f"/recipe-preview?{urlencode({**preview_params, 'tab': 'execute', 'auto_run': '1'})}"
-        if generated_recipe_path
-        else "",
-        "recipe_rules_url": f"/recipe-preview?{urlencode({**preview_params, 'tab': 'explain'})}"
-        if generated_recipe_path
-        else "",
         "suggested_recipe_yaml": result.suggested_recipe_yaml,
         "explanation": result.explanation,
         "confidence": result.confidence,
@@ -623,7 +650,7 @@ def _usable_source_session(root: Path, source) -> Any | None:
     session_scope = ""
     if getattr(source, "recipe_path", ""):
         try:
-            recipe = load_job_board_recipe(resolve_project_path(root, source.recipe_path))
+            recipe = load_project_job_board_recipe(root, source.recipe_path)
             session_scope = recipe.access.session_scope
         except (OSError, ValueError):
             session_scope = ""

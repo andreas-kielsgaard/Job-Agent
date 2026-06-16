@@ -93,10 +93,21 @@ def test_web_enable_when_ready_refuses_blocked_then_enables_ready_source(
             )
         ],
     )
-    enabled = client.post("/sources/eursap-jobs/enable-when-ready", follow_redirects=False)
+    overview = client.get("/sources")
+
+    assert 'action="/sources/eursap-jobs/enable-when-ready"' in overview.text
+    assert 'name="return_to" value="/sources"' in overview.text
+
+    enabled = client.post(
+        "/sources/eursap-jobs/enable-when-ready",
+        data={"return_to": "/sources"},
+        follow_redirects=False,
+    )
 
     assert enabled.status_code == 303
     assert "message=" in enabled.headers["location"]
+    assert enabled.headers["location"].startswith("/sources?")
+    assert not enabled.headers["location"].startswith("/sources/eursap-jobs")
     config = read_yaml(project_root / "sources" / "recruiting-sites.yaml", {})
     assert config["sources"][0]["enabled"] is True
 

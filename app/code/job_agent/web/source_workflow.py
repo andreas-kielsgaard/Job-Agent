@@ -5,16 +5,16 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode, urlparse
 
-from job_agent.config import ROOT
+from job_agent.config import ROOT, load_profile
 from job_agent.llm import LlmService
-from job_agent.paths import resolve_project_path
 from job_agent.services.execution_source_service import ExecutionSourceService
 from job_agent.services.recipe_artifact_service import RecipeArtifactService
 from job_agent.services.recipe_candidate_service import RecipeCandidateStore
 from job_agent.services.recipe_generation_status_service import RecipeGenerationStatusService
 from job_agent.services.recipe_preview_service import explain_recipe
-from job_agent.services.recipes.mapping import load_job_board_recipe
+from job_agent.services.recipes.mapping import load_project_job_board_recipe
 from job_agent.services.single_source_run_service import SingleSourceRunService
+from job_agent.services.source_disqualification_service import SourceDisqualificationService
 from job_agent.services.source_execution_readiness_service import (
     SourceExecutionReadiness,
     SourceExecutionReadinessService,
@@ -25,8 +25,14 @@ from job_agent.services.source_registry_service import SourceRegistryService
 from job_agent.services.source_session_service import SourceSessionService
 from job_agent.services.source_suggestion_service import SourceSuggestionService
 from job_agent.services.source_test_service import SourceTestService
+from job_agent.services.source_url_assessment import assess_source_setup_url
 from job_agent.store import JobStore
-from job_agent.web.view_models.source_status import build_source_page_status, build_source_setup_steps
+from job_agent.web.view_models.source_status import (
+    build_source_page_status,
+    build_source_run_eligibility,
+    build_source_setup_steps,
+    readiness_has_stale_recipe_test,
+)
 
 
 @dataclass
@@ -38,12 +44,11 @@ class SourceWorkflowState:
     generation_status: Any
     readiness: Any
     recipe_explanation: Any
-    recipe_preview_url: str
-    recipe_preview_auto_url: str
     session_status: Any
     index: dict[str, Any]
     detail: dict[str, Any]
     lifecycle: dict[str, str]
+    run_eligibility: dict[str, Any]
     status: dict[str, Any]
     setup_steps: list[dict[str, Any]]
     setup_complete: bool
@@ -64,13 +69,13 @@ class SourceWorkflowState:
             "detail": self.detail,
             "session": self.session_status,
             "status": self.status,
+            "run_eligibility": self.run_eligibility,
         }
 
     def template_context(self) -> dict[str, Any]:
         return {
             "title": f"Source - {self.source.name}",
             "source": self.source,
-            "recipe_preview_url": self.recipe_preview_url,
             "execution_entry": self.execution_entry,
             "recipe_artifacts": self.artifacts,
             "recipe_candidates": self.recipe_candidates,
@@ -81,13 +86,13 @@ class SourceWorkflowState:
             "source_setup_steps": self.setup_steps,
             "source_setup_complete": self.setup_complete,
             "source_card": self.card,
+            "source_run_eligibility": self.run_eligibility,
             "source_session": self.session_status,
             "source_jobs_url": self.source_jobs_url,
             "source_safe_test_action": self.safe_test_action,
             "go_live_readiness": self.readiness,
             "compatibility_url": self.compatibility_url,
             "recipe_editor_url": self.recipe_editor_url,
-            "recipe_preview_auto_url": self.recipe_preview_auto_url,
         }
 
 
@@ -117,13 +122,14 @@ class SourceWorkflowHandler:
         self.jobs = JobStore(self.root, create=False)
         self.source_tests = SourceTestService(self.root)
         self.suggestions = SourceSuggestionService(self.root)
+        self.disqualifications = SourceDisqualificationService(self.root)
 
     def overview_context(self, *, message: str = "", warning: str = "") -> dict[str, Any]:
         all_sources = self.registry.list_saved_sources(include_stats=True)
         sources = [source for source in all_sources if source.status != "archived"]
         archived_sources = [source for source in all_sources if source.status == "archived"]
         execution_by_source = self.saved_execution_by_source(all_sources)
-        readiness_by_source = self.readiness.load_all()
+        readiness_by_source = self.current_readiness_by_source(sources + archived_sources)
         index_by_source = self.index_store.summaries_by_source()
         seen_records = self.jobs.list_seen_records()
         auto_setup_configured = self._auto_setup_configured()
@@ -149,6 +155,20 @@ class SourceWorkflowHandler:
             )
             for source in archived_sources
         ]
+        auto_setup_eligible_count = sum(1 for card in source_cards if card["auto_setup"].get("can_start"))
+        auto_setup_stale_refresh_count = sum(
+            1
+            for card in source_cards
+            if card["auto_setup"].get("can_start") and card["auto_setup"].get("stale_recipe_source_test")
+        )
+        auto_setup_learning_count = sum(
+            1
+            for card in source_cards
+            if card["auto_setup"].get("can_start") and card["auto_setup"].get("requires_llm")
+        )
+        stale_recipe_source_count = sum(
+            1 for card in source_cards if card["run_eligibility"].get("stale_recipe_source_test")
+        )
         return {
             "title": "Sources",
             "sources": sources,
@@ -161,9 +181,31 @@ class SourceWorkflowHandler:
             "daily_run_enabled_count": sum(
                 1 for source in execution_by_source.values() if bool(source.get("enabled", True))
             ),
+            "daily_run_eligible_count": sum(1 for card in source_cards if card["run_eligibility"]["eligible"]),
+            "daily_run_skipped_count": sum(
+                1
+                for card in source_cards
+                if card["run_eligibility"]["enabled"] and not card["run_eligibility"]["eligible"]
+            ),
+            "stale_recipe_source_count": stale_recipe_source_count,
             "implemented_source_count": sum(1 for card in source_cards if card["lifecycle"]["state"] == "implemented"),
             "indexed_source_count": sum(1 for card in source_cards if card["index"]["complete"]),
             "detail_complete_source_count": sum(1 for card in source_cards if card["detail"]["complete"]),
+            "auto_setup_all": {
+                "show": any(card["auto_setup"].get("show") for card in source_cards),
+                "configured": auto_setup_configured,
+                "can_start": auto_setup_eligible_count > 0,
+                "eligible_count": auto_setup_eligible_count,
+                "stale_refresh_count": auto_setup_stale_refresh_count,
+                "learning_count": auto_setup_learning_count,
+                "worker_limit": _auto_setup_worker_limit(self.root),
+                "disabled_reason": (
+                    "Add an Anthropic API key in Setup before learning new source reading plans."
+                    if not auto_setup_configured
+                    else "No setup-ready source URLs need automatic setup."
+                ),
+            },
+            "disqualified_domains": self.suggestions.list_disqualified_domains(),
         }
 
     def suggestion_context(
@@ -182,14 +224,15 @@ class SourceWorkflowHandler:
             "prompt": self.suggestions.build_prompt(focus),
             "raw_response": raw_response,
             "source_suggestions": self.suggestions.annotate_existing(suggestions or []),
+            "disqualified_domains": self.suggestions.list_disqualified_domains(),
             "llm_configured": self.suggestions.is_llm_configured(),
             "warning": warning,
             "message": message,
             "model": model,
         }
 
-    def suggest_sources_with_llm(self, *, focus: str = ""):
-        return self.suggestions.suggest_with_llm(focus)
+    def suggest_sources_with_llm(self, *, focus: str = "", llm_model: str = ""):
+        return self.suggestions.suggest_with_llm(focus, llm_model=llm_model)
 
     def prepare_external_source_suggestions(self, *, focus: str = ""):
         return self.suggestions.prepare_external(focus)
@@ -206,6 +249,15 @@ class SourceWorkflowHandler:
     def existing_source_by_url(self, url: str):
         return self.registry.find_source_by_url(url)
 
+    def existing_source_by_domain(self, url: str):
+        return self.registry.find_source_by_domain(url)
+
+    def disqualify_domain(self, domain_or_url: str, *, reason: str = ""):
+        return self.suggestions.disqualify_domain(domain_or_url, reason=reason)
+
+    def source_disqualification(self, url: str):
+        return self.disqualifications.disqualification_for_url(url)
+
     def saved_execution_by_source(self, _sources: list[Any]) -> dict[str, dict[str, Any]]:
         config_sources = self.execution.load_config().get("sources", [])
         return {
@@ -213,6 +265,17 @@ class SourceWorkflowHandler:
             for source in config_sources
             if isinstance(source, dict) and str(source.get("source_id") or "").strip()
         }
+
+    def current_readiness_by_source(self, sources: list[Any]) -> dict[str, SourceExecutionReadiness]:
+        saved_readiness = self.readiness.load_all()
+        current: dict[str, SourceExecutionReadiness] = {}
+        for source in sources:
+            source_id = str(getattr(source, "id", "") or "").strip()
+            if not source_id:
+                continue
+            saved = saved_readiness.get(source_id, SourceExecutionReadiness(source_id=source_id))
+            current[source_id] = self.readiness.with_current_recipe_file_checks(source, saved)
+        return current
 
     def overview_card_for_source(
         self,
@@ -230,14 +293,15 @@ class SourceWorkflowHandler:
             source,
             execution_entry,
             readiness,
-            recipe_preview_url=self.recipe_preview_url(source),
             index_status=index,
         )
-        readiness_current = readiness.readiness_status == "ready" or source.kind in {"manual", "local_yaml"}
-        index_current = bool(index.get("complete")) or source.kind in {"manual", "local_yaml"}
-        implemented = bool(
-            execution_entry and execution_entry.get("enabled", True) and readiness_current and index_current
+        run_eligibility = build_source_run_eligibility(
+            source,
+            execution_entry,
+            readiness,
+            index_status=index,
         )
+        implemented = bool(run_eligibility["eligible"])
         lifecycle = {
             "state": "implemented" if implemented else "setup",
             "label": "Implemented" if implemented else "In setup",
@@ -251,7 +315,14 @@ class SourceWorkflowHandler:
             "detail": detail,
             "session": None,
             "status": status,
-            "auto_setup": self._auto_setup_card(source, lifecycle, auto_setup_configured=auto_setup_configured),
+            "run_eligibility": run_eligibility,
+            "auto_setup": self._auto_setup_card(
+                source,
+                lifecycle,
+                readiness=readiness,
+                index_status=index,
+                auto_setup_configured=auto_setup_configured,
+            ),
         }
 
     def _auto_setup_configured(self) -> bool:
@@ -265,6 +336,25 @@ class SourceWorkflowHandler:
         source,
         lifecycle: dict[str, str],
         *,
+        readiness=None,
+        index_status: dict[str, Any] | None = None,
+        auto_setup_configured: bool | None = None,
+    ) -> dict[str, Any]:
+        return self.auto_setup_state(
+            source,
+            lifecycle,
+            readiness=readiness,
+            index_status=index_status,
+            auto_setup_configured=auto_setup_configured,
+        )
+
+    def auto_setup_state(
+        self,
+        source,
+        lifecycle: dict[str, str],
+        *,
+        readiness=None,
+        index_status: dict[str, Any] | None = None,
         auto_setup_configured: bool | None = None,
     ) -> dict[str, Any]:
         show = (
@@ -273,18 +363,46 @@ class SourceWorkflowHandler:
             and lifecycle.get("state") != "implemented"
         )
         configured = self._auto_setup_configured() if auto_setup_configured is None else auto_setup_configured
+        has_recipe = bool(str(getattr(source, "recipe_path", "") or "").strip())
+        stale_recipe_source_test = readiness_has_stale_recipe_test(readiness)
+        readiness_ready = bool(getattr(readiness, "readiness_status", "") == "ready")
+        index_complete = bool(index_status and index_status.get("complete"))
+        setup_complete = bool(has_recipe and readiness_ready and index_complete and not stale_recipe_source_test)
+        requires_llm = not has_recipe
         disabled_reason = ""
-        if not configured:
-            disabled_reason = "Add an Anthropic API key in Setup before using automatic source setup."
+        if setup_complete:
+            disabled_reason = (
+                "Automatic setup is complete. Include this source in daily runs, or run a manual source test "
+                "only if you want to recheck it."
+            )
+        elif not configured and requires_llm:
+            disabled_reason = "Add an Anthropic API key in Setup before learning a reading plan."
         elif not source.url:
             disabled_reason = "Save a source URL before using automatic source setup."
+        else:
+            disqualification = self.disqualifications.disqualification_for_url(source.url)
+            if disqualification:
+                disabled_reason = f"This domain is disqualified from automatic setup: {disqualification.reason}"
+            assessment = assess_source_setup_url(source.url) if not has_recipe else None
+            if not disabled_reason and assessment and not assessment.can_auto_setup:
+                disabled_reason = assessment.message
+        label = "Setup complete" if setup_complete else (
+            "Refresh source test"
+            if stale_recipe_source_test
+            else "Run source test"
+            if has_recipe
+            else "Automatically set up"
+        )
         return {
             "show": show,
             "configured": configured,
-            "can_start": bool(show and configured and source.url),
+            "can_start": bool(show and (configured or not requires_llm) and source.url and not disabled_reason),
             "action": f"/sources/{source.id}/auto-setup/start",
-            "label": "Automatically set up",
+            "label": label,
             "disabled_reason": disabled_reason,
+            "requires_llm": requires_llm,
+            "stale_recipe_source_test": stale_recipe_source_test,
+            "setup_complete": setup_complete,
         }
 
     def require_source(self, source_id: str):
@@ -372,8 +490,6 @@ class SourceWorkflowHandler:
         generation_status = self.generation.build_for_source(source.id)
         readiness = self.readiness.evaluate(source.id)
         recipe_explanation = explain_recipe(source.recipe_path, root=self.root) if source.recipe_path else None
-        recipe_preview_url = self.recipe_preview_url(source)
-        recipe_preview_auto_url = self.recipe_preview_url(source, auto_run=True)
         session_status = self.source_session_status(source)
         index_summary = self.index_store.summary_for_source(source.id, source.name)
         index = self.index_status(index_summary)
@@ -382,7 +498,6 @@ class SourceWorkflowHandler:
             source,
             execution_entry,
             readiness,
-            recipe_preview_url=recipe_preview_url,
             generation_status=generation_status,
             session_status=session_status,
             index_status=index,
@@ -392,7 +507,6 @@ class SourceWorkflowHandler:
             execution_entry,
             readiness,
             generation_status,
-            recipe_preview_url=recipe_preview_url,
             index_status=index,
             detail_status=detail,
             session_status=session_status,
@@ -400,11 +514,13 @@ class SourceWorkflowHandler:
         setup_complete = all(
             str(step.get("state") or "") == "complete" for step in setup_steps if not bool(step.get("optional"))
         )
-        readiness_current = readiness.readiness_status == "ready" or source.kind in {"manual", "local_yaml"}
-        index_current = bool(index.get("complete")) or source.kind in {"manual", "local_yaml"}
-        implemented = bool(
-            execution_entry and execution_entry.get("enabled", True) and readiness_current and index_current
+        run_eligibility = build_source_run_eligibility(
+            source,
+            execution_entry,
+            readiness,
+            index_status=index,
         )
+        implemented = bool(run_eligibility["eligible"])
         lifecycle = {
             "state": "implemented" if implemented else "setup",
             "label": "Implemented" if implemented else "In setup",
@@ -420,12 +536,11 @@ class SourceWorkflowHandler:
             generation_status=generation_status,
             readiness=readiness,
             recipe_explanation=recipe_explanation,
-            recipe_preview_url=recipe_preview_url,
-            recipe_preview_auto_url=recipe_preview_auto_url,
             session_status=session_status,
             index=index,
             detail=detail,
             lifecycle=lifecycle,
+            run_eligibility=run_eligibility,
             status=status,
             setup_steps=setup_steps,
             setup_complete=setup_complete,
@@ -447,7 +562,7 @@ class SourceWorkflowHandler:
         session_scope = ""
         if source.recipe_path:
             try:
-                recipe = load_job_board_recipe(resolve_project_path(self.root, source.recipe_path))
+                recipe = load_project_job_board_recipe(self.root, source.recipe_path)
                 session_scope = recipe.access.session_scope
             except (OSError, ValueError):
                 session_scope = ""
@@ -616,11 +731,13 @@ class SourceWorkflowHandler:
             raise RuntimeError("Refresh the listing index before including this source in the daily run.")
         return self.readiness.enable_when_ready(source.id)
 
-    def create_or_update_execution_source(self, source_id: str):
+    def create_or_update_execution_source(self, source_id: str, *, preserve_enabled: bool = False):
         source = self.require_source(source_id)
         self.require_recipe_source(source)
         self.require_not_archived(source)
-        return self.execution.create_or_update_recipe_source(source, enabled=False)
+        existing = self.execution.find_by_source_id(source.id)
+        enabled = bool(existing and existing.get("enabled", True)) if preserve_enabled else False
+        return self.execution.create_or_update_recipe_source(source, enabled=enabled)
 
     def disable_execution_source(self, source_id: str):
         source = self.require_source(source_id)
@@ -672,6 +789,7 @@ class SourceWorkflowHandler:
 
     def source_test_payload(self, source, result, readiness, *, listing_index=None) -> dict[str, Any]:
         insight = self.source_test_insight(source, result=result, readiness=readiness)
+        decision = self.source_test_decision(source, readiness, insight=insight)
         return {
             "ok": result.status not in {"not_found", "disabled", "failing"},
             "source_id": result.source_id,
@@ -741,6 +859,7 @@ class SourceWorkflowHandler:
             "readiness_warnings": readiness.warnings,
             "source_url": source.url,
             "source_test_insight": insight,
+            "source_test_decision": decision,
             "listing_index": self.source_test_listing_index_mapping(listing_index),
         }
 
@@ -872,6 +991,7 @@ class SourceWorkflowHandler:
         )
         pagination_duplicate_postings = pagination_duplicate_failure
         source_access_failed = source_access_failure is not None
+        browser_dependency_missing = _source_test_browser_dependency_missing(warnings, failures)
         pagination_working_with_unique_pages = bool(
             pagination_fetch_count
             and unique_from_pages > 0
@@ -903,6 +1023,17 @@ class SourceWorkflowHandler:
             summary = warnings[0] if warnings else "The source test stopped before it could verify source capabilities."
             recommendation = (
                 "Run the safe source test again; if this repeats, review the source session and page access."
+            )
+            action = {"type": "link", "label": "Run source test", "href": f"/sources/{source.id}/test-run?start=1"}
+        elif browser_dependency_missing:
+            title = "Browser support required"
+            summary = (
+                "The selected reading plan needs browser-controlled pagination, but optional Playwright browser "
+                "support is not available in this environment."
+            )
+            recommendation = (
+                "Install the optional Playwright dependencies and Chromium, then rerun the safe source test. "
+                "If the saved page evidence does not show real pagination controls, rebuild the reading plan instead."
             )
             action = {"type": "link", "label": "Run source test", "href": f"/sources/{source.id}/test-run?start=1"}
         elif pagination_failure:
@@ -946,6 +1077,14 @@ class SourceWorkflowHandler:
             recommendation = "Review the result, then include the source in the daily run when ready."
             action = {}
 
+        ai_oversight = _source_test_ai_oversight(
+            title=title,
+            failures=failures,
+            pagination_failure=bool(pagination_failure),
+            pagination_warning=bool(pagination_warning),
+            source_access_failed=source_access_failed,
+            test_did_not_complete=test_did_not_complete,
+        )
         clues = {
             "insight_title": title,
             "summary": summary,
@@ -976,6 +1115,7 @@ class SourceWorkflowHandler:
             "source_access_failed": source_access_failed,
             "source_access_login_gate_detected": source_access_login_gate_detected,
             "warnings": warnings[:5],
+            "ai_oversight": ai_oversight,
         }
         return {
             "title": title,
@@ -983,6 +1123,47 @@ class SourceWorkflowHandler:
             "recommendation": recommendation,
             "action": action,
             "generation_clues": clues,
+            "ai_oversight": ai_oversight,
+        }
+
+    def source_test_decision(self, source, readiness, *, insight: dict[str, Any] | None = None) -> dict[str, Any]:
+        insight = insight if isinstance(insight, dict) else self.source_test_insight(source, readiness=readiness)
+        action = insight.get("action") if isinstance(insight.get("action"), dict) else {}
+        action_path = str(action.get("action") or "")
+        readiness_status = str(getattr(readiness, "readiness_status", "") or "")
+        blockers = [str(item) for item in getattr(readiness, "blockers", []) or []]
+        warnings = [str(item) for item in getattr(readiness, "dry_run_warnings", []) or []]
+        failures = [
+            check
+            for check in getattr(readiness, "dry_run_capability_checks", []) or []
+            if str(check.get("status") or "") == "fail"
+        ]
+        if readiness_status == "ready":
+            return {
+                "outcome": "ready",
+                "summary": "The source test passed and setup can continue.",
+                "should_retry_source_test": False,
+                "should_regenerate_recipe": False,
+            }
+        if _transient_warning_only_source_test(readiness, blockers=blockers, failures=failures, warnings=warnings):
+            return {
+                "outcome": "retry_source_test",
+                "summary": "The source test passed capability checks but hit transient detail fetch warnings.",
+                "should_retry_source_test": True,
+                "should_regenerate_recipe": False,
+            }
+        if action_path.endswith("/reading-plan/rebuild-from-test"):
+            return {
+                "outcome": "regenerate_recipe",
+                "summary": str(insight.get("recommendation") or "Rebuild the reading plan from source-test evidence."),
+                "should_retry_source_test": False,
+                "should_regenerate_recipe": True,
+            }
+        return {
+            "outcome": "needs_attention",
+            "summary": str(insight.get("recommendation") or getattr(readiness, "readiness_summary", "") or ""),
+            "should_retry_source_test": False,
+            "should_regenerate_recipe": False,
         }
 
     def candidates_for_source(self, source, artifacts) -> list[Any]:
@@ -1154,19 +1335,6 @@ class SourceWorkflowHandler:
             {"label": "Handle pagination", "status": pagination_status, "detail": pagination_text},
         ]
 
-    def recipe_preview_url(self, source, *, auto_run: bool = False) -> str:
-        if not source.recipe_path:
-            return ""
-        params = {
-            "recipe_path": source.recipe_path,
-            "input_path_or_url": source.url,
-            "source_mode": "configured",
-            "selected_source_id": source.id,
-        }
-        if auto_run:
-            params["auto_run"] = "1"
-        return f"/recipe-preview?{urlencode(params)}"
-
     def source_jobs_url(self, source_id: str) -> str:
         params = [
             ("source_id_include", source_id),
@@ -1197,6 +1365,15 @@ class SourceWorkflowHandler:
         if artifact_dir:
             params["artifact_dir"] = artifact_dir
         return f"/recipe-editor?{urlencode(params)}"
+
+
+def _auto_setup_worker_limit(root: Path) -> int:
+    try:
+        runtime = load_profile(root).get("runtime", {})
+        configured = int(runtime.get("max_parallel_sources") or 10) if isinstance(runtime, dict) else 10
+    except (TypeError, ValueError):
+        configured = 10
+    return max(1, min(50, configured))
 
 
 def explanation_detail(items, label: str) -> str:
@@ -1292,6 +1469,95 @@ def pagination_warning_signal(
         return "A fetched pagination page repeated listings before the visible total was reached."
 
     return ""
+
+
+def _source_test_browser_dependency_missing(warnings: list[str], failures: list[dict[str, Any]]) -> bool:
+    texts = [str(warning or "") for warning in warnings]
+    texts.extend(str(item.get("detail") or "") for item in failures if isinstance(item, dict))
+    haystack = " ".join(texts).lower()
+    if not haystack:
+        return False
+    return "playwright" in haystack and any(
+        marker in haystack
+        for marker in [
+            "no module named",
+            "unavailable",
+            "not installed",
+            "requires playwright",
+            "playwright install",
+            "executable doesn't exist",
+        ]
+    )
+
+
+def _transient_warning_only_source_test(
+    readiness,
+    *,
+    blockers: list[str],
+    failures: list[dict[str, Any]],
+    warnings: list[str],
+) -> bool:
+    if str(getattr(readiness, "readiness_status", "") or "") != "warning":
+        return False
+    if blockers or failures:
+        return False
+    if int(getattr(readiness, "dry_run_job_count", 0) or 0) <= 0:
+        return False
+    if str(getattr(readiness, "dry_run_status", "") or "") != "warning":
+        return False
+    if not warnings:
+        return False
+    transient_markers = [
+        "detail fetch failed",
+        "remote end closed connection",
+        "remote disconnected",
+        "connection aborted",
+        "read timed out",
+        "timeout",
+        "temporarily unavailable",
+    ]
+    return all(any(marker in warning.lower() for marker in transient_markers) for warning in warnings)
+
+
+def _source_test_ai_oversight(
+    *,
+    title: str,
+    failures: list[dict[str, Any]],
+    pagination_failure: bool,
+    pagination_warning: bool,
+    source_access_failed: bool,
+    test_did_not_complete: bool,
+) -> dict[str, Any]:
+    level = 0
+    reasons: list[str] = []
+    if test_did_not_complete:
+        level = max(level, 1)
+        reasons.append("source_test_incomplete")
+    if failures:
+        level = max(level, 2)
+        reasons.append("failed_capabilities")
+    if pagination_failure or pagination_warning:
+        level = max(level, 2 if pagination_failure else 1)
+        reasons.append("pagination_evidence")
+    if source_access_failed:
+        level = max(level, 2)
+        reasons.append("source_access_evidence")
+    mode = "deterministic_first"
+    if level == 1:
+        mode = "ai_review_available"
+    elif level >= 2:
+        mode = "ai_rescue_after_deterministic_failure"
+    return {
+        "escalation_level": level,
+        "mode": mode,
+        "reasons": reasons,
+        "bundle_failures": level >= 2,
+        "summary": (
+            "No AI oversight needed while source-test capabilities pass."
+            if level == 0
+            else f"{title}: include this diagnosis in the next learning/refinement prompt."
+        ),
+    }
 
 
 def same_host_path(left: str, right: str) -> bool:

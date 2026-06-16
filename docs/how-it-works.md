@@ -71,7 +71,7 @@ Start-JobAgent-Windows.bat
 Start-JobAgent-Mac.command
 ```
 
-2. The launcher creates `app/environment/.venv`, copies `setup/defaults/profile` to `user/profile`, copies `setup/defaults/sources` to `user/sources`, creates `user/.env`, and starts the local web UI.
+2. The launcher creates `app/environment/.venv`, installs the normal and rendered-browser dependency sets, copies `setup/defaults/profile` to `user/profile`, copies `setup/defaults/sources` to `user/sources`, creates `user/.env`, and starts the local web UI.
 
 3. Put your Claude key in Setup or `user/.env`:
 

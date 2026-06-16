@@ -124,6 +124,27 @@ class SetupService:
                 "content": self.read_text("templates/at-a-glance-cv.md.j2"),
                 "help": "Jinja template. Use {{ contact.name }}, {{ top_skills }}, {{ selected_experience }}, etc.",
             },
+            "focused_cv_template": {
+                "label": "Focused one-page CV template",
+                "field_id": "template.focused_cv",
+                "path": "templates/focused-cv.md.j2",
+                "content": self.read_text("templates/focused-cv.md.j2"),
+                "help": "Markdown companion template for the deterministic one-page CV.",
+            },
+            "focused_cv_html_template": {
+                "label": "Focused one-page CV HTML template",
+                "field_id": "template.focused_cv_html",
+                "path": "templates/focused-cv.html.j2",
+                "content": self.read_text("templates/focused-cv.html.j2"),
+                "help": "Styled HTML template for the print-ready one-page CV.",
+            },
+            "focused_cv_tex_template": {
+                "label": "Focused one-page CV LaTeX template",
+                "field_id": "template.focused_cv_tex",
+                "path": "templates/focused-cv.tex.j2",
+                "content": self.read_text("templates/focused-cv.tex.j2"),
+                "help": "LaTeX source template for the recruiter-facing one-page CV PDF.",
+            },
             "application_template": {
                 "label": "Application template",
                 "field_id": "template.application",
@@ -144,6 +165,13 @@ class SetupService:
                 "path": "prompts/generate_application.md",
                 "content": self.read_text("prompts/generate_application.md"),
                 "help": "Prompt template for Claude application generation. Variables use Python .format style: {canonical_cv}, {title}, {description}.",
+            },
+            "focused_cv_prompt": {
+                "label": "Claude focused CV prompt",
+                "field_id": "prompt.focused_cv",
+                "path": "prompts/generate_focused_cv.md",
+                "content": self.read_text("prompts/generate_focused_cv.md"),
+                "help": "Prompt template for evidence-only focused CV content. Variables use Python .format style.",
             },
         }
 
@@ -219,8 +247,14 @@ class SetupService:
         cv_text: str,
         targets: list[str],
         progress_callback: ProfileDraftProgress | None = None,
+        llm_model: str = "",
     ) -> dict[str, Any]:
-        draft = self.draft_profile_auto_configuration_from_cv(cv_text, targets, progress_callback=progress_callback)
+        draft = self.draft_profile_auto_configuration_from_cv(
+            cv_text,
+            targets,
+            progress_callback=progress_callback,
+            llm_model=llm_model,
+        )
         _profile_draft_progress(progress_callback, "Saving", "Applying selected draft sections to the profile.", 92)
         return self.apply_profile_auto_configuration(draft["data"], draft["targets"])
 
@@ -229,6 +263,7 @@ class SetupService:
         cv_text: str,
         targets: list[str],
         progress_callback: ProfileDraftProgress | None = None,
+        llm_model: str = "",
     ) -> dict[str, Any]:
         prompt = self.profile_auto_configuration_prompt(cv_text, targets, progress_callback=progress_callback)
         targets = [target for target in targets if target in AUTO_CONFIG_TARGETS]
@@ -245,6 +280,7 @@ class SetupService:
             prompt,
             max_tokens=3000,
             purpose="profile_auto_configuration",
+            model=llm_model,
         )
         _profile_draft_progress(progress_callback, "Parsing draft", "Checking Claude's draft response.", 72)
 
@@ -259,6 +295,7 @@ class SetupService:
                 _json_repair_prompt(raw_json, error),
                 max_tokens=4000,
                 purpose="profile_auto_configuration_repair",
+                model=llm_model,
             ).text
 
         data = _parse_auto_configuration_json(completion.text, repair_callback=repair_invalid_json)
@@ -1205,9 +1242,11 @@ def _is_public_http_url(value: str) -> bool:
     hostname = (parsed.hostname or "").lower()
     if hostname in {"localhost", "127.0.0.1", "::1"} or hostname.endswith(".local"):
         return False
-    if hostname.startswith("10.") or hostname.startswith("192.168.") or re.match(r"^172\.(1[6-9]|2\d|3[01])\.", hostname):
-        return False
-    return True
+    return not (
+        hostname.startswith("10.")
+        or hostname.startswith("192.168.")
+        or re.match(r"^172\.(1[6-9]|2\d|3[01])\.", hostname)
+    )
 
 
 def _label_from_url(value: str) -> str:

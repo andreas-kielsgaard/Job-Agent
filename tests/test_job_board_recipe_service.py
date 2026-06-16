@@ -32,6 +32,7 @@ from job_agent.services.job_board_recipe_service import (
     find_pagination_links,
     job_board_recipe_from_mapping,
     load_job_board_recipe,
+    load_project_job_board_recipe,
 )
 from job_agent.services.recipes.discovery import discover_pagination_links
 from job_agent.sources import extract_generic_jobs_from_html
@@ -49,6 +50,53 @@ def test_recipe_extracts_real_job_cards_and_dedupes_urls() -> None:
     assert jobs[0].source_confidence == "recipe"
     assert jobs[0].freshness_confidence == "recipe"
     assert jobs[0].extraction_notes == ["Recipe-based extraction; verify details manually."]
+
+
+def test_generated_class_card_selector_falls_back_to_accepted_job_links() -> None:
+    html = """
+    <!doctype html>
+    <html><body>
+      <main>
+        <div class="results">
+          <div class="sc-AykKG sc-fzXfQZ xNuff">
+            <a class="sc-AykKE newHash" href="/job/a1/sap-btp-consultant">
+              <span>SAP BTP Consultant</span>
+              <span>Germany, Hamburg</span>
+              <span>Contract role with SAP BTP, ABAP and S/4HANA delivery.</span>
+            </a>
+          </div>
+          <div class="sc-AykKG sc-fzXfQZ xNuff">
+            <a class="sc-AykKE newHash" href="/job/a2/sap-fi-consultant">
+              <span>SAP FI Consultant</span>
+              <span>Germany, Berlin</span>
+              <span>Freelance SAP FI role with S/4HANA migration scope.</span>
+            </a>
+          </div>
+        </div>
+      </main>
+    </body></html>
+    """
+    recipe = job_board_recipe_from_mapping(
+        {
+            "source_name": "Styled Board",
+            "listing": {
+                "card_selector": "div.sc-AykKG.sc-LzLvc",
+                "title_selector": 'a.sc-AykKE.fwNdOp[href*="/job/"]',
+                "link_selector": 'a.sc-AykKE.fwNdOp[href*="/job/"]',
+            },
+            "accept": {"url_contains": ["/job/"]},
+            "limits": {"max_cards": 10},
+        }
+    )
+
+    result = extract_jobs_with_recipe_from_html(html, "https://example.com/jobs", recipe)
+
+    assert [job.title for job in result.jobs] == ["SAP BTP Consultant", "SAP FI Consultant"]
+    assert [job.url for job in result.jobs] == [
+        "https://example.com/job/a1/sap-btp-consultant",
+        "https://example.com/job/a2/sap-fi-consultant",
+    ]
+    assert result.listing_observed_count == 2
 
 
 def test_api_recipe_schema_accepts_listing_api_without_html_selectors() -> None:
@@ -338,10 +386,213 @@ def test_visible_total_count_allows_bounded_pagination_proof(monkeypatch: pytest
     assert "confirmed pagination" in checks["listing_total_access"].detail
 
 
+def test_url_pagination_can_follow_listing_expansion_links(monkeypatch: pytest.MonkeyPatch) -> None:
+    page_1 = """
+    <main>
+      <p>Jobs 4</p>
+      <ul>
+        <li class="feature">
+          <a href="/remote-jobs/acme-sap-manager">SAP Manager</a>
+          <span class="company">Acme</span>
+        </li>
+        <li class="view-all"><a href="/categories/remote-sap-jobs">View all 3 SAP jobs</a></li>
+      </ul>
+    </main>
+    """
+    category_page = """
+    <main>
+      <ul>
+        <li class="feature">
+          <a href="/remote-jobs/acme-sap-manager">SAP Manager</a>
+          <span class="company">Acme</span>
+        </li>
+        <li class="feature">
+          <a href="/remote-jobs/contoso-sap-lead">SAP Lead Consultant</a>
+          <span class="company">Contoso</span>
+        </li>
+        <li class="feature">
+          <a href="/remote-jobs/globex-sap-architect">SAP Architect</a>
+          <span class="company">Globex</span>
+        </li>
+        <li class="feature">
+          <a href="/remote-jobs/initech-sap-analyst">SAP Analyst</a>
+          <span class="company">Initech</span>
+        </li>
+      </ul>
+    </main>
+    """
+
+    def fake_fetch(url: str, timeout_seconds: int):
+        if "/categories/" in url:
+            return category_page, "https://weworkremotely.com/categories/remote-sap-jobs", []
+        return page_1, "https://weworkremotely.com/remote-jobs/search", []
+
+    recipe = JobBoardRecipe(
+        source_name="WWR fixture",
+        listing=ListingRecipe(
+            card_selector="li.feature",
+            title_selector='a[href*="/remote-jobs/"]',
+            link_selector='a[href*="/remote-jobs/"]',
+            company_selector=".company",
+        ),
+        accept=AcceptRecipe(url_contains=["/remote-jobs/"]),
+        reject=RejectRecipe(),
+        pagination=PaginationRecipe(
+            page_link_selector='li.view-all a[href*="/categories/"]',
+            max_pages=2,
+            request_delay_seconds=0,
+        ),
+    )
+    monkeypatch.setattr("job_agent.services.job_board_recipe_service._fetch_static_html", fake_fetch)
+
+    result = extract_jobs_with_recipe_from_url(
+        "https://weworkremotely.com/remote-jobs/search",
+        recipe,
+        fetch_pagination=True,
+        pagination_page_limit=2,
+    )
+
+    checks = {check.capability: check for check in result.capability_checks}
+    assert [job.title for job in result.jobs] == [
+        "SAP Manager",
+        "SAP Lead Consultant",
+        "SAP Architect",
+        "SAP Analyst",
+    ]
+    assert result.pagination_fetch_attempts == ["https://weworkremotely.com/categories/remote-sap-jobs"]
+    assert result.pagination_unique_jobs_from_fetched_pages == 3
+    assert checks["listing_total_access"].status == "pass"
+    assert checks["pagination_navigation"].status == "pass"
+
+
+def test_url_pagination_can_follow_public_feed_links(monkeypatch: pytest.MonkeyPatch) -> None:
+    page_1 = """
+    <main>
+      <p>Jobs 3</p>
+      <a href="/categories/remote-product-jobs.rss">Product RSS</a>
+      <a href="/categories/remote-engineering-jobs.rss">Engineering RSS</a>
+    </main>
+    """
+    product_feed = """
+    <rss><channel>
+      <item>
+        <title>SAP Product Manager</title>
+        <guid>https://weworkremotely.com/remote-jobs/acme-sap-product-manager</guid>
+        <region>Remote</region>
+        <type>Contract</type>
+        <pubDate>Fri, 12 Jun 2026 12:00:00 +0000</pubDate>
+        <description>&lt;p&gt;SAP product delivery role with S/4HANA programme context and stakeholder work.&lt;/p&gt;</description>
+      </item>
+      <item>
+        <title>SAP Delivery Lead</title>
+        <guid>https://weworkremotely.com/remote-jobs/contoso-sap-delivery-lead</guid>
+        <region>EMEA</region>
+        <type>Contract</type>
+        <description>&lt;p&gt;SAP delivery lead role with roadmap, integration and rollout ownership.&lt;/p&gt;</description>
+      </item>
+    </channel></rss>
+    """
+    engineering_feed = """
+    <rss><channel>
+      <item>
+        <title>SAP Platform Engineer</title>
+        <guid>https://weworkremotely.com/remote-jobs/globex-sap-platform-engineer</guid>
+        <region>Anywhere</region>
+        <type>Contract</type>
+        <description>&lt;p&gt;SAP platform engineering role with BTP, integration and operations scope.&lt;/p&gt;</description>
+      </item>
+    </channel></rss>
+    """
+
+    def fake_fetch(url: str, timeout_seconds: int):
+        if url.endswith("remote-product-jobs.rss"):
+            return product_feed, "https://weworkremotely.com/categories/remote-product-jobs.rss", []
+        if url.endswith("remote-engineering-jobs.rss"):
+            return engineering_feed, "https://weworkremotely.com/categories/remote-engineering-jobs.rss", []
+        return page_1, "https://weworkremotely.com/remote-jobs/search", []
+
+    recipe = JobBoardRecipe(
+        source_name="WWR feed fixture",
+        listing=ListingRecipe(
+            card_selector="item",
+            title_selector="title",
+            link_selector=["guid", "link"],
+            location_selector=["region", "state", "country"],
+            workload_selector="type",
+            posted_date_selector=["pubDate", "pubdate"],
+            description_selector="description",
+        ),
+        accept=AcceptRecipe(url_contains=["/remote-jobs/"]),
+        reject=RejectRecipe(),
+        pagination=PaginationRecipe(
+            page_link_selector='a[href$=".rss"]',
+            max_pages=3,
+            request_delay_seconds=0,
+        ),
+    )
+    monkeypatch.setattr("job_agent.services.job_board_recipe_service._fetch_static_html", fake_fetch)
+
+    result = extract_jobs_with_recipe_from_url(
+        "https://weworkremotely.com/remote-jobs/search",
+        recipe,
+        fetch_pagination=True,
+        pagination_page_limit=3,
+    )
+
+    checks = {check.capability: check for check in result.capability_checks}
+    assert [job.title for job in result.jobs] == [
+        "SAP Platform Engineer",
+        "SAP Product Manager",
+        "SAP Delivery Lead",
+    ]
+    assert result.jobs[0].url == "https://weworkremotely.com/remote-jobs/globex-sap-platform-engineer"
+    assert result.jobs[0].description == "SAP platform engineering role with BTP, integration and operations scope."
+    assert result.jobs[1].posted_date == "Fri, 12 Jun 2026 12:00:00 +0000"
+    assert result.pagination_fetch_count == 2
+    assert result.pagination_unique_jobs_from_fetched_pages == 3
+    assert checks["listing_total_access"].status == "pass"
+    assert checks["pagination_navigation"].status == "pass"
+
+
 def test_visible_total_count_reads_formatted_showing_total() -> None:
     html = "<main><p>Showing 1-25 of 1,234 projects</p></main>"
 
     assert discover_visible_total_job_count(html) == 1234
+
+
+def test_visible_total_count_reads_search_results_phrase() -> None:
+    html = "<main><p>21 search results</p><p>For Permanent and Contract, SAP</p></main>"
+
+    assert discover_visible_total_job_count(html) == 21
+
+
+def test_visible_total_count_ignores_footer_phone_and_jobs_email() -> None:
+    html = """
+    <main>
+      <p>21 search results</p>
+      <article><a href="/job/1">SAP Consultant</a></article>
+    </main>
+    <footer>
+      <p>London, EC3N 1DL United Kingdom</p>
+      <p>+44 207 337 0814 jobs@washingtonfrank.com</p>
+      <a href="/jobs-by-email">Jobs by email</a>
+    </footer>
+    """
+
+    assert discover_visible_total_job_count(html) == 21
+
+
+def test_visible_total_count_ignores_phone_when_no_result_count_present() -> None:
+    html = """
+    <main>
+      <article><a href="/job/1">SAP Consultant</a></article>
+    </main>
+    <footer>
+      <p>Contact +44 207 337 0814 jobs@washingtonfrank.com</p>
+    </footer>
+    """
+
+    assert discover_visible_total_job_count(html) == 0
 
 
 def test_pagination_urls_skip_first_page_links() -> None:
@@ -1247,6 +1498,26 @@ def test_loader_validates_mode_and_positive_limits(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="max_cards"):
         load_job_board_recipe(recipe_path)
+
+
+def test_project_recipe_loader_resolves_sources_path_in_new_layout(tmp_path: Path) -> None:
+    root = tmp_path / "project"
+    (root / "app").mkdir(parents=True)
+    (root / "setup").mkdir()
+    recipe_path = root / "user" / "sources" / "recipes" / "experimental" / "example.yaml"
+    recipe_path.parent.mkdir(parents=True)
+    recipe_path.write_text(
+        "source_name: Example\n"
+        "listing:\n"
+        "  card_selector: article\n"
+        "  title_selector: h2\n"
+        "  link_selector: a\n",
+        encoding="utf-8",
+    )
+
+    recipe = load_project_job_board_recipe(root, "sources/recipes/experimental/example.yaml")
+
+    assert recipe.source_name == "Example"
 
 
 def test_empty_card_selector_returns_empty_quality_warning() -> None:

@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import json
 import re
+from html import unescape
 from typing import Any
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 from bs4 import BeautifulSoup, Tag
 
@@ -17,6 +18,7 @@ from job_agent.services.recipes.models import (
     PatternsRecipe,
     SelectorValue,
 )
+from job_agent.services.recipes.soup import parse_markup, selector_mentions_unstable_css_class
 
 
 def extract_jobs_with_recipe_with_stats(
@@ -26,23 +28,29 @@ def extract_jobs_with_recipe_with_stats(
     source_name: str = "",
     use_recipe_card_limit: bool = True,
 ) -> tuple[list[Job], ListingExtractionStats]:
-    soup = BeautifulSoup(html, "html.parser")
+    soup = parse_markup(html)
     jobs: list[Job] = []
     seen_urls: set[str] = set()
-    cards = soup.select(recipe.listing.card_selector)
+    cards = listing_cards_for_recipe(soup, base_url, recipe)
     card_limit = recipe.limits.max_cards if use_recipe_card_limit else 0
     stats = ListingExtractionStats(page_url=base_url, observed_cards=len(cards), limit=card_limit)
 
     for index, card in enumerate(cards):
         title = select_text(card, recipe.listing.title_selector)
         link = select_href(card, recipe.listing.link_selector)
+        fallback_link = first_accepted_job_link(card, base_url, recipe)
+        if not link and fallback_link:
+            link = str(fallback_link.get("href") or "").strip()
+        title = compact_title(title, fallback_link or card)
+        if not title and fallback_link:
+            title = compact_title(fallback_link.get_text(" ", strip=True), fallback_link)
         url = urljoin(base_url, link) if link else ""
-        description = (
-            select_text(card, recipe.listing.description_selector) if recipe.listing.description_selector else ""
-        )
+        description = select_text(card, recipe.listing.description_selector) if recipe.listing.description_selector else ""
         raw_text = card.get_text("\n", strip=True)
         if not description:
             description = raw_text
+        cleaned_description = html_to_text(description) or description
+        cleaned_raw_text = html_to_text(raw_text) or raw_text
 
         pattern_values = extract_pattern_values(raw_text, recipe.patterns)
         title = pattern_values.get("title") or title
@@ -85,8 +93,8 @@ def extract_jobs_with_recipe_with_stats(
             ),
             posted_date=posted_date or pattern_values.get("posted_date") or "Not listed",
             languages=[pattern_values["language"]] if pattern_values.get("language") else [],
-            description=description[:3000],
-            raw_text=raw_text[:5000],
+            description=cleaned_description[:3000],
+            raw_text=cleaned_raw_text[:5000],
             source_confidence="recipe",
             freshness_confidence="recipe" if posted_date or pattern_values.get("posted_date") else "unknown",
             extraction_notes=extraction_notes(pattern_values),
@@ -357,7 +365,7 @@ def _int_value(value: Any) -> int:
 
 
 def apply_detail_html(job: Job, html: str, recipe: JobBoardRecipe) -> dict[str, str]:
-    soup = BeautifulSoup(html, "html.parser")
+    soup = parse_markup(html)
     schema_values = extract_jobposting_json_ld(soup) if recipe.detail.use_json_ld else {}
     detail_root = detail_root_for(soup)
     pattern_values = extract_pattern_values(detail_root.get_text(" ", strip=True), recipe.patterns)
@@ -476,6 +484,107 @@ def detail_root_for(soup: BeautifulSoup) -> Tag:
     return soup.body or soup
 
 
+def listing_cards_for_recipe(soup: BeautifulSoup, base_url: str, recipe: JobBoardRecipe) -> list[Tag]:
+    cards = soup.select(recipe.listing.card_selector) if recipe.listing.card_selector else []
+    if cards or not selector_mentions_unstable_css_class(recipe.listing.card_selector):
+        return cards
+    return link_rooted_listing_cards(soup, base_url, recipe)
+
+
+def link_rooted_listing_cards(soup: BeautifulSoup, base_url: str, recipe: JobBoardRecipe) -> list[Tag]:
+    cards: list[Tag] = []
+    seen_urls: set[str] = set()
+    for link in fallback_job_links(soup, base_url, recipe):
+        url = urljoin(base_url, str(link.get("href") or "").strip())
+        if url in seen_urls:
+            continue
+        seen_urls.add(url)
+        cards.append(_nearest_single_job_container(link, base_url, recipe) or link)
+    return cards
+
+
+def fallback_job_links(root: Tag | BeautifulSoup, base_url: str, recipe: JobBoardRecipe) -> list[Tag]:
+    selected_links: list[Tag] = []
+    for selector in _selectors(recipe.listing.link_selector):
+        try:
+            selected_links.extend(match for match in root.select(selector) if isinstance(match, Tag))
+        except Exception:
+            continue
+    if not selected_links:
+        selected_links = [match for match in root.find_all("a", href=True) if isinstance(match, Tag)]
+
+    links: list[Tag] = []
+    seen_urls: set[str] = set()
+    for link in selected_links:
+        href = str(link.get("href") or "").strip()
+        if not href:
+            continue
+        url = urljoin(base_url, href)
+        if url in seen_urls or not _accepted_job_url(url, recipe):
+            continue
+        seen_urls.add(url)
+        links.append(link)
+    return links
+
+
+def first_accepted_job_link(root: Tag, base_url: str, recipe: JobBoardRecipe) -> Tag | None:
+    if root.name == "a" and root.get("href") and _accepted_job_url(urljoin(base_url, str(root.get("href"))), recipe):
+        return root
+    links = fallback_job_links(root, base_url, recipe)
+    return links[0] if links else None
+
+
+def compact_title(title: str, source: Tag | None) -> str:
+    current = re.sub(r"\s+", " ", str(title or "")).strip()
+    if not source or (current and len(current) <= 160):
+        return current
+    lines = [
+        re.sub(r"\s+", " ", line).strip()
+        for line in source.get_text("\n", strip=True).splitlines()
+        if re.sub(r"\s+", " ", line).strip()
+    ]
+    useful_line = next((line for line in lines if title_quality(line) == "useful" and len(line) <= 160), "")
+    return useful_line or current
+
+
+def _nearest_single_job_container(link: Tag, base_url: str, recipe: JobBoardRecipe) -> Tag | None:
+    current = link.parent
+    depth = 0
+    while isinstance(current, Tag) and depth < 6:
+        if current.name in {"article", "li", "tr", "section", "div"}:
+            links = fallback_job_links(current, base_url, recipe)
+            if len(links) == 1 and not current.find(["nav", "form", "select"]):
+                return current
+        current = current.parent
+        depth += 1
+    return None
+
+
+def _accepted_job_url(url: str, recipe: JobBoardRecipe) -> bool:
+    parsed = urlparse(str(url or "").strip())
+    if parsed.scheme and parsed.scheme not in {"http", "https"}:
+        return False
+    lowered_url = str(url or "").lower()
+    if recipe.accept.url_contains:
+        return any(fragment.lower() in lowered_url for fragment in recipe.accept.url_contains)
+    return any(
+        token in parsed.path.lower()
+        for token in [
+            "/job/",
+            "/jobs/",
+            "/project/",
+            "/projects/",
+            "/freelance_projects/",
+            "/position/",
+            "/positions/",
+            "/role/",
+            "/roles/",
+            "/vacancy/",
+            "/vacancies/",
+        ]
+    )
+
+
 def select_detail_text(detail_root: Tag, soup: BeautifulSoup, selector: SelectorValue) -> str:
     return select_text(detail_root, selector) or select_text(soup, selector)
 
@@ -500,11 +609,28 @@ def select_href(root: Tag, selector: SelectorValue) -> str:
         nested = match.select_one("[href]")
         if nested and nested.get("href"):
             return str(nested.get("href", "")).strip()
+        text = match.get_text(" ", strip=True)
+        if _looks_like_url_text(text):
+            return text
     return ""
+
+
+def _looks_like_url_text(value: str) -> bool:
+    text = str(value or "").strip()
+    if not text or re.search(r"\s", text):
+        return False
+    return text.startswith(("http://", "https://", "/"))
 
 
 def matches_selector(tag: Tag, selector: str) -> bool:
     selector = selector.strip()
+    parent = tag.parent
+    if isinstance(parent, (Tag, BeautifulSoup)):
+        try:
+            if tag in parent.select(selector):
+                return True
+        except Exception:
+            pass
     if selector == tag.name:
         return True
     if selector.startswith("."):
@@ -683,7 +809,7 @@ def loose_json_string(raw: str, key: str) -> str:
 def html_to_text(value: str) -> str:
     if not value:
         return ""
-    text = BeautifulSoup(value, "html.parser").get_text(" ", strip=True)
+    text = parse_markup(unescape(value)).get_text(" ", strip=True)
     return re.sub(r"\s+", " ", text).strip()
 
 

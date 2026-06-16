@@ -33,7 +33,7 @@ Use this map to find the smallest useful reading set before changing code. Start
 | Web runtime/background work | README Local Web UI | `app/code/job_agent/web/runtime.py`, `app/code/job_agent/web/routers/health.py`, `app/code/job_agent/web/debug_state.py` | Runtime work should report status through `/api/work-status` and avoid hidden repo-state mutation in tests. |
 | Local persistence | README Private Data | `app/code/job_agent/io/`, `app/code/job_agent/store.py`, `app/code/job_agent/run_store.py`, `app/code/job_agent/application_status_store.py`, `app/code/job_agent/token_usage.py` | Use atomic helpers and preserve strict corruption behavior where tests cover it. |
 | LLM gateway | README Optional Claude Setup | `app/code/job_agent/llm/`, `app/code/job_agent/services/ai_edit_service.py` | Tests fake LLM calls. Do not require real API keys for product tests. |
-| Browser diagnostics | `docs/playwright-setup.md`, `docs/recipe-calibration.md` | `app/code/job_agent/browser/playwright_probe.py`, `app/environment/scripts/check_playwright.py` | Playwright is optional and not required for normal daily runs. |
+| Browser diagnostics | `docs/playwright-setup.md`, `docs/recipe-calibration.md` | `app/code/job_agent/browser/playwright_probe.py`, `app/environment/scripts/check_playwright.py` | The launcher installs Playwright/Chromium because rendered source setup can require it; direct imports should still stay lazy so non-rendered code remains importable. |
 | CLI commands | README command sections | `app/code/job_agent/cli.py` plus the service it wires | Keep commands thin and rooted so tests can pass temp project roots. |
 
 ## Common Search Patterns
@@ -62,8 +62,8 @@ Use this map to find the smallest useful reading set before changing code. Start
 
 ## Dependency Hints
 
-- Core install: `pip install -r app/environment/requirements.txt`
+- Core app install: `pip install -r app/environment/requirements.txt`
+- Rendered source setup: `pip install -r app/environment/requirements-playwright.txt` then `python -m playwright install chromium`
 - Dev checks: `pip install -r app/environment/requirements-dev.txt`
-- Optional rendered diagnostics: `pip install -r app/environment/requirements-playwright.txt` then `python -m playwright install chromium`
 - The default `pytest` config excludes `tests/exploratory/`.
 

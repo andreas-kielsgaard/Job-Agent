@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
+from tests.helpers import EURSAP_SOURCE, seed_source_registry
 
 from job_agent.cli import recipe_generation_status
 from job_agent.services.recipe_candidate_approval_service import RecipeCandidateApprovalService
@@ -20,8 +21,8 @@ from job_agent.services.recipe_suggestion_service import (
     suggest_recipe_with_refinement,
 )
 from job_agent.services.source_health_service import SourceHealthService
+from job_agent.services.source_registry_service import SourceRegistryService
 from job_agent.services.source_session_service import SourceSessionService
-from tests.helpers import EURSAP_SOURCE, seed_source_registry
 
 VALID_RECIPE_YAML = """source_name: Eursap Jobs
 start_url: https://eursap.eu/jobs
@@ -135,6 +136,34 @@ def test_generation_status_separates_unusable_attempts_from_reviewable_plans(pro
     assert status.reviewable_pending_candidates == 0
     assert status.latest_reviewable_candidate_id == ""
     assert unusable.candidate_id != status.latest_reviewable_candidate_id
+
+
+def test_generation_status_surfaces_schema_valid_quality_blocked_plan_for_review(
+    client: TestClient, project_root: Path
+) -> None:
+    SourceRegistryService(project_root).update_source(
+        "eursap-jobs",
+        name="Eursap Jobs",
+        kind="recipe",
+        url="https://eursap.eu/jobs",
+        status="testing",
+        recipe_path="",
+        notes="",
+    )
+    artifact = _write_artifact(project_root)
+    candidate = RecipeCandidateStore(project_root).save_candidate_from_refinement(_poor_refinement_result(artifact))
+
+    status = RecipeGenerationStatusService(project_root).build_for_source("eursap-jobs")
+    response = client.get("/sources/eursap-jobs")
+
+    assert status.reviewable_pending_candidates == 0
+    assert status.latest_reviewable_candidate_id == ""
+    assert status.testable_pending_candidates == 1
+    assert status.latest_testable_candidate_id == candidate.candidate_id
+    assert "local quality checks flagged issues" in " ".join(status.warnings)
+    assert response.status_code == 200
+    assert "A generated reading plan has local quality warnings" in response.text
+    assert f"/recipe-candidates/{candidate.candidate_id}?source_id=eursap-jobs" in response.text
 
 
 def test_approved_candidate_detail_shows_summary_and_no_approval_form(client: TestClient, project_root: Path) -> None:
@@ -293,6 +322,28 @@ def _unusable_suggestion_result(artifact: Path):
         validation_errors=["No stable repeated listing card selector was found."],
         selected_strategy="not_recommended",
         confidence="low",
+    )
+
+
+def _poor_refinement_result(artifact: Path) -> RecipeRefinementResult:
+    return RecipeRefinementResult(
+        final_result=_suggestion_result(artifact),
+        attempts=[
+            RecipeRefinementAttempt(
+                attempt_number=1,
+                suggested_recipe_yaml=VALID_RECIPE_YAML,
+                schema_valid=True,
+                validation_errors=[],
+                quality_status="poor",
+                quality_warnings=["Local quality check failed."],
+                extracted_job_count=1,
+                useful_titles=1,
+                generic_labels=0,
+                unique_urls=1,
+                average_description_length=20,
+            )
+        ],
+        accepted=False,
     )
 
 

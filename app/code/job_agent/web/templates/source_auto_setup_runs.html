@@ -1,0 +1,206 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="source-detail-header">
+  <div>
+    <p class="eyebrow">Sources</p>
+    <h1>Automatic Source Preparation</h1>
+    <p class="muted">
+      {% if source_filter %}
+      Monitoring automatic preparation for one source.
+      {% else %}
+      Monitoring queued source setup and safe source-test refreshes.
+      {% endif %}
+    </p>
+  </div>
+  <div class="source-header-actions">
+    <a class="button light" href="/sources">Back to sources</a>
+  </div>
+</div>
+
+<div class="panel" id="auto-setup-live-message" {% if not message %}hidden{% endif %}><span class="badge high" id="auto-setup-message-text">{{ message }}</span></div>
+<div class="panel" id="auto-setup-live-warning" {% if not warning %}hidden{% endif %}><span class="badge low" id="auto-setup-warning-text">{{ warning }}</span></div>
+
+<div class="panel daily-run-progress-panel" id="auto-setup-monitor" data-source-id="{{ source_filter }}" data-queue="{{ auto_setup_queue }}" data-llm-model="{{ auto_setup_llm_model }}">
+  <div class="section-heading-row">
+    <div>
+      <p class="eyebrow">Preparation progress</p>
+      <h2 id="auto-setup-phase">
+        {% if auto_setup_summary.is_active %}Preparing sources{% else %}Latest preparation results{% endif %}
+      </h2>
+      <p class="muted" id="auto-setup-summary-line">
+        {{ auto_setup_summary.completed }} completed, {{ auto_setup_summary.blocked }} blocked, {{ auto_setup_summary.running }} running.
+      </p>
+    </div>
+    <span class="badge {% if auto_setup_summary.blocked %}warning{% elif auto_setup_summary.is_active %}running{% else %}high{% endif %}" id="auto-setup-status">
+      {% if auto_setup_summary.is_active %}running{% elif auto_setup_summary.blocked %}needs review{% else %}complete{% endif %}
+    </span>
+  </div>
+  <div class="run-progress-bar" aria-hidden="true"><span id="auto-setup-progress-fill" style="width: {{ auto_setup_summary.progress_percent }}%"></span></div>
+  <div class="run-progress-grid">
+    <div><span>Total</span><strong id="auto-setup-total">{{ auto_setup_summary.total }}</strong></div>
+    <div><span>Running</span><strong id="auto-setup-running">{{ auto_setup_summary.running }}</strong></div>
+    <div><span>Completed</span><strong id="auto-setup-completed">{{ auto_setup_summary.completed }}</strong></div>
+    <div><span>Needs review</span><strong id="auto-setup-blocked">{{ auto_setup_summary.blocked }}</strong></div>
+  </div>
+</div>
+
+<div class="panel">
+  <div class="section-heading-row">
+    <div>
+      <h2>Source Results</h2>
+      <p class="muted">Each card shows whether setup/test evidence passed and whether the result is applied to daily-run execution.</p>
+    </div>
+  </div>
+  <div class="source-run-list" id="auto-setup-run-list">
+    {% for item in auto_setup_runs %}
+    <article class="source-run-card">
+      <div class="source-run-header">
+        <div>
+          <h3>{{ item.source_name }}</h3>
+          <p class="muted">{{ item.stage }}</p>
+        </div>
+        <span class="badge {{ item.status }}">{{ item.status|replace("_", " ") }}</span>
+      </div>
+      <div class="source-window-progress"><span style="width: {{ item.progress_percent }}%"></span></div>
+      <div class="source-fact-grid setup">
+        <div>
+          <span class="fact-label">Result</span>
+          <strong>{{ item.applied_label }}</strong>
+          <span>{{ item.applied_summary }}</span>
+        </div>
+        <div>
+          <span class="fact-label">Source test</span>
+          <strong>{{ item.readiness_status }}</strong>
+          <span>{{ item.readiness_summary or item.message }}</span>
+        </div>
+        <div>
+          <span class="fact-label">Attempts</span>
+          <strong>{{ item.source_test_attempts }} test / {{ item.recipe_attempts }} recipe</strong>
+          <span>{{ item.indexed_count }} indexed posting(s).</span>
+        </div>
+      </div>
+      {% if item.error_message %}
+      <p class="muted">Error: {{ item.error_message }}</p>
+      {% endif %}
+      <div class="action-row">
+        <a class="button light" href="{{ item.href }}">Open source</a>
+      </div>
+    </article>
+    {% endfor %}
+  </div>
+  {% if not auto_setup_runs %}
+  <p class="muted" id="auto-setup-empty">No automatic preparation runs have been saved yet.</p>
+  {% endif %}
+</div>
+
+<script>
+  const monitor = document.getElementById("auto-setup-monitor");
+  const sourceFilter = monitor?.dataset.sourceId || "";
+  const queueMode = monitor?.dataset.queue || "";
+  const queuedModel = monitor?.dataset.llmModel || "";
+  const statusUrl = `/api/sources/auto-setup/status${sourceFilter ? `?source_id=${encodeURIComponent(sourceFilter)}` : ""}`;
+
+  function esc(value) {
+    return String(value || "")
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#039;");
+  }
+
+  function renderAutoSetup(data) {
+    const summary = data.summary || {};
+    document.getElementById("auto-setup-summary-line").innerText =
+      `${summary.completed || 0} completed, ${summary.blocked || 0} blocked, ${summary.running || 0} running.`;
+    document.getElementById("auto-setup-progress-fill").style.width = `${Math.max(0, Math.min(100, Number(summary.progress_percent || 0)))}%`;
+    document.getElementById("auto-setup-total").innerText = summary.total || 0;
+    document.getElementById("auto-setup-running").innerText = summary.running || 0;
+    document.getElementById("auto-setup-completed").innerText = summary.completed || 0;
+    document.getElementById("auto-setup-blocked").innerText = summary.blocked || 0;
+    document.getElementById("auto-setup-phase").innerText = summary.is_active ? "Preparing sources" : "Latest preparation results";
+    const status = document.getElementById("auto-setup-status");
+    status.className = `badge ${summary.blocked ? "warning" : summary.is_active ? "running" : "high"}`;
+    status.innerText = summary.is_active ? "running" : summary.blocked ? "needs review" : "complete";
+    const list = document.getElementById("auto-setup-run-list");
+    list.innerHTML = (data.runs || []).map(renderAutoSetupCard).join("");
+  }
+
+  function renderAutoSetupCard(item) {
+    const status = String(item.status || "pending").toLowerCase();
+    const progress = Math.max(8, Math.min(100, Number(item.progress_percent || 8)));
+    return `
+      <article class="source-run-card">
+        <div class="source-run-header">
+          <div>
+            <h3>${esc(item.source_name)}</h3>
+            <p class="muted">${esc(item.stage)}</p>
+          </div>
+          <span class="badge ${esc(status)}">${esc(status.replaceAll("_", " "))}</span>
+        </div>
+        <div class="source-window-progress"><span style="width: ${progress}%"></span></div>
+        <div class="source-fact-grid setup">
+          <div><span class="fact-label">Result</span><strong>${esc(item.applied_label)}</strong><span>${esc(item.applied_summary)}</span></div>
+          <div><span class="fact-label">Source test</span><strong>${esc(item.readiness_status)}</strong><span>${esc(item.readiness_summary || item.message)}</span></div>
+          <div><span class="fact-label">Attempts</span><strong>${Number(item.source_test_attempts || 0)} test / ${Number(item.recipe_attempts || 0)} recipe</strong><span>${Number(item.indexed_count || 0)} indexed posting(s).</span></div>
+        </div>
+        ${item.error_message ? `<p class="muted">Error: ${esc(item.error_message)}</p>` : ""}
+        <div class="action-row"><a class="button light" href="${esc(item.href || "/sources")}">Open source</a></div>
+      </article>
+    `;
+  }
+
+  async function refreshAutoSetupMonitor() {
+    try {
+      const response = await fetch(statusUrl, { cache: "no-store" });
+      if (response.ok) renderAutoSetup(await response.json());
+    } catch {}
+  }
+
+  function setAutoSetupMessage(kind, text) {
+    const messagePanel = document.getElementById("auto-setup-live-message");
+    const warningPanel = document.getElementById("auto-setup-live-warning");
+    const messageText = document.getElementById("auto-setup-message-text");
+    const warningText = document.getElementById("auto-setup-warning-text");
+    if (kind === "warning") {
+      warningText.innerText = text || "";
+      warningPanel.hidden = !text;
+      return;
+    }
+    messageText.innerText = text || "";
+    messagePanel.hidden = !text;
+  }
+
+  async function startQueuedAutoSetup() {
+    if (queueMode !== "all") return;
+    const body = new FormData();
+    body.set("llm_model", queuedModel);
+    try {
+      const response = await fetch("/api/sources/auto-setup/start-all", {
+        method: "POST",
+        body,
+        cache: "no-store"
+      });
+      const data = await response.json();
+      if (!response.ok || !data.ok) {
+        setAutoSetupMessage("warning", data.warning || "Automatic setup could not start.");
+      } else if (data.warning) {
+        setAutoSetupMessage("warning", data.warning);
+      } else {
+        setAutoSetupMessage("message", data.message || "Automatic setup queued.");
+      }
+      const url = new URL(window.location.href);
+      url.searchParams.delete("queue");
+      url.searchParams.delete("llm_model");
+      window.history.replaceState(null, "", url.toString());
+      refreshAutoSetupMonitor();
+    } catch {
+      setAutoSetupMessage("warning", "Automatic setup could not start.");
+    }
+  }
+
+  refreshAutoSetupMonitor();
+  startQueuedAutoSetup();
+  window.setInterval(refreshAutoSetupMonitor, 2000);
+</script>
+{% endblock %}

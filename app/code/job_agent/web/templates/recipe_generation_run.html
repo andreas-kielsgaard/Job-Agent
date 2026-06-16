@@ -9,6 +9,10 @@
   <a class="button light" href="/sources/{{ source.id }}">Back to source</a>
 </div>
 
+{% if warning %}
+<div class="panel"><span class="badge low">{{ warning }}</span></div>
+{% endif %}
+
 <div class="panel running-panel">
   <div class="row">
     <div style="margin-right:auto;">
@@ -24,10 +28,10 @@
     <div class="stat"><span>Started</span><strong id="generation-started">{{ run.started_at or "Queued" }}</strong></div>
   </div>
   <ol class="progress-steps" id="generation-phases">
-    <li class="active">Resolve source and saved capture</li>
+    <li>Resolve source and saved capture</li>
     <li>Inspect selector, pagination, and detail evidence</li>
     <li>Generate and validate reading plan</li>
-    <li>Save plan for review</li>
+    <li>Save generation result</li>
     <li>Prepare follow-up checks</li>
   </ol>
   <h3>Generator Log</h3>
@@ -36,7 +40,7 @@
 
 <div class="panel" id="generation-result" hidden>
   <div class="row">
-    <h2 style="margin-right:auto;">Generated Reading Plan</h2>
+    <h2 id="result-title" style="margin-right:auto;">Generated Reading Plan</h2>
     <span class="badge" id="result-schema">unknown</span>
   </div>
   <p id="result-explanation" class="muted"></p>
@@ -58,7 +62,9 @@
   <h2>Generation Failed</h2>
   <p class="muted" id="failure-message"></p>
   <div class="action-row">
-    <a class="button" href="/sources/{{ source.id }}#recipe-generation">Try again</a>
+    <form method="post" action="/sources/{{ source.id }}/recipe-generation/{{ run.run_id }}/retry" class="inline-form" data-llm-model-picker data-llm-model-title="Choose AI power for retry">
+      <button type="submit" class="button">Try again</button>
+    </form>
     <a class="button light" href="/sources/{{ source.id }}">Back to source</a>
   </div>
 </div>
@@ -87,11 +93,11 @@
   }
 
   function statusClass(status) {
-    const value = text(status).toLowerCase();
-    if (["completed", "complete", "success"].includes(value)) return "complete";
-    if (["failed", "failure", "error"].includes(value)) return "failed";
-    if (["running", "pending", "warning"].includes(value)) return "active";
-    return "";
+    return executionUi.statusClass(status);
+  }
+
+  function isOngoingStatus(status) {
+    return text(status).toLowerCase() === "running";
   }
 
   function phaseIndex(phase) {
@@ -103,26 +109,26 @@
     return 0;
   }
 
-  function setPhase(index, state) {
-    const items = [...document.querySelectorAll("#generation-phases li")];
-    items.forEach((item, itemIndex) => {
-      item.className = "";
-      if (itemIndex < index) item.className = "complete";
-      if (itemIndex === index) item.className = state;
-    });
+  function setPhase(index, state, working = false) {
+    executionUi.setStepList("#generation-phases", { activeIndex: index, state, running: working });
   }
 
   function finishPhases(ok) {
-    const items = [...document.querySelectorAll("#generation-phases li")];
-    items.forEach((item, index) => {
-      item.className = ok ? "complete" : (index === items.length - 1 ? "failed" : "complete");
-    });
+    executionUi.finishStepList("#generation-phases", ok);
+  }
+
+  function latestRunningStepIndex(steps) {
+    for (let index = steps.length - 1; index >= 0; index -= 1) {
+      if (isOngoingStatus(steps[index].status)) return index;
+    }
+    return -1;
   }
 
   function renderSteps(run) {
     const steps = run.steps || [];
-    document.getElementById("generation-log").innerHTML = steps.map(step => `
-      <li class="${statusClass(step.status)}">
+    const latestRunningIndex = run.status === "running" ? latestRunningStepIndex(steps) : -1;
+    document.getElementById("generation-log").innerHTML = steps.map((step, index) => `
+      <li class="${executionUi.stepClasses(step.status, { running: index === latestRunningIndex })}">
         <strong>${escapeHtml(step.phase)}</strong>
         <div>${escapeHtml(step.detail)}</div>
         <small>${escapeHtml(step.created_at)}</small>
@@ -130,7 +136,13 @@
     `).join("");
     const latest = steps[steps.length - 1];
     if (latest && !["completed", "failed"].includes(run.status)) {
-      setPhase(phaseIndex(latest.phase), statusClass(latest.status) || "active");
+      setPhase(
+        phaseIndex(latest.phase),
+        statusClass(latest.status) || "active",
+        run.status === "running" && steps.length - 1 === latestRunningIndex
+      );
+    } else if (!latest && !["completed", "failed"].includes(run.status)) {
+      setPhase(0, "active", false);
     }
   }
 
@@ -149,7 +161,7 @@
       <h3>Calibration Evidence Used</h3>
       <div class="badge-row">${parts.map(item => `<span class="badge">${escapeHtml(item)}</span>`).join("")}</div>
       ${run.evidence_summary ? `<p class="muted">${escapeHtml(run.evidence_summary)}</p>` : ""}
-      <p class="muted">This local capture is a sanity check for selectors. It does not prove full pagination or source access; the safe source test is the next verification step.</p>
+      <p class="muted">${run.reading_plan_review?.clearly_failed ? "This local capture is diagnostic evidence for the failed generation. It is not testable until a schema-valid reading plan is generated." : "This local capture is a sanity check for selectors. It does not prove full pagination or source access; the safe source test is the next verification step."}</p>
     `;
   }
 
@@ -183,35 +195,42 @@
       ...(run.assumptions || []).map(item => `Assumption: ${item}`)
     ];
     document.getElementById("result-notes").innerHTML = notes.length
-      ? `<h3>Review Notes</h3><ul>${notes.map(item => `<li>${escapeHtml(item)}</li>`).join("")}</ul>`
+      ? `<h3>Generation Notes</h3><ul>${notes.map(item => `<li>${escapeHtml(item)}</li>`).join("")}</ul>`
       : "";
   }
 
-  function renderActions(run) {
-    const actions = [];
-    if (run.candidate_approval_url && run.generated_recipe_path && run.schema_valid && run.approval_recipe_path) {
-      actions.push(`
-        <form method="post" action="${escapeHtml(run.candidate_approval_url)}" class="inline-form">
-          <input type="hidden" name="source_id" value="{{ source.id }}">
-          <input type="hidden" name="recipe_path" value="${escapeHtml(run.approval_recipe_path)}">
-          <input type="hidden" name="overwrite" value="1">
-          <input type="hidden" name="next_action" value="test">
-          <button type="submit" class="button">Use plan and run source test</button>
+  function renderAction(action) {
+    const buttonClass = escapeHtml(action.button_class || "button light");
+    if (action.type === "form") {
+      const fields = (action.fields || []).map(field => `
+        <input type="hidden" name="${escapeHtml(field.name)}" value="${escapeHtml(field.value)}">
+      `).join("");
+      return `
+        <form method="${escapeHtml(action.method || "post")}" action="${escapeHtml(action.action)}" class="inline-form">
+          ${fields}
+          <button type="submit" class="${buttonClass}">${escapeHtml(action.label)}</button>
         </form>
-      `);
+      `;
     }
-    if (run.candidate_url) actions.push(`<a class="button light" href="${escapeHtml(run.candidate_url)}">Inspect generated plan</a>`);
-    if (run.recipe_review_url) actions.push(`<a class="button light" href="${escapeHtml(run.recipe_review_url)}">Open local calibration preview</a>`);
-    if (run.compatibility_url) actions.push(`<a class="button light" href="${escapeHtml(run.compatibility_url)}">Compatibility evidence</a>`);
-    if (run.recipe_rules_url) actions.push(`<a class="button light" href="${escapeHtml(run.recipe_rules_url)}">Plan explanation</a>`);
-    actions.push(`<a class="button light" href="/sources/{{ source.id }}">Back to source</a>`);
+    if (action.type === "link") {
+      return `<a class="${buttonClass}" href="${escapeHtml(action.href)}">${escapeHtml(action.label)}</a>`;
+    }
+    return "";
+  }
+
+  function renderActions(run) {
+    const review = run.reading_plan_review || {};
+    const actions = (review.actions || []).map(renderAction);
     document.getElementById("result-actions").innerHTML = actions.join("");
   }
 
   function renderResult(run) {
+    const review = run.reading_plan_review || {};
     document.getElementById("generation-result").hidden = false;
-    document.getElementById("result-schema").innerText = run.schema_valid ? "schema valid" : "schema needs review";
-    document.getElementById("result-explanation").innerText = run.explanation || "The generator saved a reading plan. Review what it found before using it for the source.";
+    document.getElementById("result-title").innerText = review.title || "Generated Reading Plan";
+    document.getElementById("result-schema").innerText = review.badge_label || (run.schema_valid ? "schema valid" : "schema needs review");
+    document.getElementById("result-schema").className = `badge ${review.badge_class || ""}`;
+    document.getElementById("result-explanation").innerText = [review.summary, run.explanation].filter(Boolean).join(" ") || "The generator saved a reading plan. Use the source test before using it for the source.";
     document.getElementById("result-strategy").innerText = run.selected_strategy || "n/a";
     document.getElementById("result-confidence").innerText = run.confidence || "n/a";
     document.getElementById("result-quality").innerText = run.quality_status || (run.schema_valid ? "schema valid" : "needs review");
@@ -238,8 +257,9 @@
     document.getElementById("generation-started").innerText = run.started_at || "Queued";
     renderSteps(run);
     if (run.status === "completed") {
-      document.getElementById("generation-title").innerText = "Reading plan generated";
-      document.getElementById("generation-note").innerText = "Use the generated plan, then let the safe source test verify pagination, access, and details against the live source.";
+      const review = run.reading_plan_review || {};
+      document.getElementById("generation-title").innerText = review.clearly_failed ? "Reading plan generation failed" : "Reading plan generated";
+      document.getElementById("generation-note").innerText = review.summary || "Use the generated plan, then let the safe source test verify pagination, access, and details against the live source.";
       finishPhases(true);
       renderResult(run);
     } else if (run.status === "failed") {

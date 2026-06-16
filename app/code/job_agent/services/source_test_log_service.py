@@ -8,12 +8,11 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-from bs4 import BeautifulSoup
-
 from job_agent.config import ROOT
 from job_agent.io.atomic import atomic_write_text
 from job_agent.io.json_store import write_json
 from job_agent.paths import display_path, output_dir, resolve_project_path
+from job_agent.services.recipes.soup import parse_markup
 
 
 class SourceTestMaterialLog:
@@ -221,7 +220,7 @@ def _sensitive_key(key: str) -> bool:
 
 
 def _visible_text(html: str) -> str:
-    soup = BeautifulSoup(html, "html.parser")
+    soup = parse_markup(html)
     for element in soup(["script", "style", "noscript"]):
         element.decompose()
     return "\n".join(line.strip() for line in soup.get_text("\n").splitlines() if line.strip())

@@ -203,6 +203,18 @@ class SourceRegistryService:
                 return source
         return None
 
+    def find_source_by_domain(self, url: str) -> SourceRegistryEntry | None:
+        parsed = _parsed_url(url)
+        domain = _registrable_domain(_normalize_host(parsed.netloc if parsed else ""))
+        if not domain:
+            return None
+        for source in self.list_sources():
+            source_parsed = _parsed_url(source.url)
+            source_domain = _registrable_domain(_normalize_host(source_parsed.netloc if source_parsed else ""))
+            if source_domain and source_domain == domain:
+                return source
+        return None
+
     def add_source(
         self,
         *,
@@ -715,6 +727,19 @@ def _parsed_url(value: str):
 
 def _normalize_host(host: str) -> str:
     return host.lower().removeprefix("www.")
+
+
+def _registrable_domain(host: str) -> str:
+    normalized = _normalize_host(host).split(":")[0].strip(".")
+    if not normalized:
+        return ""
+    parts = [part for part in normalized.split(".") if part]
+    if len(parts) <= 2:
+        return normalized
+    suffix = ".".join(parts[-2:])
+    if suffix in {"co.uk", "com.au", "com.br", "com.sg", "com.tr", "co.nz", "co.in"}:
+        return ".".join(parts[-3:])
+    return ".".join(parts[-2:])
 
 
 def _list_value(value: Any) -> list[str]:

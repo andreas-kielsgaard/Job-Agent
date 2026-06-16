@@ -23,7 +23,7 @@
     <a class="button light" href="/sources/{{ source.id }}">Back to source</a>
   </div>
   <ol class="progress-steps" id="source-test-steps">
-    <li class="active">Resolve configured source and selected recipe</li>
+    <li>Resolve configured source and selected recipe</li>
     <li>Fetch listing data</li>
     <li>Collect jobs from listing records/cards and pagination</li>
     <li>Open configured job detail pages with recipe delay</li>
@@ -117,20 +117,12 @@
     window.history.replaceState(null, "", `${window.location.pathname}${query ? `?${query}` : ""}`);
   }
 
-  function setStep(index, className) {
-    const steps = [...document.querySelectorAll("#source-test-steps li")];
-    steps.forEach((step, stepIndex) => {
-      step.className = "";
-      if (stepIndex < index) step.className = "complete";
-      if (stepIndex === index) step.className = className;
-    });
+  function clearSteps() {
+    executionUi.clearStepList("#source-test-steps");
   }
 
   function finishSteps(ok) {
-    const steps = [...document.querySelectorAll("#source-test-steps li")];
-    steps.forEach((step, index) => {
-      step.className = index === steps.length - 1 ? (ok ? "complete" : "failed") : "complete";
-    });
+    executionUi.finishStepList("#source-test-steps", ok);
   }
 
   function startRunTimer() {
@@ -163,11 +155,11 @@
   }
 
   function statusClass(status) {
-    const value = text(status).toLowerCase();
-    if (["completed", "pass", "success", "observed"].includes(value)) return "complete";
-    if (["running", "warning", "empty", "skipped", "not_expected"].includes(value)) return "active";
-    if (["failed", "fail", "failing"].includes(value)) return "failed";
-    return "";
+    return executionUi.statusClass(status);
+  }
+
+  function isOngoingStatus(status) {
+    return text(status).toLowerCase() === "running";
   }
 
   function sourceTestPassed(data) {
@@ -187,10 +179,17 @@
   function appendLiveEvent(event) {
     const list = document.getElementById("source-test-live-log");
     const item = document.createElement("li");
-    item.className = statusClass(event.status);
+    const eventStatusClass = statusClass(event.status);
+    const eventIsOngoing = isOngoingStatus(event.status);
+    executionUi.clearRunning(list);
+    item.className = executionUi.stepClasses(event.status, { running: eventIsOngoing });
     item.innerHTML = `<strong>${escapeHtml(event.phase)}</strong><div>${escapeHtml(event.detail)}</div>`;
     list.appendChild(item);
-    setStep(stepIndexForEvent(event), statusClass(event.status) === "failed" ? "failed" : "active");
+    executionUi.setStepList("#source-test-steps", {
+      activeIndex: stepIndexForEvent(event),
+      state: eventStatusClass === "failed" ? "failed" : (eventStatusClass === "complete" ? "complete" : "active"),
+      running: eventIsOngoing,
+    });
     updateSourceTestWorkStatus({
       status: "running",
       stage: event.phase || "Testing source",
@@ -200,6 +199,7 @@
   }
 
   function resetSourceTestView() {
+    clearSteps();
     document.getElementById("source-test-start-actions").hidden = true;
     document.getElementById("source-test-result").hidden = true;
     document.getElementById("source-test-insight").hidden = true;
@@ -257,7 +257,7 @@
     const actionTarget = document.getElementById("source-test-insight-action");
     if (action.type === "post") {
       actionTarget.innerHTML = `
-        <form method="post" action="${escapeHtml(action.action || "")}" class="inline-form">
+        <form method="post" action="${escapeHtml(action.action || "")}" class="inline-form" data-llm-model-picker data-llm-model-title="Choose AI power for reading-plan rebuild">
           <button type="submit" class="button">${escapeHtml(action.label || "Continue")}</button>
         </form>
       `;
@@ -437,15 +437,17 @@
     try {
       updateSourceTestWorkStatus({
         status: "running",
+        is_running: true,
         stage: "Starting source test",
         message: `Testing ${sourceTestName} without saving job packages.`,
         progress_percent: 8
       });
-      setStep(0, "active");
+      executionUi.setStepList("#source-test-steps", { activeIndex: 0, state: "active", running: true });
       await new Promise(resolve => setTimeout(resolve, 200));
       startRunTimer();
       const data = await runStreamingSourceTest();
       const passed = sourceTestPassed(data);
+      executionUi.clearRunning("#source-test-live-log");
       finishSteps(passed);
       title.innerText = passed ? "Source test completed" : "Source test needs review";
       stopRunTimer(passed ? "Run completed. The trace below shows the recipe steps, pagination fetches, detail-page attempts, and listing index result." : "Run finished with issues. Review the trace, insight, and warnings below.");
@@ -453,6 +455,7 @@
       renderFindings(data);
       clearSourceTestWorkStatus();
     } catch (error) {
+      executionUi.clearRunning("#source-test-live-log");
       finishSteps(false);
       title.innerText = "Source test failed";
       stopRunTimer("The source test could not be completed.");
@@ -478,6 +481,7 @@
         title: `Testing ${sourceTestName}`,
         href: sourceTestHref,
         started_at_ms: Date.now(),
+        is_running: updates.status === "running",
         ...updates
       }
     ];
@@ -526,7 +530,7 @@
     document.getElementById("source-test-running-note").innerText =
       "Run the selected reading plan end to end without saving job packages. Previous source-test results are not rerun unless you start a new test.";
     document.getElementById("source-test-start-actions").hidden = false;
-    setStep(0, "active");
+    clearSteps();
   }
 
   async function runStreamingSourceTest() {

@@ -1,11 +1,18 @@
 from __future__ import annotations
 
+import os
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
+from tests.helpers import EURSAP_SOURCE, seed_eursap_source, seed_source_registry
+
+from job_agent.models import Job
+from job_agent.services.execution_source_service import ExecutionSourceService
+from job_agent.services.source_execution_readiness_service import SourceExecutionReadinessService
+from job_agent.services.source_listing_index_store import SourceListingIndexStore
 from job_agent.services.source_test_service import SourceTestResult
 from job_agent.web.workflows import AppWorkflowHandler
-from tests.helpers import EURSAP_SOURCE, seed_source_registry
 
 
 def test_app_workflow_map_connects_core_handlers(project_root: Path) -> None:
@@ -53,22 +60,109 @@ def test_source_workflow_overview_does_not_treat_registry_enabled_as_daily_run(p
     assert card["status"]["automation_label"] == "Not included"
 
 
-def test_source_workflow_overview_uses_saved_state_only(monkeypatch, project_root: Path) -> None:
+def test_source_workflow_overview_uses_current_readiness_for_run_eligibility(project_root: Path) -> None:
+    seed_eursap_source(project_root)
+    handler = AppWorkflowHandler(project_root)
+    source = handler.source.require_source("eursap-jobs")
+    ExecutionSourceService(project_root).create_or_update_recipe_source(source, enabled=True)
+    SourceExecutionReadinessService(project_root).save_from_source_test(
+        SourceTestResult(
+            source_id="eursap-jobs",
+            source_name="Eursap Jobs",
+            source_type="recipe_html",
+            source_enabled=True,
+            status="success",
+            job_count=1,
+        )
+    )
+    SourceListingIndexStore(project_root).record_index(
+        source_id="eursap-jobs",
+        source_name="Eursap Jobs",
+        jobs=[
+            Job(
+                title="SAP Basis Consultant",
+                source="Eursap Jobs",
+                source_id="eursap-jobs",
+                url="https://eursap.eu/jobs/sap-basis",
+            )
+        ],
+    )
+    recipe_path = project_root / "sources" / "recipes" / "experimental" / "eursap-jobs.yaml"
+    future_timestamp = datetime.now(UTC).timestamp() + 60
+    os.utime(recipe_path, (future_timestamp, future_timestamp))
+
+    overview = handler.source.overview_context()
+
+    card = next(card for card in overview["source_cards"] if card["source"].id == "eursap-jobs")
+    assert overview["daily_run_enabled_count"] == 1
+    assert overview["daily_run_eligible_count"] == 0
+    assert overview["daily_run_skipped_count"] == 1
+    assert overview["stale_recipe_source_count"] == 1
+    assert overview["auto_setup_all"]["stale_refresh_count"] == 1
+    assert overview["auto_setup_all"]["learning_count"] == 0
+    assert overview["auto_setup_all"]["can_start"] is True
+    assert card["lifecycle"]["state"] == "setup"
+    assert card["run_eligibility"]["label"] == "Will be skipped"
+    assert card["run_eligibility"]["title"] == "Configured but blocked"
+    assert card["run_eligibility"]["stale_recipe_source_test"] is True
+    assert "Reading plan changed since the saved source test" in card["run_eligibility"]["blockers"][0]
+    assert card["auto_setup"]["label"] == "Refresh source test"
+    assert card["auto_setup"]["can_start"] is True
+    assert card["auto_setup"]["requires_llm"] is False
+    assert card["auto_setup"]["stale_recipe_source_test"] is True
+
+
+def test_source_workflow_excludes_setup_complete_disabled_source_from_prepare_all(project_root: Path) -> None:
+    handler = AppWorkflowHandler(project_root)
+    seed_eursap_source(project_root)
+    source = handler.source.require_source("eursap-jobs")
+    ExecutionSourceService(project_root).create_or_update_recipe_source(source, enabled=False)
+    SourceExecutionReadinessService(project_root).save_from_source_test(
+        SourceTestResult(
+            source_id=source.id,
+            source_name=source.name,
+            source_type="recipe_html",
+            source_enabled=False,
+            forced_disabled=True,
+            status="success",
+            job_count=1,
+        )
+    )
+    SourceListingIndexStore(project_root).record_index(
+        source_id=source.id,
+        source_name=source.name,
+        jobs=[
+            Job(
+                title="SAP Basis Consultant",
+                source=source.name,
+                source_id=source.id,
+                url="https://eursap.eu/jobs/sap-basis",
+            )
+        ],
+    )
+
+    overview = handler.source.overview_context()
+    card = next(card for card in overview["source_cards"] if card["source"].id == source.id)
+
+    assert card["lifecycle"]["state"] == "setup"
+    assert card["auto_setup"]["setup_complete"] is True
+    assert card["auto_setup"]["label"] == "Setup complete"
+    assert card["auto_setup"]["can_start"] is False
+    assert overview["auto_setup_all"]["can_start"] is False
+
+
+def test_source_workflow_overview_avoids_detail_building(monkeypatch, project_root: Path) -> None:
     handler = AppWorkflowHandler(project_root)
     source = handler.source.add_source(name="Example Jobs", url="https://example.com/jobs")
 
     def fail(*_args, **_kwargs):
-        raise AssertionError("The sources overview should only read saved source state.")
+        raise AssertionError("The sources overview should not build full source-detail state.")
 
     monkeypatch.setattr("job_agent.web.source_workflow.SourceWorkflowHandler.build", fail)
     monkeypatch.setattr("job_agent.web.source_workflow.RecipeArtifactService.list_artifacts_for_source", fail)
     monkeypatch.setattr("job_agent.web.source_workflow.RecipeGenerationStatusService.build_for_source", fail)
-    monkeypatch.setattr("job_agent.web.source_workflow.RecipeCandidateStore.list_candidates", fail)
-    monkeypatch.setattr("job_agent.web.source_workflow.SourceExecutionReadinessService.evaluate", fail)
     monkeypatch.setattr("job_agent.web.source_workflow.SourceSessionService.status_for_source", fail)
     monkeypatch.setattr("job_agent.web.source_workflow.explain_recipe", fail)
-    monkeypatch.setattr("job_agent.services.execution_source_service.ExecutionSourceService.list_sources", fail)
-    monkeypatch.setattr("job_agent.services.source_registry_service.SourceRegistryService.list_sources", fail)
     package_scan_count = 0
 
     def list_saved_packages_once(*_args, **_kwargs):
@@ -85,7 +179,7 @@ def test_source_workflow_overview_uses_saved_state_only(monkeypatch, project_roo
     source_cards = [card for card in overview["source_cards"] if card["source"].id == source.id]
     assert source_cards
     assert source_cards[0]["status"]["badge"] == "Needs setup"
-    assert package_scan_count == 1
+    assert package_scan_count >= 1
 
 
 def test_source_test_pagination_warning_offers_reading_plan_rebuild(project_root: Path) -> None:
@@ -134,6 +228,8 @@ def test_source_test_pagination_warning_offers_reading_plan_rebuild(project_root
     assert insight["generation_clues"]["pagination_warning"]
     assert insight["generation_clues"]["pagination_duplicate_page_count"] == 1
     assert insight["generation_clues"]["interactive_pagination_control_count"] == 7
+    assert insight["ai_oversight"]["mode"] == "ai_review_available"
+    assert insight["generation_clues"]["ai_oversight"]["bundle_failures"] is False
 
 
 def test_source_test_incomplete_run_is_not_reported_as_passed(project_root: Path) -> None:
@@ -151,6 +247,42 @@ def test_source_test_incomplete_run_is_not_reported_as_passed(project_root: Path
 
     assert insight["title"] == "Source test could not complete"
     assert insight["action"]["label"] == "Run source test"
+    assert insight["ai_oversight"]["escalation_level"] == 1
+
+
+def test_source_test_missing_playwright_is_dependency_issue_not_rebuild(project_root: Path) -> None:
+    handler = AppWorkflowHandler(project_root).source
+    source = SimpleNamespace(id="xing-jobs")
+    result = SourceTestResult(
+        source_id="xing-jobs",
+        source_name="XING Jobs",
+        status="warning",
+        job_count=19,
+        warning_count=1,
+        warnings=["XING Jobs: Browser-click pagination requires Playwright: No module named 'playwright'"],
+        pagination_strategy="browser_click",
+        pagination_fetch_count=0,
+        pagination_unique_jobs_from_fetched_pages=0,
+        capability_checks=[
+            {
+                "capability": "pagination_strategy",
+                "status": "fail",
+                "detail": "Recipe declares browser_click pagination, but no later page was proof-fetched.",
+            },
+            {
+                "capability": "browser_click_pagination",
+                "status": "fail",
+                "detail": "Browser-click pagination requires a click selector and a proof click.",
+            },
+        ],
+    )
+
+    insight = handler.source_test_insight(source, result=result)
+
+    assert insight["title"] == "Browser support required"
+    assert insight["action"]["label"] == "Run source test"
+    assert "rebuild-from-test" not in str(insight["action"])
+    assert insight["generation_clues"]["ai_oversight"]["escalation_level"] == 2
 
 
 def test_source_test_passes_when_loop_warning_has_no_duplicate_postings(project_root: Path) -> None:

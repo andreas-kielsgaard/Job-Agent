@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from dataclasses import dataclass
 from urllib.parse import parse_qsl, urldefrag, urlencode, urljoin, urlparse, urlunparse
 
 from bs4 import BeautifulSoup, Tag
@@ -13,6 +14,19 @@ from job_agent.services.recipes.models import (
     PaginationLink,
     SelectorValue,
 )
+from job_agent.services.recipes.soup import is_stable_css_class, parse_markup
+
+
+@dataclass(frozen=True)
+class ListingExpansionDiscovery:
+    links: list[PaginationLink]
+    selector: str = ""
+
+
+@dataclass(frozen=True)
+class FeedDiscovery:
+    links: list[PaginationLink]
+    selector: str = ""
 
 
 def find_pagination_links(html: str, base_url: str, recipe: JobBoardRecipe) -> list[PaginationLink]:
@@ -75,6 +89,75 @@ def discover_pagination_links(html: str, base_url: str) -> list[PaginationLink]:
     return links
 
 
+def discover_listing_expansion(html: str, base_url: str) -> ListingExpansionDiscovery:
+    matches: list[Tag] = []
+    links: list[PaginationLink] = []
+    seen_urls: set[str] = set()
+    for soup in _selectable_soups(html):
+        for match in soup.find_all("a", href=True):
+            label = match.get_text(" ", strip=True)
+            href = str(match.get("href", "")).strip()
+            haystack = " ".join(
+                [
+                    label,
+                    href,
+                    " ".join(match.get("class", [])),
+                    str(match.get("rel") or ""),
+                    str(match.get("aria-label") or ""),
+                    _ancestor_class_text(match),
+                ]
+            ).lower()
+            if not _looks_like_listing_expansion(label, href, haystack):
+                continue
+            url = _pagination_url_from_href(href, base_url)
+            if url in seen_urls:
+                continue
+            seen_urls.add(url)
+            matches.append(match)
+            links.append(PaginationLink(label=label or url, url=url, is_next=False))
+    return ListingExpansionDiscovery(links=links, selector=_listing_expansion_selector(matches))
+
+
+def discover_listing_expansion_links(html: str, base_url: str) -> list[PaginationLink]:
+    return discover_listing_expansion(html, base_url).links
+
+
+def discover_feed_links(html: str, base_url: str) -> FeedDiscovery:
+    matches: list[Tag] = []
+    links: list[PaginationLink] = []
+    seen_urls: set[str] = set()
+    base_host = urlparse(base_url).netloc.lower()
+    for soup in _selectable_soups(html):
+        for match in soup.find_all(["a", "link"], href=True):
+            href = str(match.get("href") or "").strip()
+            label = match.get_text(" ", strip=True) or str(match.get("title") or match.get("aria-label") or "")
+            haystack = " ".join(
+                [
+                    label,
+                    href,
+                    " ".join(match.get("class", [])),
+                    str(match.get("rel") or ""),
+                    str(match.get("type") or ""),
+                    str(match.get("aria-label") or ""),
+                ]
+            ).lower()
+            if not _looks_like_feed_link(href, haystack):
+                continue
+            url = urljoin(base_url, href)
+            parsed = urlparse(url)
+            if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+                continue
+            if base_host and parsed.netloc.lower() != base_host:
+                continue
+            url_key = _pagination_url_key(url)
+            if url_key in seen_urls:
+                continue
+            seen_urls.add(url_key)
+            matches.append(match)
+            links.append(PaginationLink(label=label or url, url=url, is_next=False))
+    return FeedDiscovery(links=links, selector=_feed_selector(matches))
+
+
 def discover_interactive_pagination_controls(html: str) -> list[str]:
     controls: list[str] = []
     seen: set[str] = set()
@@ -108,26 +191,71 @@ def discover_interactive_pagination_controls(html: str) -> list[str]:
 
 
 def discover_visible_total_job_count(html: str) -> int:
-    text = " ".join(BeautifulSoup(html, "html.parser").get_text(" ", strip=True).split())
+    soup = parse_markup(html)
+    for element in soup.find_all(["script", "style", "noscript", "template"]):
+        element.decompose()
+    scoped_texts = [
+        " ".join(element.get_text(" ", strip=True).split())
+        for selector in ("main", "[role='main']")
+        for element in soup.select(selector)
+    ]
+    for text in scoped_texts:
+        total = _discover_visible_total_job_count_from_text(text)
+        if total:
+            return total
+    for element in soup.find_all(["footer", "header", "nav", "aside"]):
+        element.decompose()
+    text = " ".join(soup.get_text(" ", strip=True).split())
+    return _discover_visible_total_job_count_from_text(text)
+
+
+def _discover_visible_total_job_count_from_text(text: str) -> int:
     if not text:
         return 0
     count = r"([\d][\d,.]{0,8})"
-    patterns = [
-        rf"\b{count}\s+(?:open\s+)?(?:jobs?|postings?|positions?|projects?|results?|vacancies)\b",
-        rf"\b(?:jobs?|postings?|positions?|projects?|results?|vacancies)\s*(?:found|available|listed|matching|match)?\s*[:\-]?\s*{count}\b",
-        rf"\bshowing\s+{count}\s*(?:-|to|\u2013|\u2014)\s*{count}\s+of\s+{count}\b",
+    result_word = (
+        r"(?:jobs?(?!\s*(?:@|seekers?\b|by\s+email\b))|postings?|positions?|projects?|"
+        r"(?:search\s+)?results?|vacancies)"
+    )
+    pattern_groups = [
+        [
+            rf"\bshowing\s+{count}\s*(?:-|to|\u2013|\u2014)\s*{count}\s+of\s+{count}\s+{result_word}\b",
+        ],
+        [
+            rf"\b{count}\s+(?:open|live|matching|available|listed)?\s*{result_word}\b",
+            rf"\b{count}\s+{result_word}\s*(?:found|available|listed|matching|matched)\b",
+            rf"\b{result_word}\s*(?:found|available|listed|matching|matched|total)?\s*[:\-]?\s*{count}\b",
+        ],
     ]
-    counts: list[int] = []
-    for pattern in patterns:
-        for match in re.finditer(pattern, text, flags=re.IGNORECASE):
-            value = _parse_visible_count(match.groups()[-1])
-            if 0 < value < 10000:
-                counts.append(value)
-    return max(counts) if counts else 0
+    for patterns in pattern_groups:
+        counts: list[int] = []
+        for pattern in patterns:
+            for match in re.finditer(pattern, text, flags=re.IGNORECASE):
+                if not _visible_total_match_allowed(text, match):
+                    continue
+                value = _parse_visible_count(match.groups()[-1])
+                if 0 < value < 10000:
+                    counts.append(value)
+        if counts:
+            return max(counts)
+    return 0
+
+
+def _visible_total_match_allowed(text: str, match: re.Match[str]) -> bool:
+    start, end = match.span()
+    nearby = text[max(0, start - 48) : min(len(text), end + 48)].lower()
+    matched_and_after = (text[start:end] + text[end : min(len(text), end + 24)]).lower()
+    if "@" in text[start : min(len(text), end + 32)]:
+        return False
+    if re.search(r"\bjobs?\s+(?:seekers?|by\s+email)\b", matched_and_after):
+        return False
+    contact_terms = ("phone", "tel", "telephone", "call", "contact", "address", "email")
+    result_terms = ("search result", "results found", "jobs found", "showing")
+    return not (any(term in nearby for term in contact_terms) and not any(term in nearby for term in result_terms))
 
 
 def discover_application_entries(html: str, base_url: str) -> list[ApplicationEntry]:
-    soup = BeautifulSoup(html, "html.parser")
+    soup = parse_markup(html)
     entries: list[ApplicationEntry] = []
     seen: set[tuple[str, str]] = set()
     for element in soup.find_all(["a", "button", "input"]):
@@ -158,7 +286,7 @@ def discover_application_entries(html: str, base_url: str) -> list[ApplicationEn
 
 def _login_gate_detected(html: str) -> bool:
     lowered = html.lower()
-    soup = BeautifulSoup(html, "html.parser")
+    soup = parse_markup(html)
     visible_text = soup.get_text(" ", strip=True).lower()
     gate_phrases = [
         "sign up free to see more results",
@@ -231,15 +359,15 @@ def _parse_visible_count(value: str) -> int:
 
 
 def _selectable_soups(html: str) -> list[BeautifulSoup]:
-    soups = [BeautifulSoup(html, "html.parser")]
+    soups = [parse_markup(html)]
     for fragment in _embedded_html_fragments(html):
-        soups.append(BeautifulSoup(fragment, "html.parser"))
+        soups.append(parse_markup(fragment))
     return soups
 
 
 def _embedded_html_fragments(html: str) -> list[str]:
     fragments: list[str] = []
-    soup = BeautifulSoup(html, "html.parser")
+    soup = parse_markup(html)
     for script in soup.find_all("script", type=lambda value: value and "json" in value):
         raw = script.string or script.get_text("", strip=True)
         if not raw or "<a" not in raw:
@@ -268,6 +396,8 @@ def _strings_containing_links(raw: str) -> list[str]:
 
 def _looks_like_pagination(label: str, href: str, haystack: str) -> bool:
     if re.fullmatch(r"\d+", label.strip()):
+        return _has_pagination_context(href, haystack)
+    if _looks_like_listing_expansion(label, href, haystack):
         return True
     if _looks_like_listing_expansion_link(label, href):
         return True
@@ -279,6 +409,148 @@ def _looks_like_listing_expansion_link(label: str, href: str) -> bool:
     if not normalized or href.lower().split("?", 1)[0].endswith(".rss"):
         return False
     return bool(re.search(r"\bview all\s+\d+.+\bjobs?\b", normalized))
+
+
+def _has_pagination_context(href: str, haystack: str) -> bool:
+    value = f"{href} {haystack}".lower()
+    return any(token in value for token in ["page-numbers", "pagenr=", "page=", "pagination", "paginator", "/page/"])
+
+
+def _looks_like_listing_expansion(label: str, href: str, haystack: str) -> bool:
+    normalized_label = re.sub(r"\s+", " ", label.lower()).strip()
+    normalized_href = href.lower().strip()
+    if not normalized_label or not normalized_href:
+        return False
+    if normalized_href.startswith(("#", "javascript:", "mailto:", "tel:")):
+        return False
+    if not _contains_listing_term(f"{normalized_label} {normalized_href}"):
+        return False
+    count_with_term = bool(
+        re.search(
+            r"\b\d{1,5}\b[^\n\r]{0,80}\b"
+            r"(?:jobs?|postings?|positions?|roles?|vacanc(?:y|ies)|projects?|openings?|opportunities)\b",
+            normalized_label,
+        )
+    )
+    expansion_verb = bool(
+        re.search(r"\b(?:view|see|show|browse|find|explore|load)\s+(?:all|more|\d{1,5})\b", normalized_label)
+    )
+    all_count_label = bool(re.search(r"\ball\s+\d{1,5}\b", normalized_label))
+    category_hint = any(token in haystack for token in ["view-all", "show-all", "all-jobs", "/categor"])
+    return bool((count_with_term and (expansion_verb or all_count_label or category_hint)) or (expansion_verb and category_hint))
+
+
+def _looks_like_feed_link(href: str, haystack: str) -> bool:
+    normalized_href = href.lower().strip()
+    if not normalized_href or normalized_href.startswith(("#", "javascript:", "mailto:", "tel:")):
+        return False
+    path = urlparse(normalized_href).path.lower()
+    if path.endswith((".rss", ".atom")):
+        return True
+    if path.endswith(".xml") and any(token in haystack for token in ["rss", "atom", "feed", "jobs", "postings"]):
+        return True
+    return "application/rss+xml" in haystack or "application/atom+xml" in haystack
+
+
+def _contains_listing_term(value: str) -> bool:
+    return bool(
+        re.search(
+            r"\b(?:jobs?|postings?|positions?|roles?|vacanc(?:y|ies)|projects?|openings?|opportunities)\b",
+            value,
+        )
+    )
+
+
+def _ancestor_class_text(match: Tag) -> str:
+    parts: list[str] = []
+    current = match.parent
+    depth = 0
+    while isinstance(current, Tag) and depth < 3:
+        parts.extend(str(item) for item in current.get("class", []))
+        if current.get("id"):
+            parts.append(str(current.get("id")))
+        current = current.parent
+        depth += 1
+    return " ".join(parts)
+
+
+def _listing_expansion_selector(matches: list[Tag]) -> str:
+    if not matches:
+        return ""
+    parent_selector = _common_parent_link_selector(matches)
+    href_selector = _common_href_selector(matches)
+    if parent_selector and href_selector:
+        return f"{parent_selector} {href_selector}"
+    if parent_selector:
+        return f"{parent_selector} a[href]"
+    return href_selector or "a[href]"
+
+
+def _feed_selector(matches: list[Tag]) -> str:
+    if not matches:
+        return ""
+    names = {str(match.name or "") for match in matches}
+    hrefs = [str(match.get("href") or "").lower().strip() for match in matches]
+    suffixes = [
+        suffix for suffix in [".rss", ".atom", ".xml"] if hrefs and all(urlparse(href).path.endswith(suffix) for href in hrefs)
+    ]
+    suffix_selector = f'[href$="{suffixes[0]}"]' if suffixes else "[href]"
+    if names == {"a"}:
+        return f"a{suffix_selector}"
+    if names == {"link"}:
+        if all("rss" in str(match.get("type") or "").lower() for match in matches):
+            return f'link[type*="rss"]{suffix_selector}'
+        if all("atom" in str(match.get("type") or "").lower() for match in matches):
+            return f'link[type*="atom"]{suffix_selector}'
+        return f"link{suffix_selector}"
+    if "a" in names:
+        return f"a{suffix_selector}"
+    return f"{sorted(names)[0]}{suffix_selector}"
+
+
+def _common_parent_link_selector(matches: list[Tag]) -> str:
+    parents = [match.parent for match in matches if isinstance(match.parent, Tag)]
+    if not parents:
+        return ""
+    first_name = str(parents[0].name or "")
+    if not first_name or any(str(parent.name or "") != first_name for parent in parents):
+        return ""
+    common_classes = set(_stable_classes(parents[0]))
+    for parent in parents[1:]:
+        common_classes.intersection_update(_stable_classes(parent))
+    if common_classes:
+        return f"{first_name}.{sorted(common_classes)[0]}"
+    return first_name if len(matches) >= 2 and first_name in {"li", "tr", "article"} else ""
+
+
+def _common_href_selector(matches: list[Tag]) -> str:
+    hrefs = [str(match.get("href") or "").strip() for match in matches]
+    path_segments = [_first_stable_path_segment(href) for href in hrefs]
+    common_segments = {segment for segment in path_segments if segment}
+    if len(common_segments) == 1:
+        return f'a[href*="/{common_segments.pop()}/"]'
+    common_classes = set(_stable_classes(matches[0]))
+    for match in matches[1:]:
+        common_classes.intersection_update(_stable_classes(match))
+    if common_classes:
+        return f'a.{sorted(common_classes)[0]}[href]'
+    return "a[href]"
+
+
+def _first_stable_path_segment(href: str) -> str:
+    path = urlparse(href).path.lower()
+    for segment in [item for item in path.split("/") if item]:
+        if segment not in {"en", "gb", "uk", "us", "de", "fr", "nl", "remote"}:
+            return segment
+    return ""
+
+
+def _stable_classes(tag: Tag) -> list[str]:
+    return [
+        str(item).strip()
+        for item in tag.get("class", [])
+        if is_stable_css_class(str(item))
+    ]
 
 
 def _looks_like_next_link(label: str, match: Tag) -> bool:

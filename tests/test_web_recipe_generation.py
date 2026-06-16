@@ -73,7 +73,6 @@ def test_generate_candidate_plain_suggestion_saves_pending_candidate(
     assert run["candidate_approval_url"].endswith("/approve")
     assert run["approval_recipe_path"] == "sources/recipes/experimental/eursap-jobs.yaml"
     assert run["compatibility_url"]
-    assert run["recipe_review_url"]
     assert (project_root / run["generated_recipe_path"]).exists()
     candidates = RecipeCandidateStore(project_root).list_candidates()
     assert len(candidates) == 1
@@ -82,7 +81,6 @@ def test_generate_candidate_plain_suggestion_saves_pending_candidate(
     assert candidate.refinement_used is False
     page = client.get(response.headers["location"])
     assert "Use plan and run source test" in page.text
-    assert "Open local calibration preview" in page.text
     assert "safe source test is the next verification step" in page.text
 
 
@@ -113,6 +111,74 @@ def test_generate_candidate_with_refinement_saves_attempt_history(
     assert candidate.attempt_count == 1
     assert candidate.quality_status == "good"
     assert candidate.extracted_job_count == 2
+
+
+def test_generation_page_offers_source_test_actions_for_selected_source_plan(
+    monkeypatch: pytest.MonkeyPatch, client: TestClient, project_root: Path
+) -> None:
+    artifact = _write_artifact(project_root)
+
+    monkeypatch.setattr(
+        "job_agent.services.recipe_generation_run_service.suggest_recipe_with_refinement",
+        lambda *args, **kwargs: _poor_refinement(artifact),
+    )
+
+    response = client.post(
+        "/sources/eursap-jobs/recipe-candidates/generate",
+        data={"artifact_dir": artifact.relative_to(project_root).as_posix(), "refine": "1", "max_attempts": "1"},
+        follow_redirects=False,
+    )
+
+    run = _wait_for_generation_run(client, response.headers["location"])
+    page = client.get(response.headers["location"])
+
+    assert run["status"] == "completed"
+    assert run["schema_valid"] is True
+    assert run["quality_status"] == "poor"
+    assert run["generated_recipe_path"] == ""
+    assert any(
+        action["label"] == "Run source test for selected plan"
+        for action in run["reading_plan_review"]["actions"]
+    )
+    assert any(
+        field["name"] == "allow_quality_warnings" and field["value"] == "1"
+        for action in run["reading_plan_review"]["actions"]
+        for field in action.get("fields", [])
+    )
+    assert "Proceed with source test" in page.text
+    assert "Run source test for selected plan" in page.text
+
+
+def test_generation_page_blocks_clearly_failed_attempt_from_source_testing(
+    monkeypatch: pytest.MonkeyPatch, client: TestClient, project_root: Path
+) -> None:
+    artifact = _write_artifact(project_root)
+
+    monkeypatch.setattr(
+        "job_agent.services.recipe_generation_run_service.suggest_recipe_from_artifact",
+        lambda *args, **kwargs: _failed_suggestion(artifact),
+    )
+
+    response = client.post(
+        "/sources/eursap-jobs/recipe-candidates/generate",
+        data={"artifact_dir": artifact.relative_to(project_root).as_posix()},
+        follow_redirects=False,
+    )
+
+    run = _wait_for_generation_run(client, response.headers["location"])
+    page = client.get(response.headers["location"])
+    labels = [action["label"] for action in run["reading_plan_review"]["actions"]]
+
+    assert run["status"] == "completed"
+    assert run["schema_valid"] is False
+    assert run["reading_plan_review"]["clearly_failed"] is True
+    assert run["reading_plan_review"]["title"] == "Generation failed to produce a testable plan"
+    assert "Use plan and run source test" not in labels
+    assert "Proceed with source test" not in labels
+    assert "Run source test for selected plan" not in labels
+    assert "Proceed with source test" not in page.text
+    assert "Run source test for selected plan" not in page.text
+    assert "Reading plan generation failed" in page.text
 
 
 def test_generate_candidate_validates_artifact_path(client: TestClient) -> None:
@@ -148,6 +214,44 @@ def test_generate_candidate_handles_llm_unavailable_as_redirect_warning(
     assert run["status"] == "failed"
     assert "ANTHROPIC_API_KEY" in run["error"]
     assert not RecipeCandidateStore(project_root).list_candidates()
+
+
+def test_failed_generation_page_try_again_retries_same_run_type(
+    monkeypatch: pytest.MonkeyPatch, client: TestClient, project_root: Path
+) -> None:
+    artifact = _write_artifact(project_root)
+
+    def unavailable(*args, **kwargs):
+        raise RuntimeError("temporary failure")
+
+    monkeypatch.setattr("job_agent.services.recipe_generation_run_service.suggest_recipe_from_artifact", unavailable)
+
+    response = client.post(
+        "/sources/eursap-jobs/recipe-candidates/generate",
+        data={"artifact_dir": artifact.relative_to(project_root).as_posix()},
+        follow_redirects=False,
+    )
+    failed_location = response.headers["location"]
+    failed_run = _wait_for_generation_run(client, failed_location)
+    assert failed_run["status"] == "failed"
+
+    page = client.get(failed_location)
+    assert f'action="{failed_location}/retry"' in page.text
+    assert 'href="/sources/eursap-jobs#recipe-generation">Try again' not in page.text
+
+    monkeypatch.setattr(
+        "job_agent.services.recipe_generation_run_service.suggest_recipe_from_artifact",
+        lambda *args, **kwargs: _suggestion(artifact),
+    )
+
+    retry_response = client.post(f"{failed_location}/retry", follow_redirects=False)
+
+    assert retry_response.status_code == 303
+    assert retry_response.headers["location"].startswith("/sources/eursap-jobs/recipe-generation/")
+    assert retry_response.headers["location"] != failed_location
+    retried_run = _wait_for_generation_run(client, retry_response.headers["location"])
+    assert retried_run["status"] == "completed"
+    assert retried_run["artifact_dir"] == failed_run["artifact_dir"]
 
 
 def test_learn_source_uses_auto_capture_by_default(
@@ -256,24 +360,82 @@ def test_generation_service_uses_rendered_capture_for_duplicate_pagination_insig
     assert captured["rendered"] is True
 
 
-def test_generated_draft_recipe_is_available_in_follow_up_dropdowns(client: TestClient, project_root: Path) -> None:
+def test_generation_retry_repeats_live_capture_settings(
+    monkeypatch: pytest.MonkeyPatch, project_root: Path
+) -> None:
+    source = SourceRegistryService(project_root).add_source(name="Example Jobs", url="https://example.com/jobs")
+    artifact = _write_artifact(project_root)
+    captures: list[dict[str, object]] = []
+
+    def fake_capture(url, recipe_path, rendered, root, max_candidates, capture_detail, **kwargs):
+        captures.append(
+            {
+                "url": url,
+                "rendered": rendered,
+                "max_candidates": max_candidates,
+                "capture_detail": capture_detail,
+            }
+        )
+        if len(captures) == 1:
+            raise RuntimeError("capture failed")
+        return SimpleNamespace(
+            artifact_dir=artifact,
+            warnings=[],
+            candidate_count=1,
+            recipe_extracted_count=0,
+            detail_sample_url="",
+        )
+
+    monkeypatch.setattr("job_agent.services.recipe_generation_run_service.capture_recipe_calibration", fake_capture)
+    monkeypatch.setattr(
+        "job_agent.services.recipe_generation_run_service.suggest_recipe_with_refinement",
+        lambda artifact_path, **kwargs: _refinement(artifact_path),
+    )
+
+    service = RecipeGenerationRunService(project_root)
+    failed = service.start_from_source_capture(
+        source.id,
+        rendered=False,
+        capture_detail=False,
+        max_candidates=17,
+        refine=True,
+        max_attempts=5,
+        source_test_insight={"insight_title": "Paginated page access failed"},
+        run_async=False,
+    )
+    retried = service.retry(source.id, failed["run_id"], run_async=False)
+
+    assert failed["status"] == "failed"
+    assert retried["status"] == "completed"
+    assert retried["source_test_insight"]["insight_title"] == "Paginated page access failed"
+    assert captures == [
+        {
+            "url": "https://example.com/jobs",
+            "rendered": False,
+            "max_candidates": 17,
+            "capture_detail": False,
+        },
+        {
+            "url": "https://example.com/jobs",
+            "rendered": False,
+            "max_candidates": 17,
+            "capture_detail": False,
+        },
+    ]
+
+
+def test_generated_draft_recipe_is_available_in_compatibility_dropdown(client: TestClient, project_root: Path) -> None:
     recipe_path = project_root / "output" / "recipe-generation-runs" / "example-run" / "suggested-recipe.yaml"
     recipe_path.parent.mkdir(parents=True, exist_ok=True)
     recipe_path.write_text(VALID_RECIPE_YAML, encoding="utf-8")
     relative = recipe_path.relative_to(project_root).as_posix()
 
-    preview_response = client.get(
-        f"/recipe-preview?recipe_path={relative}&input_path_or_url=https://eursap.eu/jobs&selected_source_id=eursap-jobs"
-    )
     compatibility_response = client.get(
         f"/compatibility?recipe_path={relative}&url=https://eursap.eu/jobs&selected_source_id=eursap-jobs"
     )
 
-    assert preview_response.status_code == 200
     assert compatibility_response.status_code == 200
-    assert "Generated draft: suggested-recipe.yaml" in preview_response.text
     assert "Generated draft: suggested-recipe.yaml" in compatibility_response.text
-    assert f'<option value="{relative}" selected>' in preview_response.text
     assert f'<option value="{relative}" selected>' in compatibility_response.text
 
 
@@ -463,4 +625,42 @@ def _refinement(artifact: Path) -> RecipeRefinementResult:
             )
         ],
         accepted=True,
+    )
+
+
+def _failed_suggestion(artifact: Path) -> RecipeSuggestionResult:
+    return RecipeSuggestionResult(
+        source_name="Eursap Jobs",
+        start_url="https://eursap.eu/jobs",
+        artifact_dir=artifact,
+        suggested_recipe_yaml="",
+        confidence="low",
+        selected_strategy="not_recommended",
+        explanation="No stable listing records were found in the captured evidence.",
+        evidence_summary="candidate selectors: none",
+        referenced_artifact_files=["summary.md", "selector-report.json", "page.html"],
+        validation_errors=["No stable repeated listing card selector was found."],
+        schema_valid=False,
+    )
+
+
+def _poor_refinement(artifact: Path) -> RecipeRefinementResult:
+    return RecipeRefinementResult(
+        final_result=_suggestion(artifact),
+        attempts=[
+            RecipeRefinementAttempt(
+                attempt_number=1,
+                suggested_recipe_yaml=VALID_RECIPE_YAML,
+                schema_valid=True,
+                validation_errors=[],
+                quality_status="poor",
+                quality_warnings=["Local quality check failed."],
+                extracted_job_count=1,
+                useful_titles=1,
+                generic_labels=0,
+                unique_urls=1,
+                average_description_length=20,
+            )
+        ],
+        accepted=False,
     )

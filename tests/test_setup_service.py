@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 import yaml
 
+from job_agent.services.connector_settings_service import ConnectorSettingsService
 from job_agent.services.setup_service import SetupService
 
 
@@ -44,6 +45,98 @@ class SetupServiceTests(unittest.TestCase):
             self.assertIn("CLAUDE_USE_BY_DEFAULT=true", env)
             with self.assertRaises(ValueError):
                 SetupService(root).save_env_settings("bad\nkey", "model", True)
+
+    def test_connector_settings_save_canva_and_draft_only_email(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            service = ConnectorSettingsService(root)
+
+            settings = service.save_from_form(
+                FakeForm(
+                    {
+                        "email_enabled": "on",
+                        "email_provider": "generic",
+                        "email_mode": "send",
+                    }
+                )
+            )
+
+            self.assertFalse(settings["canva"]["enabled"])
+            self.assertEqual(settings["canva"]["oauth_status"], "not_connected")
+            self.assertTrue(settings["email"]["enabled"])
+            self.assertEqual(settings["email"]["provider"], "generic")
+            self.assertEqual(settings["email"]["mode"], "draft_only")
+            self.assertFalse(settings["email"]["sending_enabled"])
+            self.assertIn("sending_enabled: false", (root / "connectors.yaml").read_text(encoding="utf-8"))
+
+    def test_canva_oauth_flow_builds_url_and_saves_profile_from_callback(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / ".env").write_text(
+                "CANVA_CLIENT_ID=canva-client\nCANVA_CLIENT_SECRET=canva-secret\n",
+                encoding="utf-8",
+            )
+            service = ConnectorSettingsService(root)
+
+            authorization_url = service.canva_authorization_url()
+            stored = yaml.safe_load((root / "connectors.yaml").read_text(encoding="utf-8"))
+            state = stored["canva"]["pending_oauth"]["state"]
+
+            self.assertIn("https://www.canva.com/api/oauth/authorize?", authorization_url)
+            self.assertIn("client_id=canva-client", authorization_url)
+            self.assertIn("scope=profile%3Aread+design%3Acontent%3Awrite+design%3Ameta%3Aread", authorization_url)
+            self.assertIn(f"state={state}", authorization_url)
+            self.assertNotIn(stored["canva"]["pending_oauth"]["code_verifier"], authorization_url)
+
+            class FakeResponse:
+                def __init__(self, payload):
+                    self.payload = payload
+
+                def raise_for_status(self):
+                    return None
+
+                def json(self):
+                    return self.payload
+
+            def fake_post(url, data, auth, headers, timeout):
+                self.assertEqual(url, "https://api.canva.com/rest/v1/oauth/token")
+                self.assertEqual(data["grant_type"], "authorization_code")
+                self.assertEqual(data["code"], "returned-code")
+                self.assertEqual(auth, ("canva-client", "canva-secret"))
+                self.assertEqual(timeout, 20)
+                return FakeResponse(
+                    {
+                        "access_token": "access-token",
+                        "refresh_token": "refresh-token",
+                        "token_type": "Bearer",
+                        "expires_in": 14400,
+                        "scope": "profile:read design:content:write design:meta:read",
+                    }
+                )
+
+            def fake_get(url, headers, timeout):
+                self.assertEqual(headers["Authorization"], "Bearer access-token")
+                self.assertEqual(timeout, 20)
+                if url.endswith("/users/me/profile"):
+                    return FakeResponse({"profile": {"display_name": "Canva User"}})
+                return FakeResponse({"team_user": {"user_id": "user-1", "team_id": "team-1"}})
+
+            with (
+                patch("job_agent.services.connector_settings_service.requests.post", fake_post),
+                patch("job_agent.services.connector_settings_service.requests.get", fake_get),
+            ):
+                settings = service.complete_canva_oauth("returned-code", state)
+
+            self.assertEqual(settings["canva"]["oauth_status"], "connected")
+            self.assertEqual(settings["canva"]["connected_display_name"], "Canva User")
+            self.assertEqual(settings["canva"]["connected_user_id"], "user-1")
+            self.assertNotIn("access_token", settings["canva"])
+            saved = yaml.safe_load((root / "connectors.yaml").read_text(encoding="utf-8"))
+            self.assertEqual(saved["canva"]["access_token"], "access-token")
+            self.assertEqual(saved["canva"]["pending_oauth"], {})
+
+            with self.assertRaises(ValueError):
+                service.complete_canva_oauth("returned-code", "wrong-state")
 
     def test_saves_contact_and_preferences(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -462,6 +555,37 @@ class SetupServiceTests(unittest.TestCase):
             self.assertEqual(draft["targets"], ["canonical_cv", "skills"])
             self.assertEqual(draft["sections"][0]["label"], "CV narrative")
             self.assertFalse((root / "profile" / "canonical-cv.md").exists())
+
+    def test_cv_profile_draft_passes_one_shot_model_override(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            service = SetupService(root)
+            calls: list[dict] = []
+
+            class FakeLlmService:
+                def __init__(self, root):
+                    pass
+
+                def is_configured(self):
+                    return True
+
+                def complete(self, prompt, **kwargs):
+                    calls.append(kwargs)
+                    return type(
+                        "Completion",
+                        (),
+                        {"text": '{"canonical_cv":"# Consultant\\nABAP developer"}'},
+                    )()
+
+            with patch("job_agent.services.setup_service.LlmService", FakeLlmService):
+                draft = service.draft_profile_auto_configuration_from_cv(
+                    "ABAP developer CV text",
+                    ["canonical_cv"],
+                    llm_model="claude-opus-4-8",
+                )
+
+            self.assertEqual(draft["targets"], ["canonical_cv"])
+            self.assertEqual(calls[0]["model"], "claude-opus-4-8")
 
     def test_cv_profile_draft_repairs_invalid_json_response(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

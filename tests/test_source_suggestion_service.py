@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
-from job_agent.services.source_suggestion_service import SourceSuggestionService
+from job_agent.services.source_suggestion_service import SourceSuggestion, SourceSuggestionService
 
 
 def test_source_suggestion_prompt_uses_profile_existing_sources_and_safety_rules(project_root: Path) -> None:
@@ -25,6 +25,11 @@ def test_source_suggestion_prompt_uses_profile_existing_sources_and_safety_rules
     assert "bypass captcha" in prompt
     assert "Return only strict JSON" in prompt
     assert "Prefer broad source URLs" in prompt
+    assert '"availability"' not in prompt
+    assert '"location_policy"' not in prompt
+    assert '"match_engine"' not in prompt
+    assert '"disqualified_domains"' in prompt
+    assert '"suggested_filters": ["Contract", "Role family"]' in prompt
 
 
 def test_source_suggestion_prompt_has_no_fixed_sap_language_for_empty_profile(tmp_path: Path) -> None:
@@ -64,6 +69,54 @@ def test_source_suggestion_parser_accepts_fenced_json_response(project_root: Pat
     assert suggestion.source_url == "https://example.com/jobs?keyword=SAP"
     assert suggestion.priority_label == "High"
     assert "Suggested filters: Contract, SAP ABAP" in suggestion.notes_for_source
+
+
+def test_source_suggestion_parser_filters_discontinued_and_disqualified_domains(project_root: Path) -> None:
+    response = {
+        "sources": [
+            {
+                "name": "GitHub Jobs",
+                "homepage_url": "https://jobs.github.com",
+                "recommended_listing_url": "https://jobs.github.com/positions",
+            },
+            {
+                "name": "Indeed",
+                "homepage_url": "https://www.indeed.com",
+                "recommended_listing_url": "https://www.indeed.com/jobs?q=sap",
+            },
+            {
+                "name": "Useful Board",
+                "homepage_url": "https://useful.example",
+                "recommended_listing_url": "https://useful.example/jobs",
+            },
+        ]
+    }
+
+    parsed = SourceSuggestionService(project_root).parse_response_with_disqualifications(json.dumps(response))
+
+    assert [suggestion.name for suggestion in parsed.suggestions] == ["Useful Board"]
+    assert {record.domain for record in parsed.disqualified} >= {"jobs.github.com", "indeed.com"}
+
+
+def test_source_suggestion_service_marks_domain_overlap_as_existing(project_root: Path) -> None:
+    from job_agent.services.source_registry_service import SourceRegistryService
+
+    existing = SourceRegistryService(project_root).add_source(
+        name="LinkedIn Recruiter Posts",
+        url="https://www.linkedin.com/jobs/search",
+    )
+    suggestion = SourceSuggestionService(project_root).annotate_existing(
+        [
+            SourceSuggestion(
+                name="LinkedIn Nordic Region",
+                homepage_url="https://linkedin.com",
+                recommended_listing_url="https://dk.linkedin.com/jobs",
+            )
+        ]
+    )[0]
+
+    assert suggestion.existing_source_id == existing.id
+    assert suggestion.existing_source_name == existing.name
 
 
 def test_source_suggestion_parser_repairs_invalid_json_response(
@@ -120,12 +173,13 @@ def test_source_suggestion_llm_generation_uses_gateway(monkeypatch, project_root
 
     monkeypatch.setattr("job_agent.services.source_suggestion_service.LlmService", FakeLlmService)
 
-    result = SourceSuggestionService(project_root).suggest_with_llm("EU contracts")
+    result = SourceSuggestionService(project_root).suggest_with_llm("EU contracts", llm_model="claude-opus-4-8")
 
     assert result.model == "fake-sonnet"
     assert result.suggestions[0].name == "Example SAP Jobs"
     assert calls[0]["purpose"] == "source_suggestion"
     assert calls[0]["run_id"] == "manual"
+    assert calls[0]["model"] == "claude-opus-4-8"
     assert "EU contracts" in calls[0]["prompt"]
 
 

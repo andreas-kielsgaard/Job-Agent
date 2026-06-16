@@ -51,8 +51,9 @@ class RecipeSuggestionLlmClient(Protocol):
 
 
 class LlmServiceRecipeSuggestionClient:
-    def __init__(self, root: Path = ROOT) -> None:
+    def __init__(self, root: Path = ROOT, llm_model: str = "") -> None:
         self.llm = LlmService(root)
+        self.llm_model = llm_model
 
     def suggest(self, prompt: str) -> str:
         if not self.llm.is_configured():
@@ -62,6 +63,7 @@ class LlmServiceRecipeSuggestionClient:
             max_tokens=2200,
             purpose="recipe_suggestion",
             run_id="manual",
+            model=self.llm_model,
         ).text
 
 
@@ -125,6 +127,7 @@ def suggest_recipe_from_artifact(
     source_test_insight: dict[str, Any] | None = None,
     llm_client: RecipeSuggestionLlmClient | None = None,
     root: Path = ROOT,
+    llm_model: str = "",
 ) -> RecipeSuggestionResult:
     evidence = load_recipe_suggestion_evidence(
         artifact_dir,
@@ -134,9 +137,15 @@ def suggest_recipe_from_artifact(
         source_test_insight=source_test_insight,
     )
     if no_evidence := _no_recipe_evidence_result(evidence):
-        return no_evidence
+        client = llm_client or LlmServiceRecipeSuggestionClient(root, llm_model=llm_model)
+        try:
+            raw_response = client.suggest(build_recipe_suggestion_prompt(evidence))
+        except RuntimeError as exc:
+            no_evidence.warnings.append(f"AI oversight unavailable; kept deterministic failure result: {exc}")
+            return no_evidence
+        return _suggestion_result_from_response(evidence, raw_response)
     deterministic = _deterministic_suggestion_result(evidence)
-    client = llm_client or LlmServiceRecipeSuggestionClient(root)
+    client = llm_client or LlmServiceRecipeSuggestionClient(root, llm_model=llm_model)
     prompt = build_recipe_suggestion_prompt(evidence)
     try:
         raw_response = client.suggest(prompt)
@@ -181,6 +190,7 @@ def suggest_recipe_with_refinement(
     llm_client: RecipeSuggestionLlmClient | None = None,
     max_attempts: int = 3,
     root: Path = ROOT,
+    llm_model: str = "",
 ) -> RecipeRefinementResult:
     if max_attempts <= 0:
         raise ValueError("--max-attempts must be a positive integer.")
@@ -193,17 +203,38 @@ def suggest_recipe_with_refinement(
         source_test_insight=source_test_insight,
     )
     if no_evidence := _no_recipe_evidence_result(evidence):
-        attempt = RecipeRefinementAttempt(
-            attempt_number=1,
-            suggested_recipe_yaml="",
-            schema_valid=False,
-            validation_errors=list(no_evidence.validation_errors),
-            quality_status="poor",
-            quality_warnings=list(no_evidence.warnings),
-            revision_reason="Calibration evidence did not contain a repeated job listing or detail-page sample.",
-        )
-        return RecipeRefinementResult(final_result=no_evidence, attempts=[attempt], accepted=False)
-    client = llm_client or LlmServiceRecipeSuggestionClient(root)
+        attempts = [
+            RecipeRefinementAttempt(
+                attempt_number=1,
+                suggested_recipe_yaml="",
+                schema_valid=False,
+                validation_errors=list(no_evidence.validation_errors),
+                quality_status="poor",
+                quality_warnings=list(no_evidence.warnings),
+                revision_reason="Calibration evidence did not contain a repeated job listing or detail-page sample.",
+            )
+        ]
+        client = llm_client or LlmServiceRecipeSuggestionClient(root, llm_model=llm_model)
+        final_result = no_evidence
+        prompt = build_recipe_suggestion_prompt(evidence)
+        for attempt_number in range(2, max_attempts + 1):
+            try:
+                raw_response = client.suggest(prompt)
+            except RuntimeError as exc:
+                no_evidence.warnings.append(f"AI oversight unavailable; kept deterministic failure result: {exc}")
+                attempts[0].quality_warnings = list(no_evidence.warnings)
+                return RecipeRefinementResult(final_result=no_evidence, attempts=attempts, accepted=False)
+            result = _suggestion_result_from_response(evidence, raw_response)
+            final_result = result
+            attempt = evaluate_suggestion_against_artifact(result)
+            attempt.attempt_number = attempt_number
+            attempts.append(attempt)
+            if _attempt_is_acceptable(attempt):
+                return RecipeRefinementResult(final_result=result, attempts=attempts, accepted=True)
+            if attempt_number < max_attempts:
+                prompt = build_recipe_refinement_prompt(evidence, attempt)
+        return RecipeRefinementResult(final_result=final_result, attempts=attempts, accepted=False)
+    client = llm_client or LlmServiceRecipeSuggestionClient(root, llm_model=llm_model)
     attempts: list[RecipeRefinementAttempt] = []
     final_result: RecipeSuggestionResult | None = None
 
@@ -269,6 +300,9 @@ def evaluate_suggestion_against_artifact(result: RecipeSuggestionResult) -> Reci
 
     page_path = result.artifact_dir / "page.html"
     api_fixture_path = _api_fixture_path(result.artifact_dir)
+    feed_fixture_paths = _feed_fixture_paths(result.artifact_dir)
+    quality_source = "local page.html"
+    used_feed_fixtures = False
     if recipe.listing_api.url and api_fixture_path:
         try:
             payload = json.loads(api_fixture_path.read_text(encoding="utf-8", errors="replace"))
@@ -287,6 +321,22 @@ def evaluate_suggestion_against_artifact(result: RecipeSuggestionResult) -> Reci
                 quality_status="poor",
                 quality_warnings=[f"Local API recipe quality check failed: {exc}"],
                 revision_reason="Local API extraction check failed.",
+            )
+    elif _recipe_can_validate_against_feed_fixtures(recipe, feed_fixture_paths):
+        try:
+            html = _combined_feed_fixture_markup(feed_fixture_paths)
+            quality = check_recipe_against_html(html, result.start_url or recipe.start_url, recipe, follow_detail=False)
+            quality_source = "saved feed fixture artifacts"
+            used_feed_fixtures = True
+        except (OSError, ValueError) as exc:
+            return RecipeRefinementAttempt(
+                attempt_number=0,
+                suggested_recipe_yaml=result.suggested_recipe_yaml,
+                schema_valid=True,
+                validation_errors=[],
+                quality_status="poor",
+                quality_warnings=[f"Local feed recipe quality check failed: {exc}"],
+                revision_reason="Local feed extraction check failed.",
             )
     else:
         if not page_path.exists():
@@ -319,8 +369,8 @@ def evaluate_suggestion_against_artifact(result: RecipeSuggestionResult) -> Reci
     detail_path = result.artifact_dir / "detail-sample.html"
     if quality.candidate_count == 0:
         quality_status = "poor"
-        warnings.append("No jobs were extracted from local page.html.")
-        revision_reason = "Recipe extracted no jobs from local page.html."
+        warnings.append(f"No jobs were extracted from {quality_source}.")
+        revision_reason = f"Recipe extracted no jobs from {quality_source}."
     elif quality.useful_title_count == 0:
         quality_status = "poor"
         warnings.append("No useful job titles were extracted.")
@@ -359,9 +409,12 @@ def evaluate_suggestion_against_artifact(result: RecipeSuggestionResult) -> Reci
         detail_report = _read_json(result.artifact_dir / "selector-report.json")
         detail_url = str(detail_report.get("detail_sample_url") or result.start_url or recipe.start_url)
         if not recipe.detail.follow:
-            quality_status = "poor"
-            warnings.append("A detail-page sample is available, but the recipe does not follow job detail pages.")
-            revision_reason = revision_reason or "Recipe omitted detail-page navigation."
+            if used_feed_fixtures and quality.average_description_length >= 120:
+                pass
+            else:
+                quality_status = "poor"
+                warnings.append("A detail-page sample is available, but the recipe does not follow job detail pages.")
+                revision_reason = revision_reason or "Recipe omitted detail-page navigation."
         else:
             detail_html = detail_path.read_text(encoding="utf-8", errors="replace")
             detail_job = extract_job_detail_from_html(detail_html, detail_url, recipe)
@@ -409,6 +462,9 @@ def load_recipe_suggestion_evidence(
     api_fixture = _api_fixture_path(artifact_dir)
     if api_fixture:
         referenced.append(str(api_fixture.relative_to(artifact_dir).as_posix()))
+    feed_fixtures = _feed_fixture_paths(artifact_dir)
+    for feed_fixture in feed_fixtures:
+        referenced.append(str(feed_fixture.relative_to(artifact_dir).as_posix()))
 
     summary = _read_text(artifact_dir / "summary.md", 3500)
     selector_report = _read_json(artifact_dir / "selector-report.json")
@@ -440,6 +496,15 @@ def load_recipe_suggestion_evidence(
         "observed_api_candidates": selector_report.get("observed_api_candidates", [])[:5]
         if isinstance(selector_report, dict)
         else [],
+        "observed_feed_links": selector_report.get("observed_feed_links", [])[:12]
+        if isinstance(selector_report, dict)
+        else [],
+        "observed_feed_selector": selector_report.get("observed_feed_selector", "")
+        if isinstance(selector_report, dict)
+        else "",
+        "observed_feed_artifacts": selector_report.get("observed_feed_artifacts", [])[:12]
+        if isinstance(selector_report, dict)
+        else [],
         "observed_interactive_pagination_controls": selector_report.get("observed_interactive_pagination_controls", [])[
             :10
         ]
@@ -463,6 +528,8 @@ def load_recipe_suggestion_evidence(
         else False,
         "detail_visible_text_sample": detail_visible_text,
         "recipe_blueprint": selector_report.get("recipe_blueprint", {}) if isinstance(selector_report, dict) else {},
+        "selector_audit": selector_report.get("selector_audit", {}) if isinstance(selector_report, dict) else {},
+        "existing_recipe_quality": selector_report.get("quality", {}) if isinstance(selector_report, dict) else {},
         "field_observations": (selector_report.get("recipe_blueprint", {}) or {}).get("field_observations", {})
         if isinstance(selector_report, dict)
         else {},
@@ -473,6 +540,9 @@ def load_recipe_suggestion_evidence(
         "source_test_insight": source_test_insight or {},
         "recipe_schema_summary": _recipe_schema_summary(),
     }
+    learning_gaps = _learning_gaps(payload)
+    payload["learning_gaps"] = learning_gaps
+    payload["ai_oversight"] = _ai_oversight_payload(payload, learning_gaps)
     evidence_summary = _evidence_summary(report_url, report_mode, candidates, visible_text)
     return RecipeSuggestionEvidence(
         artifact_dir=artifact_dir,
@@ -483,6 +553,112 @@ def load_recipe_suggestion_evidence(
         prompt_payload=payload,
         referenced_artifact_files=referenced,
     )
+
+
+def _learning_gaps(payload: dict[str, Any]) -> list[dict[str, str]]:
+    gaps: list[dict[str, str]] = []
+    blueprint = payload.get("recipe_blueprint") if isinstance(payload, dict) else {}
+    blueprint_status = str(blueprint.get("status") or "") if isinstance(blueprint, dict) else ""
+    if not payload.get("top_candidates"):
+        gaps.append(
+            {
+                "area": "listing_records",
+                "severity": "high",
+                "detail": "Deterministic calibration did not find repeated listing records/cards in the captured page.",
+            }
+        )
+    if blueprint_status == "not_recommended":
+        gaps.append(
+            {
+                "area": "recipe_blueprint",
+                "severity": "high",
+                "detail": "Deterministic calibration marked the recipe blueprint as not recommended.",
+            }
+        )
+    if not payload.get("detail_sample_captured"):
+        gaps.append(
+            {
+                "area": "detail_page",
+                "severity": "medium",
+                "detail": "No job detail sample was captured for semantic field verification.",
+            }
+        )
+    if not any(
+        payload.get(key)
+        for key in [
+            "observed_api_candidates",
+            "observed_feed_links",
+            "observed_ajax_pagination_templates",
+            "observed_pagination_links",
+            "observed_interactive_pagination_controls",
+        ]
+    ):
+        gaps.append(
+            {
+                "area": "alternate_access",
+                "severity": "medium",
+                "detail": "No page-declared API, feed, AJAX, URL pagination, or interactive pagination evidence was found.",
+            }
+        )
+    return gaps
+
+
+def _ai_oversight_payload(payload: dict[str, Any], learning_gaps: list[dict[str, str]]) -> dict[str, Any]:
+    insight = payload.get("source_test_insight") if isinstance(payload, dict) else {}
+    if not isinstance(insight, dict):
+        insight = {}
+    failed = insight.get("failed_capabilities")
+    failed_count = len(failed) if isinstance(failed, list) else 0
+    high_gap_count = sum(1 for gap in learning_gaps if gap.get("severity") == "high")
+    level = 0
+    reasons: list[str] = []
+    if high_gap_count:
+        level = max(level, 1)
+        reasons.append("deterministic_learning_gaps")
+    if failed_count:
+        level = max(level, 2)
+        reasons.append("source_test_failed_capabilities")
+    if bool(insight.get("pagination_duplicate_postings")) or bool(insight.get("pagination_warning")):
+        level = max(level, 2)
+        reasons.append("pagination_failure_evidence")
+    if bool(insight.get("source_access_failed")) or bool(insight.get("source_access_login_gate_detected")):
+        level = max(level, 2)
+        reasons.append("source_access_failure_evidence")
+    blueprint = payload.get("recipe_blueprint") if isinstance(payload, dict) else {}
+    blueprint_status = str(blueprint.get("status") or "") if isinstance(blueprint, dict) else ""
+    if blueprint_status == "not_recommended":
+        level = max(level, 2)
+        reasons.append("not_recommended_blueprint")
+    mode = "deterministic_first"
+    if level == 1:
+        mode = "ai_review_available"
+    elif level >= 2:
+        mode = "ai_rescue_after_deterministic_failure"
+    return {
+        "escalation_level": level,
+        "mode": mode,
+        "reasons": reasons,
+        "bundle_failures": bool(level >= 2),
+        "instructions": _ai_oversight_instructions(level, insight),
+    }
+
+
+def _ai_oversight_instructions(level: int, insight: dict[str, Any]) -> list[str]:
+    if level <= 0:
+        return ["Use deterministic recipe evidence when it passes validation and source-test insight does not contradict it."]
+    instructions = [
+        "Start from deterministic evidence and listed learning gaps; do not invent endpoints, credentials, cookies, or source access.",
+        "If no reliable listing access is visible in evidence, return not_recommended with the specific missing evidence.",
+    ]
+    if level >= 2:
+        instructions.append(
+            "Treat failed source-test capabilities as higher priority than local selector confidence; propose a recipe only if it directly addresses those failures."
+        )
+    if bool(insight.get("pagination_warning")) or bool(insight.get("pagination_duplicate_postings")):
+        instructions.append("Review pagination evidence before preserving URL pagination.")
+    if bool(insight.get("source_access_failed")) or bool(insight.get("source_access_login_gate_detected")):
+        instructions.append("Set session access only when the captured evidence explicitly shows a login/session gate.")
+    return instructions
 
 
 def build_recipe_suggestion_prompt(evidence: RecipeSuggestionEvidence) -> str:
@@ -498,6 +674,9 @@ def build_recipe_suggestion_prompt(evidence: RecipeSuggestionEvidence) -> str:
         "page-declared request shape captured in evidence and must not add auth or cookies. If local evidence "
         "shows that pagination or listings require signing in, set access.requires_session true with a short "
         "setup_hint.\n"
+        "The evidence may also include public feed links explicitly declared by the captured page. Those are not "
+        "API recipes; model them as normal listing selectors over feed `item` records, with URL pagination using "
+        "the observed feed selector and only the saved feed artifacts/exact discovered feed URLs.\n"
         "A deterministic recipe_blueprint may be included. Prefer preserving selectors from that blueprint when "
         "the local evidence supports them; revise only when the evidence contradicts it.\n"
         "If the deterministic recipe_blueprint is not_recommended but learning_exploration, top_candidates, "
@@ -511,6 +690,10 @@ def build_recipe_suggestion_prompt(evidence: RecipeSuggestionEvidence) -> str:
         "pagination. Set access.requires_session only for explicit source-access evidence such as a login gate, "
         "source_access_failed, source_access_requires_session, or a connected source session that made pagination "
         "work; do not infer a session requirement from speculative warning text.\n"
+        "The evidence includes learning_gaps and ai_oversight. Treat ai_oversight.escalation_level as the strength "
+        "of review required after deterministic methods struggled: level 0 means deterministic-first, level 1 means "
+        "review the listed gaps, and level 2+ means a rescue attempt must directly address failed source-test "
+        "capabilities or return not_recommended. Bundle related failed capabilities into one coherent fix plan.\n"
         "Use table headers and detail label/value observations to map fields semantically. Do not map `Category` "
         "to workload, `Application deadline` or `Closing date` to posted_date, or `End date` to start_date. "
         "If the schema lacks a matching report field, omit that selector and mention the unsupported field.\n"
@@ -594,11 +777,16 @@ def build_recipe_refinement_prompt(evidence: RecipeSuggestionEvidence, attempt: 
         "observed_api_candidates or an API recipe_blueprint. Do not include Python code, browser scripts, arbitrary "
         "adapters, credentials, cookie values, hidden endpoint assumptions, or new network/API discovery. API "
         "requests must preserve the exact public page-declared request shape captured in evidence.\n"
+        "If the evidence includes public feed links declared by the captured page, keep them as selector-based "
+        "feed item recipes with URL pagination over the observed feed selector; do not invent feed URLs.\n"
         "If source_test_insight is present, fix live failures first. Preserve the tested strategy when "
         "pagination_working_with_unique_pages is true; do not keep a pagination strategy that failed with "
         "pagination_duplicate_postings or inaccessible pages. If the live test says interactive controls require "
         "browser-click pagination, switch to browser_click. Set access.requires_session only from explicit "
         "source-access evidence, not from speculative warning text.\n"
+        "Use learning_gaps and ai_oversight to decide whether this is a normal refinement or an AI rescue pass. "
+        "For ai_oversight.escalation_level 2+, bundle all related failure evidence into the revision and return "
+        "not_recommended if the local artifacts still do not contain enough safe public evidence.\n"
         "Use visible labels as ground truth: Category is not workload, Application deadline/Closing date is not "
         "posted_date, and End date is not start_date. Omit unsupported fields instead of forcing them into a "
         "nearby report field.\n"
@@ -633,10 +821,13 @@ def _deterministic_suggestion_result(evidence: RecipeSuggestionEvidence) -> Reci
     listing_api = recipe_data.get("listing_api") or {}
     detail = recipe_data.get("detail") or {}
     pagination = recipe_data.get("pagination") or {}
+    feed_listing = listing.get("card_selector") == "item" and bool(evidence.prompt_payload.get("observed_feed_links"))
     explanation_parts = [
         (
             f"Deterministic draft selected API records from `{listing_api.get('url', '')}`."
             if listing_api
+            else "Deterministic draft selected public feed item records from captured feed evidence."
+            if feed_listing
             else f"Deterministic draft selected listing cards with `{listing.get('card_selector', '')}`."
         ),
     ]
@@ -685,25 +876,37 @@ def _no_recipe_evidence_result(evidence: RecipeSuggestionEvidence) -> RecipeSugg
     if _evidence_is_salvageable(evidence):
         return None
     warnings = list(evidence.warnings) + _list_value(blueprint.get("warnings"))
-    warnings.append(
-        "The captured page did not expose repeated job cards or a job-detail link. "
-        "Try a browser-rendered capture if the job list is loaded by JavaScript."
-    )
+    existing_count = _existing_recipe_extracted_count(evidence.prompt_payload)
+    if existing_count:
+        warnings.append(
+            f"The selected existing recipe extracted {existing_count} job(s), but calibration did not produce a "
+            "replacement reading plan from the captured page evidence."
+        )
+        explanation = (
+            f"The selected existing recipe extracted {existing_count} job(s), but this learning run did not find "
+            "enough evidence to produce a replacement plan that can be source-tested."
+        )
+        validation_errors = ["No replacement reading plan was generated from calibration evidence."]
+    else:
+        warnings.append(
+            "The captured page did not expose repeated job cards or a job-detail link. "
+            "Try a browser-rendered capture if the job list is loaded by JavaScript."
+        )
+        explanation = "The saved calibration artifact did not contain enough job-list evidence to generate a reading plan."
+        validation_errors = ["No stable repeated listing card selector was found."]
     return RecipeSuggestionResult(
         source_name=evidence.source_name,
         start_url=evidence.start_url,
         artifact_dir=evidence.artifact_dir,
         suggested_recipe_yaml="",
-        explanation=(
-            "The saved calibration artifact did not contain enough job-list evidence to generate a reading plan."
-        ),
+        explanation=explanation,
         confidence="low",
         assumptions=[],
         warnings=warnings,
         evidence_summary=evidence.evidence_summary,
         selected_strategy="not_recommended",
         referenced_artifact_files=evidence.referenced_artifact_files,
-        validation_errors=["No stable repeated listing card selector was found."],
+        validation_errors=validation_errors,
         schema_valid=False,
         source_test_insight=_source_test_insight_from_payload(evidence.prompt_payload),
     )
@@ -758,6 +961,16 @@ def _artifact_key(path: Path) -> str:
         return str(Path(path).resolve()).lower()
     except OSError:
         return str(path).replace("\\", "/").lower()
+
+
+def _existing_recipe_extracted_count(payload: dict[str, Any]) -> int:
+    quality = payload.get("existing_recipe_quality")
+    if not isinstance(quality, dict):
+        return 0
+    try:
+        return int(quality.get("candidate_count") or 0)
+    except (TypeError, ValueError):
+        return 0
 
 
 def validate_suggested_recipe_yaml(value: str) -> list[str]:
@@ -1141,6 +1354,27 @@ def _api_fixture_path(artifact_dir: Path) -> Path | None:
     if not candidates:
         candidates = sorted(artifact_dir.glob("**/api-listing-response-*.json"))
     return candidates[0] if candidates else None
+
+
+def _feed_fixture_paths(artifact_dir: Path) -> list[Path]:
+    candidates = sorted(artifact_dir.glob("feed-listing-response-*.xml"))
+    if not candidates:
+        candidates = sorted(artifact_dir.glob("**/feed-listing-response-*.xml"))
+    return candidates
+
+
+def _combined_feed_fixture_markup(paths: list[Path]) -> str:
+    parts = []
+    for path in paths:
+        text = path.read_text(encoding="utf-8", errors="replace")
+        parts.append(re.sub(r"^\s*<\?xml[^>]*\?>", "", text, flags=re.IGNORECASE))
+    return "<feeds>\n" + "\n".join(parts) + "\n</feeds>"
+
+
+def _recipe_can_validate_against_feed_fixtures(recipe, feed_fixture_paths: list[Path]) -> bool:
+    if not feed_fixture_paths:
+        return False
+    return str(getattr(recipe.listing, "card_selector", "") or "").strip().lower() == "item"
 
 
 def _list_value(value) -> list[str]:

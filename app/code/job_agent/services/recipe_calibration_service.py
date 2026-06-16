@@ -14,7 +14,7 @@ from bs4 import BeautifulSoup, NavigableString, Tag
 
 from job_agent.browser.playwright_probe import slugify_url
 from job_agent.config import ROOT
-from job_agent.paths import output_dir, resolve_project_path
+from job_agent.paths import output_dir
 from job_agent.services.extraction_quality import quality_as_dict
 from job_agent.services.job_board_check_service import validate_public_url
 from job_agent.services.job_board_recipe_service import (
@@ -23,7 +23,9 @@ from job_agent.services.job_board_recipe_service import (
 )
 from job_agent.services.recipes.discovery import (
     discover_application_entries,
+    discover_feed_links,
     discover_interactive_pagination_controls,
+    discover_listing_expansion,
     discover_pagination_links,
 )
 from job_agent.services.recipes.fetching import (
@@ -35,8 +37,9 @@ from job_agent.services.recipes.fetching import (
 from job_agent.services.recipes.fetching import (
     fetch_static_html as _fetch_static_html,
 )
-from job_agent.services.recipes.mapping import _selectors, job_board_recipe_from_mapping, load_job_board_recipe
+from job_agent.services.recipes.mapping import _selectors, job_board_recipe_from_mapping, load_project_job_board_recipe
 from job_agent.services.recipes.models import JobBoardRecipe
+from job_agent.services.recipes.soup import is_stable_css_class
 from job_agent.services.source_quality_rules import (
     is_probable_detail_url,
     link_text_is_noise,
@@ -184,8 +187,7 @@ def capture_recipe_calibration(
 ) -> RecipeCalibrationResult:
     normalized_url = validate_public_url(url)
     root = Path(root)
-    resolved_recipe_path = resolve_project_path(root, recipe_path) if recipe_path else None
-    recipe = load_job_board_recipe(resolved_recipe_path) if resolved_recipe_path else None
+    recipe = load_project_job_board_recipe(root, recipe_path) if recipe_path else None
     html, final_url, fetch_warnings, use_rendered = _fetch_calibration_html(
         normalized_url,
         recipe=recipe,
@@ -199,6 +201,7 @@ def capture_recipe_calibration(
     learning_exploration = explore_learning_material(html, final_url)
     candidates = discover_candidate_elements(html, max_candidates=max_candidates, base_url=final_url)
     pagination_observations = discover_pagination_links(html, final_url)
+    feed_observations = discover_feed_links(html, final_url)
     ajax_pagination_observations = discover_ajax_pagination_templates(html, final_url)
     interactive_pagination_observations = discover_interactive_pagination_controls(html)
     application_entries = discover_application_entries(html, final_url)
@@ -216,6 +219,11 @@ def capture_recipe_calibration(
     )
     artifact_dir = _artifact_dir(root, final_url)
     artifact_dir.mkdir(parents=True, exist_ok=True)
+    feed_artifacts, feed_warnings = _capture_feed_artifacts(
+        feed_observations.links,
+        artifact_dir=artifact_dir,
+        timeout_seconds=15,
+    )
     api_observations, api_warnings = discover_api_access_candidates(
         html,
         final_url,
@@ -254,6 +262,9 @@ def capture_recipe_calibration(
         "recipe_path": recipe_path or "",
         "candidates": [asdict(candidate) for candidate in candidates],
         "observed_pagination_links": [asdict(link) for link in pagination_observations],
+        "observed_feed_links": [asdict(link) for link in feed_observations.links],
+        "observed_feed_selector": feed_observations.selector,
+        "observed_feed_artifacts": feed_artifacts,
         "observed_ajax_pagination_templates": ajax_pagination_observations,
         "observed_api_candidates": api_observations,
         "observed_interactive_pagination_controls": interactive_pagination_observations,
@@ -277,12 +288,13 @@ def capture_recipe_calibration(
             candidates,
             audit,
             jobs,
-            fetch_warnings + detail_warnings + api_warnings,
+            fetch_warnings + detail_warnings + feed_warnings + api_warnings,
             pagination_observations,
             application_entries,
             detail_final_url or detail_sample_url,
             recipe_blueprint,
             api_observations,
+            feed_observations.links,
         ),
         encoding="utf-8",
     )
@@ -296,7 +308,7 @@ def capture_recipe_calibration(
         recipe_extracted_count=len(jobs),
         card_selector_match_count=audit.card_match_count if audit else 0,
         detail_sample_url=detail_final_url or detail_sample_url,
-        warnings=fetch_warnings + detail_warnings + api_warnings + (audit.warnings if audit else []),
+        warnings=fetch_warnings + detail_warnings + feed_warnings + api_warnings + (audit.warnings if audit else []),
     )
 
 
@@ -310,7 +322,17 @@ def build_recipe_blueprint(
 ) -> dict[str, Any]:
     soup = BeautifulSoup(html, "html.parser")
     card = _best_listing_card(soup, base_url)
+    feed_blueprint = _feed_recipe_blueprint(
+        html,
+        base_url,
+        capture_mode=capture_mode,
+        accept_token=str(card.get("url_token") or "") if card else "",
+    )
+    if feed_blueprint and len((feed_blueprint.get("feed_listing_evidence") or {}).get("links") or []) >= 2:
+        return feed_blueprint
     if not card:
+        if feed_blueprint:
+            return feed_blueprint
         return {
             "status": "not_recommended",
             "warnings": ["No stable repeated listing card selector was found."],
@@ -367,6 +389,103 @@ def build_recipe_blueprint(
     if field_observations:
         result["field_observations"] = field_observations
     return result
+
+
+def _feed_recipe_blueprint(
+    html: str,
+    base_url: str,
+    *,
+    capture_mode: str,
+    accept_token: str = "",
+) -> dict[str, Any]:
+    feed = discover_feed_links(html, base_url)
+    if not feed.selector or not feed.links:
+        return {}
+    recipe: dict[str, Any] = {
+        "source_name": "Recipe source",
+        "start_url": base_url,
+        "mode": capture_mode if capture_mode in {"static_html", "rendered_html"} else "static_html",
+        "listing": {
+            "card_selector": "item",
+            "title_selector": "title",
+            "link_selector": ["guid", "link"],
+            "location_selector": ["region", "state", "country"],
+            "workload_selector": "type",
+            "posted_date_selector": ["pubDate", "pubdate"],
+            "description_selector": "description",
+        },
+        "pagination": {
+            "strategy": "url",
+            "page_link_selector": feed.selector,
+            "max_pages": min(len(feed.links) + 1, 25),
+            "request_delay_seconds": 1.0,
+        },
+        "reject": _default_reject_rules(),
+        "patterns": _default_patterns(),
+        "limits": {
+            "max_cards": 500,
+            "min_title_length": 8,
+            "min_description_length": 0,
+        },
+    }
+    if accept_token:
+        recipe["accept"] = {"url_contains": [accept_token]}
+
+    validation_errors: list[str] = []
+    try:
+        job_board_recipe_from_mapping(recipe, label="feed_recipe_blueprint")
+    except ValueError as exc:
+        validation_errors.append(str(exc))
+    return {
+        "status": "draft" if not validation_errors else "not_recommended",
+        "confidence": "high" if len(feed.links) >= 2 and not validation_errors else "medium",
+        "recipe": recipe if not validation_errors else {},
+        "feed_listing_evidence": {
+            "selector": feed.selector,
+            "links": [asdict(link) for link in feed.links],
+        },
+        "validation_errors": validation_errors,
+        "warnings": validation_errors,
+    }
+
+
+def _capture_feed_artifacts(
+    links: list[Any],
+    *,
+    artifact_dir: Path,
+    timeout_seconds: int,
+    max_feeds: int = 12,
+) -> tuple[list[dict[str, str]], list[str]]:
+    artifacts: list[dict[str, str]] = []
+    warnings: list[str] = []
+    for index, link in enumerate(links[:max_feeds], start=1):
+        url = str(getattr(link, "url", "") or "").strip()
+        if not url:
+            continue
+        try:
+            text, final_url, fetch_warnings = _fetch_static_html(url, timeout_seconds)
+        except ValueError as exc:
+            warnings.append(f"Public feed probe failed for {url}: {exc}")
+            continue
+        warnings.extend(fetch_warnings)
+        response_artifact = artifact_dir / f"feed-listing-response-{index}.xml"
+        response_artifact.write_text(text, encoding="utf-8")
+        request_artifact = artifact_dir / f"feed-listing-request-{index}.json"
+        request_artifact.write_text(
+            json.dumps({"method": "GET", "url": url, "final_url": final_url}, indent=2),
+            encoding="utf-8",
+        )
+        artifacts.append(
+            {
+                "url": url,
+                "final_url": final_url,
+                "request_artifact": _artifact_relative_path(request_artifact, artifact_dir),
+                "response_artifact": _artifact_relative_path(response_artifact, artifact_dir),
+            }
+        )
+    if len(links) > max_feeds:
+        warnings.append(f"Skipped {len(links) - max_feeds} additional public feed link(s) beyond the safe probe limit.")
+    return artifacts, warnings
 
 
 def discover_api_access_candidates(
@@ -967,7 +1086,7 @@ def _best_listing_card(soup: BeautifulSoup, base_url: str) -> dict[str, Any] | N
         for ancestor in _candidate_ancestors_for_link(link):
             if _likely_noise(ancestor):
                 continue
-            selector = _card_selector_for_tag(ancestor, soup)
+            selector = _card_selector_for_tag(ancestor, soup, token=token)
             if not selector:
                 continue
             cards = soup.select(selector)
@@ -1008,6 +1127,8 @@ def _best_listing_card(soup: BeautifulSoup, base_url: str) -> dict[str, Any] | N
                 score -= 10
             if ancestor.name in {"article", "tr", "li"}:
                 score += 8
+            if ancestor.name == "a":
+                score -= 20
             if len(cards) == 1:
                 score -= 20
             if average_links > 8:
@@ -1047,7 +1168,7 @@ def _candidate_ancestors_for_link(link: Tag) -> list[Tag]:
     ancestors: list[Tag] = []
     current: Tag | None = link
     while current and getattr(current, "name", None) and current.name != "[document]":
-        if current.name in {"article", "li", "tr", "section", "div"}:
+        if current.name in {"a", "article", "li", "tr", "section", "div"}:
             ancestors.append(current)
         if len(ancestors) >= 6:
             break
@@ -1056,7 +1177,9 @@ def _candidate_ancestors_for_link(link: Tag) -> list[Tag]:
     return ancestors
 
 
-def _card_selector_for_tag(tag: Tag, soup: BeautifulSoup) -> str:
+def _card_selector_for_tag(tag: Tag, soup: BeautifulSoup, *, token: str = "") -> str:
+    if tag.name == "a" and tag.get("href"):
+        return f'a[href*="{token}"]' if token else "a[href]"
     if tag.name == "tr":
         tbody_rows = soup.select("tbody tr")
         return "tbody tr" if tbody_rows else "tr"
@@ -1069,9 +1192,7 @@ def _card_selector_for_tag(tag: Tag, soup: BeautifulSoup) -> str:
 
 
 def _class_is_stable(value: str) -> bool:
-    return bool(re.fullmatch(r"-?[_a-zA-Z][-_a-zA-Z0-9]*", value or "")) and not re.search(
-        r"^[0-9]|reactrenderer|^css-|^js-|ng-|hydrated", value, re.I
-    )
+    return is_stable_css_class(value)
 
 
 def _inferred_detail_link_families(soup: BeautifulSoup, base_url: str) -> list[DetailLinkFamily]:
@@ -1104,6 +1225,8 @@ def _inferred_detail_link_families(soup: BeautifulSoup, base_url: str) -> list[D
         selector_counts: dict[str, int] = defaultdict(int)
         for link, _url, _text in links:
             for ancestor in _candidate_ancestors_for_link(link):
+                if ancestor.name == "a":
+                    continue
                 if _likely_noise(ancestor):
                     continue
                 selector = _card_selector_for_tag(ancestor, soup)
@@ -1220,7 +1343,11 @@ def _job_detail_links(
     tokens = list(extra_tokens or [])
     if infer_families and isinstance(root, BeautifulSoup):
         tokens.extend(family.token for family in _inferred_detail_link_families(root, base_url))
-    for link in root.find_all("a", href=True):
+    links = []
+    if isinstance(root, Tag) and root.name == "a" and root.get("href"):
+        links.append(root)
+    links.extend(root.find_all("a", href=True))
+    for link in links:
         href = str(link.get("href") or "").strip()
         absolute_url = urljoin(base_url, href)
         if _same_url_without_fragment(absolute_url, base_url):
@@ -1492,6 +1619,17 @@ def _pagination_recipe(html: str, base_url: str) -> dict[str, Any]:
             "page_link_selector": page_query_selector,
             "next_selector": _page_query_next_selector(soup),
             "max_pages": _observed_max_page(soup, default=2),
+            "request_delay_seconds": 1.0,
+        }
+    listing_expansion = discover_listing_expansion(html, base_url)
+    if listing_expansion.selector and listing_expansion.links:
+        selector = listing_expansion.selector
+        if 'href*="/categories/"' in selector and discover_feed_links(html, base_url).links:
+            selector = listing_expansion_selector or selector
+        return {
+            "strategy": "url",
+            "page_link_selector": selector,
+            "max_pages": min(len(listing_expansion.links) + 1, 25),
             "request_delay_seconds": 1.0,
         }
     if listing_expansion_selector:
@@ -1888,7 +2026,7 @@ def _default_patterns() -> dict[str, str]:
         "remote_regex": r"\b(?P<remote>Remote|Hybrid|Hybrid-remote|Office based|On-site|\d+%\s*remote)\b",
         "work_type_regex": r"\b(?P<work_type>Contract|Freelance|Permanent)\b",
         "start_date_regex": (
-            r"(?:Start(?: date)?\s*:?\s*)(?P<start_date>asap|\d{1,2}\s*/\s*\d{4}|"
+            r"(?:\bStart\s+date\b\s*:?\s*|\bStart\b\s*:\s*)(?P<start_date>asap|\d{1,2}\s*/\s*\d{4}|"
             r"\d{1,2}[./]\d{1,2}[./]\d{4}|[^*\n\r]+?)(?=\s+Duration\b|\s+\d+\s*%\s*workload\b|\s+End date:|$)"
         ),
         "language_regex": r"(?:Languages?:\s*|Language skills:\s*|Fluent in\s+)(?P<language>[A-Z][A-Za-z]+(?:\s*\([^)]*\))?)",
@@ -1998,7 +2136,7 @@ def _candidate_element(tag: Tag) -> CandidateElement:
 def _selector_suggestion(tag: Tag) -> str:
     if tag.get("id"):
         return f"#{tag['id']}"
-    classes = [str(item) for item in tag.get("class", [])]
+    classes = [str(item) for item in tag.get("class", []) if _class_is_stable(str(item))]
     if classes:
         return f"{tag.name}." + ".".join(classes[:3])
     return tag.name or ""
@@ -2041,8 +2179,20 @@ def _likely_noise(tag: Tag) -> bool:
 
 
 def _selected_text(root: Tag, selector: str) -> str:
+    if _tag_matches_selector(root, selector):
+        return root.get_text(" ", strip=True)
     match = root.select_one(selector)
     return match.get_text(" ", strip=True) if match else ""
+
+
+def _tag_matches_selector(tag: Tag, selector: str) -> bool:
+    parent = tag.parent
+    if not isinstance(parent, (Tag, BeautifulSoup)):
+        return False
+    try:
+        return tag in parent.select(selector)
+    except Exception:
+        return False
 
 
 def _preview(text: str, limit: int) -> str:
@@ -2071,6 +2221,7 @@ def _summary_markdown(
     detail_sample_url: str = "",
     recipe_blueprint: dict[str, Any] | None = None,
     api_observations: list[dict[str, Any]] | None = None,
+    feed_links: list[Any] | None = None,
 ) -> str:
     blueprint_recipe = (recipe_blueprint or {}).get("recipe") or {}
     lines = [
@@ -2080,6 +2231,7 @@ def _summary_markdown(
         f"Capture mode: {capture_mode}",
         f"Candidate regions: {len(candidates)}",
         f"Pagination-looking links: {len(pagination_links or [])}",
+        f"Public feed links: {len(feed_links or [])}",
         f"Application entrypoints: {len(application_entries or [])}",
         f"Page-declared API candidates: {len(api_observations or [])}",
         f"Detail sample: {detail_sample_url or 'none'}",
@@ -2095,6 +2247,13 @@ def _summary_markdown(
                     f"Draft API listing: `{listing_api.get('method', 'GET')} {listing_api.get('url', '')}`",
                     f"Draft API records path: `{listing_api.get('results_path', '')}`",
                     f"Draft API pagination: `{(listing_api.get('pagination') or {}).get('strategy', 'none')}`",
+                ]
+            )
+        elif pagination.get("page_link_selector") and listing.get("card_selector") == "item":
+            lines.extend(
+                [
+                    f"Draft feed item selector: `{listing.get('card_selector', '')}`",
+                    f"Draft feed pagination selector: `{pagination.get('page_link_selector', '')}`",
                 ]
             )
         else:
@@ -2134,6 +2293,11 @@ def _summary_markdown(
                 f"records={observation.get('record_count', 0)} total={observation.get('total_count', 0)} "
                 f"response={observation.get('response_artifact', '')}"
             )
+    if feed_links:
+        lines.append("")
+        lines.append("Public feed observations:")
+        for link in feed_links[:10]:
+            lines.append(f"- `{getattr(link, 'url', '')}` label={getattr(link, 'label', '')}")
     lines.append("")
     lines.append("Top candidate selectors:")
     for candidate in candidates[:10]:

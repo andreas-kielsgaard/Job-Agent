@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from job_agent.config import ROOT
+from job_agent.config import ROOT, load_profile
 from job_agent.paths import resolve_project_path
 from job_agent.run_service import run_daily_agent
 from job_agent.run_store import RunOptions, RunRecord, RunStore
@@ -94,7 +94,8 @@ class WebRuntime:
         self.executor = ThreadPoolExecutor(max_workers=1)
         self.index_executor = ThreadPoolExecutor(max_workers=3)
         self.session_executor = ThreadPoolExecutor(max_workers=3)
-        self.auto_setup_executor = ThreadPoolExecutor(max_workers=1)
+        self.auto_setup_max_workers = _auto_setup_worker_limit(root)
+        self.auto_setup_executor = ThreadPoolExecutor(max_workers=self.auto_setup_max_workers)
         self._index_tasks: dict[str, SourceIndexTask] = {}
         self._index_lock = threading.Lock()
         self._profile_tasks: dict[str, ProfileDraftTask] = {}
@@ -142,6 +143,22 @@ class WebRuntime:
         record = store.create_run(options)
         self.executor.submit(run_daily_agent, options, None, self.root, record.run_id)
         return record
+
+    def launch_full_source_ingestion(self) -> RunRecord:
+        options = RunOptions(
+            include_seen=False,
+            include_weak=False,
+            mark_seen=True,
+            generate_materials=False,
+            use_llm=False,
+            ai_enhanced_search=False,
+            detail_extraction_limit=None,
+            full_source_ingestion=True,
+            include_disabled_sources=True,
+            detail_pause_every_jobs=25,
+            detail_pause_seconds=20.0,
+        )
+        return self.launch_daily_run(options)
 
     def launch_source_detail_run(
         self,
@@ -249,19 +266,25 @@ class WebRuntime:
         self.session_executor.submit(self._run_source_session_capture, task.task_id)
         return task
 
-    def launch_source_auto_setup(self, source_id: str, *, run_id: str = "") -> SourceAutoSetupTask:
+    def launch_source_auto_setup(
+        self,
+        source_id: str,
+        *,
+        run_id: str = "",
+        llm_model: str = "",
+    ) -> SourceAutoSetupTask:
         from job_agent.web.source_auto_setup import SourceAutoSetupWorkflowHandler
 
         workflow = SourceAutoSetupWorkflowHandler(self.root)
-        run = workflow.prepare(source_id, run_id=run_id)
-        task_id = f"auto-{run['run_id']}"
         with self._auto_setup_lock:
-            existing = self._auto_setup_tasks.get(task_id)
-            if existing and existing.status in {"pending", "running"} and not existing.finished_at:
-                return existing
             for task in self._auto_setup_tasks.values():
                 if task.source_id == source_id and task.status in {"pending", "running"} and not task.finished_at:
                     return task
+            run = workflow.prepare(source_id, run_id=run_id, llm_model=llm_model)
+            task_id = f"auto-{run['run_id']}"
+            existing = self._auto_setup_tasks.get(task_id)
+            if existing and existing.status in {"pending", "running"} and not existing.finished_at:
+                return existing
             task = SourceAutoSetupTask(
                 task_id=task_id,
                 run_id=str(run["run_id"]),
@@ -273,12 +296,37 @@ class WebRuntime:
                 message=str(run.get("message") or "Automatic setup is queued."),
                 progress_percent=_int(run.get("progress_percent") or 8),
                 started_at=str(run.get("started_at") or run.get("created_at") or utc_now()),
-                href=f"/sources/{source_id}",
+                href=f"/sources/auto-setup?source_id={source_id}",
             )
             self._auto_setup_tasks[task.task_id] = task
         if str(run.get("status") or "") != "completed":
             self.auto_setup_executor.submit(self._run_source_auto_setup, task.task_id)
         return task
+
+    def launch_all_source_auto_setups(self, *, llm_model: str = "") -> list[SourceAutoSetupTask]:
+        from job_agent.web.source_workflow import SourceWorkflowHandler
+
+        context = SourceWorkflowHandler(self.root).overview_context()
+        tasks: list[SourceAutoSetupTask] = []
+        queued_source_ids: set[str] = set()
+        queued_task_ids: set[str] = set()
+        for card in context.get("source_cards", []):
+            if not isinstance(card, dict) or not card.get("auto_setup", {}).get("can_start"):
+                continue
+            source = card.get("source")
+            source_id = str(getattr(source, "id", "") or "")
+            if not source_id or source_id in queued_source_ids:
+                continue
+            try:
+                task = self.launch_source_auto_setup(source_id, llm_model=llm_model)
+            except (RuntimeError, ValueError):
+                continue
+            if task.task_id in queued_task_ids:
+                continue
+            queued_source_ids.add(source_id)
+            queued_task_ids.add(task.task_id)
+            tasks.append(task)
+        return tasks
 
     def start_profile_draft_task(self, task_id: str = "", title: str = "Drafting profile from CV") -> ProfileDraftTask:
         task = ProfileDraftTask(
@@ -812,11 +860,21 @@ def compute_app_version(root: Path) -> str:
     return hasher.hexdigest()[:16]
 
 
-runtime = WebRuntime(ROOT)
-
-
 def utc_now() -> str:
     return datetime.now(UTC).replace(microsecond=0).isoformat()
+
+
+def _auto_setup_worker_limit(root: Path) -> int:
+    try:
+        runtime_config = load_profile(root).get("runtime", {})
+        configured = (
+            int(runtime_config.get("max_parallel_sources") or 10)
+            if isinstance(runtime_config, dict)
+            else 10
+        )
+    except (TypeError, ValueError):
+        configured = 10
+    return max(1, min(50, configured))
 
 
 def _int(value) -> int:
@@ -824,3 +882,6 @@ def _int(value) -> int:
         return int(value or 0)
     except (TypeError, ValueError):
         return 0
+
+
+runtime = WebRuntime(ROOT)

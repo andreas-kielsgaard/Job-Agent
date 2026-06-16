@@ -6,6 +6,7 @@ from job_agent.config import ROOT
 from job_agent.env import load_env
 from job_agent.llm import DEFAULT_CLAUDE_MODEL, model_options, normalize_model
 from job_agent.profile_contract import build_profile_contract
+from job_agent.services.connector_settings_service import ConnectorSettingsService
 from job_agent.services.cv_profile_draft_service import CvProfileDraftService
 from job_agent.services.cv_reference_service import CvReferenceService
 from job_agent.services.setup_service import SetupService
@@ -28,6 +29,7 @@ def build_setup_view(root: Path = ROOT) -> dict:
         "profile_editor": setup.profile_editor_model(),
         "match_engine": setup.match_engine_form_model(),
         "ai_policy": setup.ai_policy_form_model(),
+        "connector_settings": ConnectorSettingsService(root).load(),
         "configured_claude_model": normalize_model(str(env.get("CLAUDE_MODEL") or DEFAULT_CLAUDE_MODEL)),
         "model_options": model_options(),
         "template_variables": TEMPLATE_VARIABLES,

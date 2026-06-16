@@ -9,11 +9,11 @@ from job_agent.paths import resolve_project_path
 from job_agent.profile_contract import build_profile_contract
 from job_agent.run_store import RunOptions, RunStore
 from job_agent.services.approved_recipe_adoption_service import ApprovedRecipeAdoptionService
+from job_agent.services.connector_settings_service import ConnectorSettingsService
 from job_agent.services.cv_profile_draft_service import CvProfileDraftService
 from job_agent.services.cv_reference_service import CvReferenceService
 from job_agent.services.recipe_calibration_service import capture_recipe_calibration
 from job_agent.services.recipe_candidate_approval_service import RecipeCandidateApprovalService
-from job_agent.services.recipe_candidate_policy import candidate_is_reviewable
 from job_agent.services.recipe_candidate_service import RecipeCandidateStore
 from job_agent.services.recipe_generation_run_service import RecipeGenerationRunService
 from job_agent.services.recipe_generation_status_service import RecipeGenerationStatusService
@@ -22,6 +22,10 @@ from job_agent.services.setup_service import SetupService
 from job_agent.web.source_auto_setup import SourceAutoSetupWorkflowHandler
 from job_agent.web.source_workflow import SourceWorkflowHandler
 from job_agent.web.view_models.dashboard import build_dashboard_view
+from job_agent.web.view_models.recipe_review import (
+    build_candidate_reading_plan_review,
+    build_generation_run_reading_plan_review,
+)
 from job_agent.web.view_models.runs import build_run_detail_view, build_run_list_view
 from job_agent.web.view_models.setup import build_setup_view
 
@@ -140,6 +144,9 @@ class ExecutorWorkflowHandler:
     def launch_daily_run(self, runtime, options: RunOptions):
         return runtime.launch_daily_run(options)
 
+    def launch_full_source_ingestion(self, runtime):
+        return runtime.launch_full_source_ingestion()
+
     def apply_run_action(self, run_id: str, action: str) -> None:
         actions = {
             "archive": self.runs.archive,
@@ -229,6 +236,9 @@ class RecipeWorkflowHandler:
     def load_run(self, run_id: str) -> dict[str, Any]:
         return self.run_service.load(run_id)
 
+    def retry_run(self, source_id: str, run_id: str, *, llm_model: str = ""):
+        return self.run_service.retry(source_id, run_id, llm_model=llm_model)
+
     def capture_calibration(
         self,
         source_id: str,
@@ -261,18 +271,25 @@ class RecipeWorkflowHandler:
         run = self.load_run(run_id)
         if run.get("source_id") != source.id:
             raise ValueError("Recipe generation run does not belong to this source.")
+        run = dict(run)
+        run["reading_plan_review"] = build_generation_run_reading_plan_review(run, source)
         return run
 
     def candidate_detail_context(self, candidate_id: str, *, source_id: str = "") -> dict[str, Any]:
         candidate = self.candidates.load_candidate(candidate_id)
         source = self.source.require_source(source_id) if source_id else self.source.source_for_candidate(candidate)
         title_target = source.name if source else candidate.candidate_id
+        approval_recipe_path = self.approvals.suggested_recipe_path(candidate, source)
+        reading_plan_review = build_candidate_reading_plan_review(candidate, source, approval_recipe_path)
         return {
             "title": f"Recipe Candidate - {title_target}",
             "candidate": candidate,
             "source": source,
-            "approval_recipe_path": self.approvals.suggested_recipe_path(candidate, source),
-            "candidate_can_be_used": candidate_is_reviewable(candidate),
+            "approval_recipe_path": approval_recipe_path,
+            "reading_plan_review": reading_plan_review,
+            "candidate_can_be_used": reading_plan_review["can_use_generated_plan"],
+            "candidate_can_be_tested": reading_plan_review["can_test_generated_plan"],
+            "candidate_has_quality_blockers": reading_plan_review["has_quality_blockers"],
         }
 
     def reject_candidate(self, candidate_id: str, *, reason: str = ""):
@@ -298,21 +315,36 @@ class RecipeWorkflowHandler:
         *,
         source_id: str = "",
         overwrite: bool = False,
+        allow_quality_warnings: bool = False,
     ):
         source = self.source.require_source(source_id) if source_id else None
+        effective_overwrite = overwrite or (
+            source is not None and _same_project_path(self.root, recipe_path, source.recipe_path)
+        )
         return self.approvals.approve(
             candidate_id,
             recipe_path,
             source_id=source_id,
-            overwrite=overwrite,
+            overwrite=effective_overwrite,
             base_url=source.url if source else "",
+            allow_quality_warnings=allow_quality_warnings,
         )
+
+
+def _same_project_path(root: Path, left: str, right: str) -> bool:
+    if not str(left or "").strip() or not str(right or "").strip():
+        return False
+    try:
+        return resolve_project_path(root, left).resolve() == resolve_project_path(root, right).resolve()
+    except (OSError, RuntimeError):
+        return False
 
 
 class ProfileWorkflowHandler:
     def __init__(self, root: Path = ROOT) -> None:
         self.root = Path(root)
         self.setup = SetupService(self.root)
+        self.connectors = ConnectorSettingsService(self.root)
         self.drafts = CvProfileDraftService(self.root)
         self.references = CvReferenceService(self.root)
 
@@ -367,6 +399,18 @@ class ProfileWorkflowHandler:
     def save_ai_policy_from_form(self, form) -> None:
         self.setup.save_ai_policy_from_form(form)
 
+    def save_connector_settings_from_form(self, form) -> None:
+        self.connectors.save_from_form(form)
+
+    def start_canva_connection(self) -> str:
+        return self.connectors.canva_authorization_url()
+
+    def complete_canva_connection(self, code: str, state: str) -> None:
+        self.connectors.complete_canva_oauth(code, state)
+
+    def disconnect_canva(self) -> None:
+        self.connectors.disconnect_canva()
+
     def save_setup_file(self, file_key: str, content: str) -> None:
         self.setup.save_setup_file(file_key, content)
 
@@ -377,14 +421,34 @@ class ProfileWorkflowHandler:
     def auto_config_targets_from_form(self, form) -> list[str]:
         return self.setup.auto_config_targets_from_form(form)
 
-    def auto_configure_profile_from_cv(self, cv_text: str, targets: list[str], *, progress_callback=None):
-        return self.setup.auto_configure_profile_from_cv(cv_text, targets, progress_callback=progress_callback)
+    def auto_configure_profile_from_cv(
+        self,
+        cv_text: str,
+        targets: list[str],
+        *,
+        progress_callback=None,
+        llm_model: str = "",
+    ):
+        return self.setup.auto_configure_profile_from_cv(
+            cv_text,
+            targets,
+            progress_callback=progress_callback,
+            llm_model=llm_model,
+        )
 
-    def draft_profile_auto_configuration_from_cv(self, cv_text: str, targets: list[str], *, progress_callback=None):
+    def draft_profile_auto_configuration_from_cv(
+        self,
+        cv_text: str,
+        targets: list[str],
+        *,
+        progress_callback=None,
+        llm_model: str = "",
+    ):
         return self.setup.draft_profile_auto_configuration_from_cv(
             cv_text,
             targets,
             progress_callback=progress_callback,
+            llm_model=llm_model,
         )
 
     def profile_auto_configuration_prompt(self, cv_text: str, targets: list[str], *, progress_callback=None) -> str:
