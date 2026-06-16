@@ -18,7 +18,7 @@ On first run the launcher:
 1. Finds Python 3.11+.
 2. Asks before attempting to install Python if it is missing.
 3. Creates `app/environment/.venv`.
-4. Installs `app/environment/requirements.txt`.
+4. Installs `app/environment/requirements.txt`, `app/environment/requirements-playwright.txt`, and Chromium for rendered recipe/source setup.
 5. Applies first-run defaults from `setup/defaults/`.
 6. Creates local private folders under `user/` and generated state under `runtime/`.
 7. Starts the FastAPI web UI and opens `http://127.0.0.1:8765/`.
@@ -109,9 +109,9 @@ CLAUDE_USE_BY_DEFAULT=false
 
 AI review is advisory. Deterministic scoring remains the source of truth for match category and inclusion decisions.
 
-## Optional Playwright Diagnostics
+## Rendered Browser Support
 
-Playwright is only for explicit browser diagnostics and recipe/source setup probes.
+The launcher installs Playwright and Chromium into `app/environment/.venv` because some public job boards require rendered-browser setup or testing. Use these commands only to repair or verify that browser support manually:
 
 ```powershell
 .\app\environment\.venv\Scripts\python.exe -m pip install -r app\environment\requirements-playwright.txt

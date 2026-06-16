@@ -5,6 +5,7 @@ This project is a local-first SAP job preparation agent. It discovers postings, 
 Use this file as the fast startup path. Use the companion docs for deeper routing:
 
 - `docs/agent-info-map.md`: where to read for each product area.
+- `docs/handler-map.md`: how handlers, services, runtime tasks, view models, routes, and templates usually share cross-screen state.
 - `docs/agent-test-map.md`: which tests to run for touched files.
 
 ## First Steps
@@ -13,7 +14,7 @@ Use this file as the fast startup path. Use the companion docs for deeper routin
 2. Skim `README.md` for the current product surface and `docs/how-it-works.md` for the core data flow.
 3. Pick the relevant area in `docs/agent-info-map.md`.
 4. Before editing, search with `rg` and prefer existing service, workflow, and view-model patterns.
-5. After editing, run the targeted tests in `docs/agent-test-map.md`; run `python -m pytest` or `.\app\environment\scripts\check.ps1` for broad changes.
+5. After editing, run tests through `python app/environment/scripts/test_handler.py`, passing the targeted test files from `docs/agent-test-map.md`; use `.\app\environment\scripts\check.ps1` for full lint, format, and coverage.
 
 ## Operating Boundaries
 
@@ -40,28 +41,31 @@ Use this file as the fast startup path. Use the companion docs for deeper routin
 - `user/sources/`: local source registry, source health, execution config, and recipe YAML copied from `setup/defaults/sources/`.
 - `app/resources/prompts/`, `app/resources/templates/`, `setup/defaults/profile/`: AI prompts, Markdown output templates, and public sample profile data.
 
-## Workflow Rules
+## Workflow Context
 
-- Routes may validate form inputs, redirect, return JSON, and render templates. Decisions about source readiness, recipe lifecycle, setup state, and run state belong in workflow handlers or services.
-- Recipe calibration, recipe generation, candidate approval, adoption, source health, source-test readiness, and enablement are separate steps. Do not collapse them.
+- Routes may validate form inputs, redirect, return JSON, and render templates. Decisions about readiness, lifecycle, setup state, and run state are usually easier to reason about when they are projected by workflow handlers or services.
+- Many features span routes, services, runtime tasks, view models, templates, and static JS. `docs/handler-map.md` is an orientation map for those handoffs, useful when checking whether a page-specific condition already has a shared handler or state projection.
+- Recipe calibration, recipe generation, candidate approval, adoption, source health, source-test readiness, and enablement are modeled as separate steps in the app.
 - Source health answers whether a recipe extracted useful jobs from preview evidence. Go-live readiness answers whether the configured execution source works through the adapter path without writing outputs.
-- Viewing source pages must not mutate execution config. Creating or refreshing execution entries must be an explicit action and should keep sources disabled until readiness gates pass.
-- If you touch generated-material wording, check recruiter-facing templates for internal score leakage.
+- Source page views are expected to be read-only for execution config. Creating or refreshing execution entries is handled through explicit actions, and sources stay disabled until readiness gates pass.
+- Generated-material wording can affect recruiter-facing templates, so those templates are useful context when changing summaries, caveats, or scoring language.
 
 ## Verification
 
 Use targeted tests while iterating:
 
 ```powershell
-python -m pytest tests/test_scoring.py
-python -m pytest tests/test_web_smoke.py
+python app/environment/scripts/test_handler.py tests/test_scoring.py
+python app/environment/scripts/test_handler.py tests/test_web_smoke.py
 ```
 
 Run the default product suite before finishing broad or cross-layer work:
 
 ```powershell
-python -m pytest
+python app/environment/scripts/test_handler.py
 ```
+
+The test handler invokes pytest, prints per-file progress, and writes `.pytest-progress/latest.txt` plus `.pytest-progress/latest.json`. If a run times out or an agent resets, run `python app/environment/scripts/test_handler.py --show-progress` or inspect that progress file before rerunning so already-passed files do not need to be repeated.
 
 Run lint, format check, and coverage when the change is ready for full verification:
 

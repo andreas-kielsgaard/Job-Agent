@@ -1,16 +1,14 @@
-﻿# Optional Playwright Setup
+# Playwright Setup
 
-Playwright is optional. The normal Job-Agent app, daily runs, setup pages, manual posting intake, and material generation should continue to work without it.
+The launcher installs Playwright and Chromium into `app/environment/.venv` because rendered source setup and some recipe tests need a browser. The normal app should still import without Playwright in constrained environments, but setup-complete source automation should use the launcher-managed environment.
 
-Use this only when you want to test whether your local Windows environment can run rendered-page diagnostics.
+Use this page when you want to repair or verify the rendered-browser environment manually.
 
 ## Windows Setup
 
 ```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -r app/environment/requirements-playwright.txt
-python -m playwright install chromium
+.\app\environment\.venv\Scripts\python.exe -m pip install -r app\environment\requirements-playwright.txt
+.\app\environment\.venv\Scripts\python.exe -m playwright install chromium
 ```
 
 The Playwright Python package and the browser binaries are separate installs. `pip install` installs the Python API; `python -m playwright install chromium` downloads the Chromium browser that Playwright controls.
@@ -22,20 +20,19 @@ If Playwright or Chromium fails to install, stop here and do not continue to ren
 After setup:
 
 ```powershell
-python app/environment/scripts/check_playwright.py
+.\app\environment\.venv\Scripts\python.exe app\environment\scripts\check_playwright.py
 ```
 
 Or probe a specific URL:
 
 ```powershell
-python -m job_agent.browser.playwright_probe https://example.com --screenshot
+.\app\environment\.venv\Scripts\python.exe -m job_agent.browser.playwright_probe https://example.com --screenshot
 ```
 
 Probe artifacts are written under:
 
 ```text
-output/browser-probes/
+runtime/output/browser-probes/
 ```
 
 The probe saves rendered HTML, visible body text, and optionally a screenshot. It is not connected to source adapters or daily runs.
-

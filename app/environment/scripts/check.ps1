@@ -12,4 +12,4 @@ if (Test-Path $Activate) {
 
 python -m ruff check .
 python -m ruff format --check .
-python -m pytest --cov=job_agent --cov-report=term-missing
+python app\environment\scripts\test_handler.py --coverage

@@ -1,18 +1,20 @@
 ﻿# Agent Test Map
 
-Use this file to choose focused verification from the files you touched. Prefer `python -m pytest ...` so the active interpreter is clear.
+Use this file to choose focused verification from the files you touched. Prefer `python app/environment/scripts/test_handler.py ...` when an agent is running tests; pass the targeted test files shown below as handler arguments.
 
 ## Baseline Commands
 
 | Situation | Command |
 | --- | --- |
-| Fast product suite | `python -m pytest` |
+| Fast product suite | `python app/environment/scripts/test_handler.py` |
 | Full local quality gate | `.\app\environment\scripts\check.ps1` |
 | Lint only | `python -m ruff check .` |
 | Format check only | `python -m ruff format --check .` |
-| Coverage report | `python -m pytest --cov=job_agent --cov-report=term-missing` |
+| Coverage report | `python app/environment/scripts/test_handler.py --coverage` |
 
 The default pytest options in `pyproject.toml` run `tests/` quietly and exclude `exploratory` tests. Product tests use temp roots and block external network/API calls.
+
+Route broad runs through `python app/environment/scripts/test_handler.py`. Pytest prints `[pytest-progress]` lines as each test file starts and finishes. It also writes `.pytest-progress/latest.txt` and `.pytest-progress/latest.json`; after a timeout, inspect those files to see passed files, failed files, the current file/test, and the remaining files before rerunning work.
 
 ## Touched Files To Tests
 

@@ -1,7 +1,14 @@
 from __future__ import annotations
 
+import json
+import os
 import shutil
+import time
+from contextlib import suppress
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
@@ -13,6 +20,196 @@ from job_agent.web.runtime import runtime
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 APP_STATE_PATHS = ("runtime", "user")
+PYTEST_PROGRESS_DIR = REPO_ROOT / ".pytest-progress"
+PYTEST_PROGRESS_JSON = PYTEST_PROGRESS_DIR / "latest.json"
+PYTEST_PROGRESS_TEXT = PYTEST_PROGRESS_DIR / "latest.txt"
+
+
+@dataclass
+class _TestFileProgress:
+    total: int = 0
+    completed: int = 0
+    failed: bool = False
+    failed_items: list[str] = field(default_factory=list)
+
+
+class _PytestProgressReporter:
+    def __init__(self, config: pytest.Config, items: list[pytest.Item]) -> None:
+        self._terminal = config.pluginmanager.get_plugin("terminalreporter")
+        self._started_at = datetime.now(UTC).isoformat()
+        self._file_order: list[str] = []
+        self._file_index: dict[str, int] = {}
+        self._files: dict[str, _TestFileProgress] = {}
+        self._file_started_at: dict[str, float] = {}
+        self._completed_files: list[str] = []
+        self._failed_files: list[str] = []
+        self._current_file: str | None = None
+        self._current_test: str | None = None
+
+        for item in items:
+            file_path = _display_test_path(item.path)
+            if file_path not in self._files:
+                self._file_index[file_path] = len(self._file_order) + 1
+                self._file_order.append(file_path)
+                self._files[file_path] = _TestFileProgress()
+            self._files[file_path].total += 1
+
+        self._write_progress("collected")
+
+    def start_test(self, nodeid: str, location: tuple[str, int | None, str]) -> None:
+        file_path = _display_test_path(location[0])
+        if self._current_file != file_path:
+            self._current_file = file_path
+            self._file_started_at[file_path] = time.monotonic()
+            self._line(f"[pytest-progress] RUN {self._file_index[file_path]}/{len(self._file_order)} {file_path}")
+        self._current_test = nodeid
+        self._write_progress("running")
+
+    def record_report(self, report: pytest.TestReport) -> None:
+        file_path = _nodeid_file_path(report.nodeid)
+        file_progress = self._files.get(file_path)
+        if file_progress is None:
+            return
+
+        if report.failed:
+            file_progress.failed = True
+            if report.nodeid not in file_progress.failed_items:
+                file_progress.failed_items.append(report.nodeid)
+
+        if report.when != "teardown":
+            return
+
+        file_progress.completed += 1
+        if file_progress.completed >= file_progress.total:
+            self._finish_file(file_path, file_progress)
+
+    def finish(self, exitstatus: int | pytest.ExitCode) -> None:
+        unfinished = self._unfinished_files()
+        if unfinished:
+            current = self._current_file or unfinished[0]
+            self._line(f"[pytest-progress] STOPPED while running {current}")
+            status = "stopped"
+        elif self._failed_files:
+            self._line(
+                f"[pytest-progress] FAIL {len(self._failed_files)} test file(s); {len(self._completed_files)} passed"
+            )
+            status = "failed"
+        elif exitstatus == pytest.ExitCode.OK:
+            self._line(f"[pytest-progress] PASS all {len(self._completed_files)} test files")
+            status = "finished"
+        else:
+            status = "finished"
+        self._write_progress(status)
+
+    def _finish_file(self, file_path: str, file_progress: _TestFileProgress) -> None:
+        duration = time.monotonic() - self._file_started_at.get(file_path, time.monotonic())
+        completed_count = len(self._completed_files) + len(self._failed_files) + 1
+        outcome = "FAIL" if file_progress.failed else "PASS"
+        self._line(
+            f"[pytest-progress] {outcome} {completed_count}/{len(self._file_order)} "
+            f"{file_path} ({file_progress.completed} tests, {duration:.1f}s)"
+        )
+
+        if file_progress.failed:
+            self._failed_files.append(file_path)
+        else:
+            self._completed_files.append(file_path)
+        if self._current_file == file_path:
+            self._current_file = None
+            self._current_test = None
+        self._write_progress(outcome.lower())
+
+    def _unfinished_files(self) -> list[str]:
+        done = set(self._completed_files) | set(self._failed_files)
+        return [file_path for file_path in self._file_order if file_path not in done]
+
+    def _line(self, message: str) -> None:
+        if self._terminal is not None:
+            self._terminal.write_line(message)
+
+    def _write_progress(self, status: str) -> None:
+        remaining_files = self._unfinished_files()
+        payload: dict[str, Any] = {
+            "status": status,
+            "started_at": self._started_at,
+            "updated_at": datetime.now(UTC).isoformat(),
+            "current_file": self._current_file,
+            "current_test": self._current_test,
+            "total_files": len(self._file_order),
+            "passed_files": self._completed_files,
+            "failed_files": self._failed_files,
+            "remaining_files": remaining_files,
+            "progress_note": ("If pytest is interrupted, rerun failed/current files first, then remaining files."),
+        }
+        text_lines = [
+            f"status: {payload['status']}",
+            f"updated_at: {payload['updated_at']}",
+            f"current_file: {payload['current_file'] or ''}",
+            f"current_test: {payload['current_test'] or ''}",
+            f"passed_files: {len(self._completed_files)}/{len(self._file_order)}",
+            "passed:",
+            *[f"  - {file_path}" for file_path in self._completed_files],
+            "failed:",
+            *[f"  - {file_path}" for file_path in self._failed_files],
+            "remaining:",
+            *[f"  - {file_path}" for file_path in remaining_files],
+        ]
+
+        with suppress(OSError):
+            PYTEST_PROGRESS_DIR.mkdir(exist_ok=True)
+            _atomic_write_text(PYTEST_PROGRESS_JSON, json.dumps(payload, indent=2) + "\n")
+            _atomic_write_text(PYTEST_PROGRESS_TEXT, "\n".join(text_lines) + "\n")
+
+
+def pytest_collection_finish(session: pytest.Session) -> None:
+    global _PYTEST_PROGRESS_REPORTER
+    _PYTEST_PROGRESS_REPORTER = _PytestProgressReporter(session.config, session.items)
+
+
+def pytest_runtest_logstart(nodeid: str, location: tuple[str, int | None, str]) -> None:
+    progress = _get_progress_reporter()
+    if progress is not None:
+        progress.start_test(nodeid, location)
+
+
+def pytest_runtest_logreport(report: pytest.TestReport) -> None:
+    progress = _get_progress_reporter()
+    if progress is not None:
+        progress.record_report(report)
+
+
+def pytest_sessionfinish(session: pytest.Session, exitstatus: int | pytest.ExitCode) -> None:
+    if _PYTEST_PROGRESS_REPORTER is not None:
+        _PYTEST_PROGRESS_REPORTER.finish(exitstatus)
+
+
+def _get_progress_reporter() -> _PytestProgressReporter | None:
+    return _PYTEST_PROGRESS_REPORTER
+
+
+def _display_test_path(path: str | Path) -> str:
+    resolved = Path(path).resolve()
+    try:
+        return resolved.relative_to(REPO_ROOT).as_posix()
+    except ValueError:
+        return resolved.as_posix()
+
+
+def _nodeid_file_path(nodeid: str) -> str:
+    return Path(nodeid.split("::", 1)[0]).as_posix()
+
+
+def _atomic_write_text(path: Path, content: str) -> None:
+    temp_path = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    try:
+        temp_path.write_text(content, encoding="utf-8")
+        temp_path.replace(path)
+    finally:
+        with suppress(OSError):
+            temp_path.unlink()
+
+
+_PYTEST_PROGRESS_REPORTER: _PytestProgressReporter | None = None
 
 
 @pytest.fixture(autouse=True)

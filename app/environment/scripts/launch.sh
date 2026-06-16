@@ -6,6 +6,9 @@ CODE_DIR="$ROOT/app/code"
 VENV_DIR="$ROOT/app/environment/.venv"
 VENV_PYTHON="$VENV_DIR/bin/python"
 REQUIREMENTS="$ROOT/app/environment/requirements.txt"
+PLAYWRIGHT_REQUIREMENTS="$ROOT/app/environment/requirements-playwright.txt"
+DEPENDENCY_STAMP="$VENV_DIR/.job-agent-dependencies.json"
+DEPENDENCY_STAMP_SCRIPT="$ROOT/app/environment/scripts/dependency_stamp.py"
 URL="http://127.0.0.1:8765/"
 HEALTH_URL="http://127.0.0.1:8765/api/health"
 
@@ -134,6 +137,31 @@ remove_extra_job_agent_web_processes() {
   done
 }
 
+dependencies_verified() {
+  [[ -f "$DEPENDENCY_STAMP" ]] || return 1
+  "$VENV_PYTHON" "$DEPENDENCY_STAMP_SCRIPT" check \
+    --stamp "$DEPENDENCY_STAMP" \
+    --requirements "$REQUIREMENTS" \
+    --requirements "$PLAYWRIGHT_REQUIREMENTS" >/dev/null 2>&1 &&
+    playwright_chromium_ready
+}
+
+mark_dependencies_verified() {
+  "$VENV_PYTHON" "$DEPENDENCY_STAMP_SCRIPT" mark \
+    --stamp "$DEPENDENCY_STAMP" \
+    --requirements "$REQUIREMENTS" \
+    --requirements "$PLAYWRIGHT_REQUIREMENTS" >/dev/null
+}
+
+playwright_chromium_ready() {
+  "$VENV_PYTHON" - <<'PY' >/dev/null 2>&1
+from playwright.sync_api import sync_playwright
+with sync_playwright() as playwright:
+    browser = playwright.chromium.launch(headless=True)
+    browser.close()
+PY
+}
+
 PYTHON_BIN="$(find_python || true)"
 if [[ -z "$PYTHON_BIN" ]]; then
   install_python_with_consent
@@ -148,8 +176,13 @@ if [[ ! -x "$VENV_PYTHON" ]]; then
   "$PYTHON_BIN" -m venv "$VENV_DIR"
 fi
 
-"$VENV_PYTHON" -m pip install --upgrade pip
-"$VENV_PYTHON" -m pip install -r "$REQUIREMENTS"
+if ! dependencies_verified; then
+  "$VENV_PYTHON" -m pip install --upgrade pip
+  "$VENV_PYTHON" -m pip install -r "$REQUIREMENTS"
+  "$VENV_PYTHON" -m pip install -r "$PLAYWRIGHT_REQUIREMENTS"
+  "$VENV_PYTHON" -m playwright install chromium
+  mark_dependencies_verified
+fi
 
 export PYTHONPATH="$CODE_DIR${PYTHONPATH:+:$PYTHONPATH}"
 "$VENV_PYTHON" -m job_agent.bootstrap --root "$ROOT"

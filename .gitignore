@@ -3,6 +3,7 @@
 app/environment/.venv/
 .coverage
 .pytest_cache/
+.pytest-progress/
 .ruff_cache/
 __pycache__/
 *.pyc

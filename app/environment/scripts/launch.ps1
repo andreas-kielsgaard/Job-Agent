@@ -5,6 +5,9 @@ $CodeDir = Join-Path $Root "app\code"
 $VenvDir = Join-Path $Root "app\environment\.venv"
 $VenvPython = Join-Path $VenvDir "Scripts\python.exe"
 $Requirements = Join-Path $Root "app\environment\requirements.txt"
+$PlaywrightRequirements = Join-Path $Root "app\environment\requirements-playwright.txt"
+$DependencyStamp = Join-Path $VenvDir ".job-agent-dependencies.json"
+$DependencyStampScript = Join-Path $Root "app\environment\scripts\dependency_stamp.py"
 $Url = "http://127.0.0.1:8765/"
 $HealthUrl = "http://127.0.0.1:8765/api/health"
 
@@ -166,6 +169,32 @@ Set-Location '$Root'
   throw "Job Agent web app did not become ready at $Url"
 }
 
+function Test-DependenciesVerified {
+  if (-not (Test-Path $DependencyStamp)) {
+    return $false
+  }
+  & $VenvPython $DependencyStampScript check --stamp $DependencyStamp --requirements $Requirements --requirements $PlaywrightRequirements *> $null
+  return $LASTEXITCODE -eq 0 -and (Test-PlaywrightChromiumReady)
+}
+
+function Set-DependenciesVerified {
+  & $VenvPython $DependencyStampScript mark --stamp $DependencyStamp --requirements $Requirements --requirements $PlaywrightRequirements
+  if ($LASTEXITCODE -ne 0) {
+    throw "Could not write dependency verification stamp."
+  }
+}
+
+function Test-PlaywrightChromiumReady {
+  $script = @"
+from playwright.sync_api import sync_playwright
+with sync_playwright() as playwright:
+    browser = playwright.chromium.launch(headless=True)
+    browser.close()
+"@
+  & $VenvPython -c $script *> $null
+  return $LASTEXITCODE -eq 0
+}
+
 $python = Find-Python
 if (-not $python) {
   Install-PythonWithConsent
@@ -182,8 +211,25 @@ if (-not (Test-Path $VenvPython)) {
   }
 }
 
-& $VenvPython -m pip install --upgrade pip
-& $VenvPython -m pip install -r $Requirements
+if (-not (Test-DependenciesVerified)) {
+  & $VenvPython -m pip install --upgrade pip
+  if ($LASTEXITCODE -ne 0) {
+    throw "pip upgrade failed."
+  }
+  & $VenvPython -m pip install -r $Requirements
+  if ($LASTEXITCODE -ne 0) {
+    throw "Dependency installation failed."
+  }
+  & $VenvPython -m pip install -r $PlaywrightRequirements
+  if ($LASTEXITCODE -ne 0) {
+    throw "Rendered browser dependency installation failed."
+  }
+  & $VenvPython -m playwright install chromium
+  if ($LASTEXITCODE -ne 0) {
+    throw "Chromium browser installation failed."
+  }
+  Set-DependenciesVerified
+}
 
 $env:PYTHONPATH = if ($env:PYTHONPATH) { "$CodeDir;$env:PYTHONPATH" } else { $CodeDir }
 & $VenvPython -m job_agent.bootstrap --root $Root
