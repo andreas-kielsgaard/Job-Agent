@@ -7,7 +7,10 @@ from unittest.mock import patch
 
 import yaml
 
+from job_agent.email_models import GMAIL_READONLY_SCOPE
+from job_agent.email_store import GmailCredentialStore, GmailSyncStateStore
 from job_agent.services.connector_settings_service import ConnectorSettingsService
+from job_agent.services.gmail_email_provider import GmailOAuthResult
 from job_agent.services.setup_service import SetupService
 
 
@@ -137,6 +140,49 @@ class SetupServiceTests(unittest.TestCase):
 
             with self.assertRaises(ValueError):
                 service.complete_canva_oauth("returned-code", "wrong-state")
+
+    def test_gmail_readonly_oauth_flow_stores_token_under_runtime_email(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / ".env").write_text(
+                "GMAIL_CLIENT_ID=gmail-client\nGMAIL_CLIENT_SECRET=gmail-secret\n",
+                encoding="utf-8",
+            )
+            service = ConnectorSettingsService(root)
+            test_case = self
+
+            class FakeGmailOAuthClient:
+                def __init__(self, config):
+                    self.config = config
+
+                def authorization_url(self, state):
+                    test_case.assertEqual(self.config["scopes"], (GMAIL_READONLY_SCOPE,))
+                    return f"https://accounts.example/auth?state={state}"
+
+                def complete_oauth(self, code, state):
+                    test_case.assertEqual(code, "returned-code")
+                    return GmailOAuthResult(
+                        credentials_json='{"token": "gmail-token"}',
+                        account_email="me@example.com",
+                        history_id="123",
+                    )
+
+            with patch("job_agent.services.connector_settings_service.GmailOAuthClient", FakeGmailOAuthClient):
+                authorization_url = service.gmail_authorization_url()
+                stored = yaml.safe_load((root / "connectors.yaml").read_text(encoding="utf-8"))
+                state = stored["email"]["pending_oauth"]["state"]
+                self.assertIn(f"state={state}", authorization_url)
+                settings = service.complete_gmail_oauth("returned-code", state)
+
+            self.assertEqual(settings["email"]["oauth_status"], "connected")
+            self.assertEqual(settings["email"]["connected_email"], "me@example.com")
+            self.assertFalse(settings["email"]["sending_enabled"])
+            self.assertNotIn("token", settings["email"])
+            self.assertEqual(GmailCredentialStore(root).read_text(), '{"token": "gmail-token"}')
+            self.assertEqual(GmailSyncStateStore(root).get().last_history_id, "123")
+
+            service.disconnect_gmail()
+            self.assertFalse(GmailCredentialStore(root).exists())
 
     def test_saves_contact_and_preferences(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

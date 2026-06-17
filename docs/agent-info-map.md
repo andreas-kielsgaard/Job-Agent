@@ -26,7 +26,7 @@ Use this map to find the smallest useful reading set before changing code. Start
 | Matching and scoring | `docs/matching-and-ai-review.md` | `app/code/job_agent/scoring.py`, `app/code/job_agent/highlights.py`, `app/code/job_agent/web/view_models/match_sandbox.py` | Deterministic scoring drives category and match result. AI review is advisory. |
 | AI search review | `docs/matching-and-ai-review.md` | `app/code/job_agent/services/ai_search_service.py`, `app/resources/prompts/evaluate_job_relevance.md`, `app/resources/prompts/score_job_assist.md` | Excluded jobs should stay skipped unless policy explicitly allows review triggers. |
 | Material generation | README Optional Claude Setup | `app/code/job_agent/generator.py`, `app/code/job_agent/services/material_service.py`, `app/resources/templates/`, `app/resources/prompts/generate_application.md`, `app/resources/prompts/generate_form_answers.md` | Recruiter-facing output should not expose internal scores or implementation language. |
-| Application tracking | `docs/app-workflow-map.md`, `docs/handler-map.md` | `app/code/job_agent/application_store.py`, `app/code/job_agent/services/application_tracker_service.py`, `app/code/job_agent/web/application_workflow.py`, `app/code/job_agent/web/routers/applications.py` | Applications are post-application local records. Manual communication tracking must not send email or automate application actions. |
+| Application tracking | `docs/app-workflow-map.md`, `docs/handler-map.md` | `app/code/job_agent/application_store.py`, `app/code/job_agent/services/application_tracker_service.py`, `app/code/job_agent/services/email_sync_service.py`, `app/code/job_agent/web/routers/applications.py` | Applications are post-application local records. Gmail integration is read-only; do not send email or automate application actions. |
 | Human application examples | `docs/profile-setup.md`, `docs/matching-and-ai-review.md` | `app/code/job_agent/services/application_examples_service.py`, `setup/defaults/profile/application-examples.yaml` | Examples feed application prompts, AI edit context, and review bundles. |
 | Profile and setup | `docs/profile-setup.md` | `app/code/job_agent/config.py`, `app/code/job_agent/profile_contract.py`, `app/code/job_agent/services/setup_service.py`, `app/code/job_agent/web/routers/setup.py` | Prefer preserving unrelated YAML and keeping public sample data neutral. |
 | CV reference upload and drafts | `docs/profile-setup.md` | `app/code/job_agent/services/cv_reference_service.py`, `app/code/job_agent/services/cv_profile_draft_service.py`, setup routes/templates | Uploaded real CV files belong under ignored `user/uploads/cv/`. |
@@ -61,6 +61,7 @@ Use this map to find the smallest useful reading set before changing code. Start
 | `runtime/jobs/seen_jobs.json` | Seen-state store | Ignored. Source tests must not update it. |
 | `runtime/jobs/application_status.json` | User review/application statuses | Ignored. Treat as private local state. |
 | `runtime/applications/` | Applied-job records and manual communication tracking | Ignored. Do not add Gmail sync, send, or account automation without explicit product scope. |
+| `runtime/email/` | Gmail read-only tokens, sync state, message index, and thread cache | Ignored. Treat synced snippets and OAuth tokens as private user data. |
 
 ## Dependency Hints
 

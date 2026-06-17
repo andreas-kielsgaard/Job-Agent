@@ -12,10 +12,13 @@ from urllib.parse import urlencode, urlparse
 import requests
 
 from job_agent.config import ROOT
+from job_agent.email_models import GMAIL_READONLY_SCOPE
+from job_agent.email_store import GmailCredentialStore, GmailSyncStateStore
 from job_agent.env import load_env
 from job_agent.io.yaml_store import read_yaml, write_yaml
 from job_agent.llm import DEFAULT_CLAUDE_MODEL
 from job_agent.paths import user_dir
+from job_agent.services.gmail_email_provider import GmailOAuthClient
 
 CANVA_MCP_SERVER_URL = "https://mcp.canva.com/mcp"
 CANVA_AUTHORIZATION_URL = "https://www.canva.com/api/oauth/authorize"
@@ -25,6 +28,7 @@ CANVA_PROFILE_URL = "https://api.canva.com/rest/v1/users/me/profile"
 DEFAULT_CANVA_REDIRECT_URI = "http://127.0.0.1:8765/connectors/canva/callback"
 DEFAULT_EMAIL_REDIRECT_URI = "http://127.0.0.1:8765/connectors/email/callback"
 DEFAULT_CANVA_SCOPES = ("profile:read", "design:content:write", "design:meta:read")
+DEFAULT_GMAIL_SCOPES = (GMAIL_READONLY_SCOPE,)
 
 EMAIL_PROVIDERS = {
     "gmail": "Gmail",
@@ -49,7 +53,11 @@ class ConnectorSettingsService:
             if isinstance(data.get(key), dict):
                 settings[key].update(data[key])
         settings["canva"] = _normalize_canva(settings["canva"], self._canva_oauth_config())
-        settings["email"] = _normalize_email(settings["email"])
+        settings["email"] = _normalize_email(
+            settings["email"],
+            self._gmail_oauth_config(),
+            GmailCredentialStore(self.root).exists(),
+        )
         settings["claude"] = self._claude_status()
         settings["email_provider_options"] = [
             {"value": value, "label": label} for value, label in EMAIL_PROVIDERS.items()
@@ -69,16 +77,18 @@ class ConnectorSettingsService:
                 "mcp_server_url": CANVA_MCP_SERVER_URL,
             }
         )
+        email = _dict(current.get("email"))
+        email.update(
+            {
+                "enabled": _truthy(form.get("email_enabled")) or bool(email.get("connected_email")),
+                "provider": str(form.get("email_provider") or email.get("provider") or "gmail").strip(),
+                "account_email": str(form.get("email_account_email") or email.get("account_email") or "").strip(),
+                "mode": str(form.get("email_mode") or email.get("mode") or "draft_only").strip(),
+            }
+        )
         settings = {
             "canva": canva,
-            "email": _normalize_email(
-                {
-                    "enabled": _truthy(form.get("email_enabled")),
-                    "provider": str(form.get("email_provider") or "gmail").strip(),
-                    "account_email": str(form.get("email_account_email") or "").strip(),
-                    "mode": str(form.get("email_mode") or "draft_only").strip(),
-                }
-            ),
+            "email": _normalize_email(email, self._gmail_oauth_config(), GmailCredentialStore(self.root).exists()),
         }
         write_yaml(self.path, settings)
         return self.load()
@@ -197,6 +207,88 @@ class ConnectorSettingsService:
         write_yaml(self.path, store)
         return self.load()
 
+    def gmail_authorization_url(self) -> str:
+        config = self._gmail_oauth_config()
+        if not config["client_id"] or not config["client_secret"]:
+            raise ValueError("Gmail read-only sync needs GMAIL_CLIENT_ID and GMAIL_CLIENT_SECRET in user/.env.")
+        state = secrets.token_urlsafe(48)
+        store = self._read_store()
+        email = _dict(store.get("email"))
+        email.update(
+            {
+                "enabled": True,
+                "provider": "gmail",
+                "oauth_client_id": config["client_id"],
+                "oauth_redirect_uri": config["redirect_uri"],
+                "oauth_scopes": list(config["scopes"]),
+                "pending_oauth": {
+                    "state": state,
+                    "redirect_uri": config["redirect_uri"],
+                    "scopes": list(config["scopes"]),
+                    "created_at": datetime.now(UTC).isoformat(),
+                },
+            }
+        )
+        store["email"] = email
+        write_yaml(self.path, store)
+        return GmailOAuthClient(config).authorization_url(state)
+
+    def complete_gmail_oauth(self, code: str, state: str) -> dict[str, Any]:
+        store = self._read_store()
+        email = _dict(store.get("email"))
+        pending = _dict(email.get("pending_oauth"))
+        if not code:
+            raise ValueError("Gmail did not return an authorization code.")
+        if not state or state != str(pending.get("state") or ""):
+            raise ValueError("Gmail sign-in state did not match. Please try connecting again.")
+        config = self._gmail_oauth_config()
+        if not config["client_id"] or not config["client_secret"]:
+            raise ValueError("Gmail read-only sync needs GMAIL_CLIENT_ID and GMAIL_CLIENT_SECRET in user/.env.")
+        result = GmailOAuthClient(config).complete_oauth(code, state)
+        GmailCredentialStore(self.root).write_text(result.credentials_json)
+        email.update(
+            {
+                "enabled": True,
+                "provider": "gmail",
+                "account_email": result.account_email,
+                "connected_email": result.account_email,
+                "connected_at": datetime.now(UTC).isoformat(),
+                "oauth_client_id": config["client_id"],
+                "oauth_redirect_uri": config["redirect_uri"],
+                "oauth_scopes": list(config["scopes"]),
+                "pending_oauth": {},
+            }
+        )
+        store["email"] = email
+        write_yaml(self.path, store)
+        sync_state = GmailSyncStateStore(self.root).get()
+        sync_state.account_id = result.account_email
+        sync_state.connected_email = result.account_email
+        sync_state.last_history_id = result.history_id
+        GmailSyncStateStore(self.root).save(sync_state)
+        return self.load()
+
+    def disconnect_gmail(self) -> dict[str, Any]:
+        GmailCredentialStore(self.root).delete()
+        store = self._read_store()
+        email = _dict(store.get("email"))
+        for key in [
+            "connected_email",
+            "connected_at",
+            "oauth_client_id",
+            "oauth_scopes",
+            "pending_oauth",
+        ]:
+            email.pop(key, None)
+        email["enabled"] = False
+        store["email"] = email
+        write_yaml(self.path, store)
+        sync_state = GmailSyncStateStore(self.root).get()
+        sync_state.sync_status = "disconnected"
+        sync_state.last_error = ""
+        GmailSyncStateStore(self.root).save(sync_state)
+        return self.load()
+
     def _read_store(self) -> dict[str, Any]:
         raw = read_yaml(self.path, {})
         return raw if isinstance(raw, dict) else {}
@@ -213,6 +305,20 @@ class ConnectorSettingsService:
             "client_secret": str(env.get("CANVA_CLIENT_SECRET") or "").strip(),
             "redirect_uri": str(env.get("CANVA_REDIRECT_URI") or DEFAULT_CANVA_REDIRECT_URI).strip(),
             "scopes": scopes or DEFAULT_CANVA_SCOPES,
+        }
+
+    def _gmail_oauth_config(self) -> dict[str, Any]:
+        env = load_env(self.root)
+        scopes = tuple(
+            item.strip()
+            for item in str(env.get("GMAIL_SCOPES") or " ".join(DEFAULT_GMAIL_SCOPES)).split()
+            if item.strip()
+        )
+        return {
+            "client_id": str(env.get("GMAIL_CLIENT_ID") or "").strip(),
+            "client_secret": str(env.get("GMAIL_CLIENT_SECRET") or "").strip(),
+            "redirect_uri": str(env.get("GMAIL_REDIRECT_URI") or DEFAULT_EMAIL_REDIRECT_URI).strip(),
+            "scopes": scopes or DEFAULT_GMAIL_SCOPES,
         }
 
     def _exchange_canva_code(
@@ -292,10 +398,14 @@ def _default_settings() -> dict[str, Any]:
                 "account_email": "",
                 "oauth_client_id": "",
                 "oauth_redirect_uri": DEFAULT_EMAIL_REDIRECT_URI,
+                "connected_email": "",
+                "connected_at": "",
+                "oauth_scopes": list(DEFAULT_GMAIL_SCOPES),
                 "mode": "draft_only",
                 "sender_name": "",
                 "sending_enabled": False,
                 "oauth_status": "not_connected",
+                "oauth_ready": False,
             },
         }
     )
@@ -327,7 +437,7 @@ def _normalize_canva(data: dict[str, Any], config: dict[str, Any]) -> dict[str, 
     }
 
 
-def _normalize_email(data: dict[str, Any]) -> dict[str, Any]:
+def _normalize_email(data: dict[str, Any], config: dict[str, Any], has_credentials: bool) -> dict[str, Any]:
     provider = str(data.get("provider") or "gmail").strip()
     if provider not in EMAIL_PROVIDERS:
         provider = "gmail"
@@ -335,14 +445,23 @@ def _normalize_email(data: dict[str, Any]) -> dict[str, Any]:
     if mode not in EMAIL_MODES:
         mode = "draft_only"
     account_email = str(data.get("account_email") or "").strip()
+    connected_email = str(data.get("connected_email") or account_email).strip()
+    connected = bool(has_credentials and connected_email)
     return {
-        "enabled": bool(data.get("enabled")),
+        "enabled": bool(data.get("enabled") or connected),
         "provider": provider,
         "account_email": account_email,
-        "oauth_redirect_uri": DEFAULT_EMAIL_REDIRECT_URI,
+        "connected_email": connected_email if connected else "",
+        "connected_at": str(data.get("connected_at") or "").strip() if connected else "",
+        "oauth_client_id": str(data.get("oauth_client_id") or config.get("client_id") or "").strip(),
+        "oauth_redirect_uri": str(
+            data.get("oauth_redirect_uri") or config.get("redirect_uri") or DEFAULT_EMAIL_REDIRECT_URI
+        ).strip(),
+        "oauth_ready": bool(config.get("client_id") and config.get("client_secret")),
+        "oauth_scopes": data.get("oauth_scopes") or list(config.get("scopes") or DEFAULT_GMAIL_SCOPES),
         "mode": mode,
         "sending_enabled": False,
-        "oauth_status": "configured" if account_email else "not_configured",
+        "oauth_status": "connected" if connected else "configured" if account_email else "not_configured",
     }
 
 

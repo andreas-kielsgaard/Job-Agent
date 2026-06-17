@@ -6,6 +6,7 @@ from typing import Any
 from job_agent.application_store import ApplicationStore, EmailThreadLinkStore, ManualCommunicationEventStore
 from job_agent.config import ROOT
 from job_agent.services.application_tracker_service import ApplicationTrackerService
+from job_agent.services.email_sync_service import EmailSyncService
 from job_agent.web.view_models.applications import build_application_detail_view, build_applications_view
 
 
@@ -16,10 +17,13 @@ class ApplicationWorkflowHandler:
         self.thread_links = EmailThreadLinkStore(self.root)
         self.manual_events = ManualCommunicationEventStore(self.root)
         self.tracker = ApplicationTrackerService(self.root)
+        self.email_sync = EmailSyncService(self.root)
 
     def list_view(self, filters: dict[str, Any] | None = None) -> dict[str, Any]:
         self.tracker.backfill_applied()
-        return build_applications_view(filters, self.root)
+        view = build_applications_view(filters, self.root)
+        view["gmail"] = self.email_sync.status()
+        return view
 
     def detail_view(self, application_id: str) -> dict[str, Any]:
         self.tracker.backfill_applied()
@@ -67,6 +71,9 @@ class ApplicationWorkflowHandler:
             subject=subject,
             note=note,
         )
+
+    def sync_gmail(self, *, max_messages: int = 100, force_full: bool = False):
+        return self.email_sync.sync_recent_candidates(max_messages=max_messages, force_full=force_full)
 
     def require_application(self, application_id: str):
         self.tracker.backfill_applied()

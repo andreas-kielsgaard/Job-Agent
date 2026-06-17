@@ -729,6 +729,31 @@
         {% endif %}
       </section>
 
+      <section class="profile-editor-panel">
+        <div class="source-title-row">
+          <h3>Gmail Read-Only</h3>
+          <span class="badge {{ 'generated' if connector_settings.email.oauth_status == 'connected' else 'missing' }}">{{ "Connected" if connector_settings.email.oauth_status == "connected" else "Not connected" }}</span>
+        </div>
+        {% if connector_settings.email.oauth_status == "connected" %}
+        <div class="profile-signal-list">
+          <span><strong>Account</strong>{{ connector_settings.email.connected_email or connector_settings.email.account_email }}</span>
+          <span><strong>Scope</strong>Read-only Gmail metadata and snippets</span>
+        </div>
+        <p class="muted">Gmail credentials are stored locally under ignored runtime storage. This app can read message metadata and snippets, but cannot send, modify, or delete mail.</p>
+        <form method="post" action="/connectors/email/gmail/disconnect" class="inline-form">
+          <button type="submit" class="light">Disconnect Gmail</button>
+        </form>
+        {% else %}
+        <p class="muted">Connect Gmail with the read-only scope to sync recent application-process messages into local storage.</p>
+        <form method="post" action="/connectors/email/gmail/start" class="inline-form">
+          <button type="submit">Connect Gmail read-only</button>
+        </form>
+        {% if not connector_settings.email.oauth_ready %}
+        <p class="muted">Gmail sign-in needs GMAIL_CLIENT_ID and GMAIL_CLIENT_SECRET in this local installation before the button can complete the handoff.</p>
+        {% endif %}
+        {% endif %}
+      </section>
+
       <form method="post" action="/setup/connectors" class="profile-editor-panel">
         <div class="source-title-row">
           <h3>Email Drafts</h3>

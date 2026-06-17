@@ -9,7 +9,7 @@ Routes should use this handler as the controller boundary and avoid rebuilding c
 - `SourceWorkflowHandler`: owns source lifecycle state, source overview cards, setup steps, session status, source-test execution, indexing readiness, detail-review launch, and daily-run projection handoffs.
 - `RecipeWorkflowHandler`: owns recipe generation runs, source-test clues passed into recipe regeneration, calibration capture, and candidate approval/adoption/rejection.
 - `ExecutorWorkflowHandler`: owns dashboard/run views, daily-run launch, run status payloads, and run logs.
-- `ApplicationWorkflowHandler`: owns post-application records, manual Gmail thread links, manual communication events, and application detail/list projections.
+- `ApplicationWorkflowHandler`: owns post-application records, manual Gmail thread links, manual communication events, read-only Gmail sync status, and application detail/list projections.
 
 ## Required Handoffs
 

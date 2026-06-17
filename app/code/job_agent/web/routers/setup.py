@@ -174,6 +174,38 @@ def disconnect_canva() -> RedirectResponse:
     return _setup_redirect(message="Canva disconnected.", anchor="advanced-profile-config")
 
 
+@router.post("/connectors/email/gmail/start")
+def start_gmail_connection() -> RedirectResponse:
+    try:
+        authorization_url = workflow_handler().profile.start_gmail_connection()
+    except ValueError as exc:
+        return _setup_redirect(warning=str(exc), anchor="advanced-profile-config")
+    return RedirectResponse(url=authorization_url, status_code=303)
+
+
+@router.get("/connectors/email/callback")
+def gmail_oauth_callback(
+    code: str = "",
+    state: str = "",
+    error: str = "",
+    error_description: str = "",
+) -> RedirectResponse:
+    if error:
+        message = error_description or error
+        return _setup_redirect(warning=f"Gmail sign-in was not completed: {message}", anchor="advanced-profile-config")
+    try:
+        workflow_handler().profile.complete_gmail_connection(code, state)
+    except ValueError as exc:
+        return _setup_redirect(warning=str(exc), anchor="advanced-profile-config")
+    return _setup_redirect(message="Gmail connected for read-only sync.", anchor="advanced-profile-config")
+
+
+@router.post("/connectors/email/gmail/disconnect")
+def disconnect_gmail() -> RedirectResponse:
+    workflow_handler().profile.disconnect_gmail()
+    return _setup_redirect(message="Gmail disconnected.", anchor="advanced-profile-config")
+
+
 @router.post("/setup/cv-reference", response_model=None)
 async def upload_cv_reference(
     request: Request,

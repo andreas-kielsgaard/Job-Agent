@@ -32,6 +32,7 @@ Route broad runs through `python app/environment/scripts/test_handler.py`. Pytes
 | `app/code/job_agent/run_store.py` | `python -m pytest tests/test_run_store.py tests/test_run_state.py tests/test_web.py tests/test_web_smoke.py` |
 | `app/code/job_agent/store.py`, `app/resources/jobs/raw/sample_jobs.yaml` | `python -m pytest tests/test_job_store.py tests/test_store.py tests/test_sources.py tests/test_pipeline.py` |
 | `app/code/job_agent/application_status_store.py` | `python -m pytest tests/test_application_status_store.py tests/test_web.py tests/test_web_smoke.py` |
+| `app/code/job_agent/application_store.py`, `app/code/job_agent/email_store.py`, `app/code/job_agent/services/application_*`, `app/code/job_agent/services/email_*`, `app/code/job_agent/services/gmail_email_provider.py`, application routes/templates | `python app/environment/scripts/test_handler.py tests/test_application_tracking.py tests/test_applications_web.py tests/test_gmail_sync_service.py tests/test_setup_service.py tests/test_web_smoke.py` |
 | `app/code/job_agent/io/*` | `python -m pytest tests/test_job_store.py tests/test_run_store.py tests/test_setup_service.py tests/test_application_status_store.py` |
 | `app/code/job_agent/digest.py`, output package indexes | `python -m pytest tests/test_package_index_service.py tests/test_pipeline.py tests/test_templates.py tests/test_material_service.py` |
 | `app/code/job_agent/services/material_service.py` | `python -m pytest tests/test_material_service.py tests/test_generation_caveats.py tests/test_web_smoke.py` |

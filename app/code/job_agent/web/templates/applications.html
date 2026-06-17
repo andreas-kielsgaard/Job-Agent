@@ -5,10 +5,33 @@
 {% block content %}
 <div class="applications-page">
   <section class="panel application-overview-header">
-    <div>
+    <div class="application-header-row">
+      <div>
       <p class="eyebrow">Post-application</p>
       <h1>Applications</h1>
+      </div>
+      <div class="gmail-sync-panel">
+        <div>
+          <span class="badge {{ 'linked' if gmail.connected else 'missing' }}">{{ "Gmail connected" if gmail.connected else "Gmail not connected" }}</span>
+          {% if gmail.account_email %}<span class="muted">{{ gmail.account_email }}</span>{% endif %}
+          {% if gmail.last_sync_at %}<span class="muted">Last sync {{ gmail.last_sync_at[:16] | replace("T", " ") }}</span>{% endif %}
+        </div>
+        {% if gmail.connected %}
+        <form method="post" action="/api/applications/gmail-sync" class="application-filter-actions">
+          <input type="hidden" name="max_messages" value="100">
+          <button type="submit">Sync Gmail</button>
+        </form>
+        {% else %}
+        <a class="button light" href="/setup#advanced-profile-config">Connect Gmail</a>
+        {% endif %}
+      </div>
     </div>
+    {% if message %}
+    <div class="status-saved-alert" role="status">{{ message }}</div>
+    {% endif %}
+    {% if warning %}
+    <div class="status-warning-alert" role="status">{{ warning }}</div>
+    {% endif %}
     <form method="get" class="application-filter-form">
       <div>
         <label>Search</label>

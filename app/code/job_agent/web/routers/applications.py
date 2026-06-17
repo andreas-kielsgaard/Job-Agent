@@ -20,7 +20,12 @@ def applications_page(request: Request) -> HTMLResponse:
     return templates.TemplateResponse(
         request,
         "applications.html",
-        {"request": request, **workflow_handler().applications.list_view(filters)},
+        {
+            "request": request,
+            **workflow_handler().applications.list_view(filters),
+            "message": request.query_params.get("message", ""),
+            "warning": request.query_params.get("warning", ""),
+        },
     )
 
 
@@ -51,7 +56,7 @@ def update_application_outcome(
         workflow_handler().applications.update_outcome(application_id, outcome)
     except KeyError:
         raise HTTPException(status_code=404, detail="Application not found") from None
-    except ValueError as exc:
+    except (FileNotFoundError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return _redirect(application_id, message="Outcome saved.")
 
@@ -131,6 +136,25 @@ def add_manual_event(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return _redirect(application_id, message="Communication event added.")
+
+
+@router.post("/api/applications/gmail-sync")
+def sync_gmail(
+    max_messages: int = Form(100),
+    force_full: bool = Form(False),
+) -> RedirectResponse:
+    try:
+        result = workflow_handler().applications.sync_gmail(max_messages=max_messages, force_full=force_full)
+    except ValueError as exc:
+        return RedirectResponse(
+            url=f"/applications?{urlencode({'warning': str(exc)})}",
+            status_code=303,
+        )
+    message = (
+        f"Gmail {result.sync_type} sync completed: "
+        f"{result.messages_fetched} message{'s' if result.messages_fetched != 1 else ''} fetched."
+    )
+    return RedirectResponse(url=f"/applications?{urlencode({'message': message})}", status_code=303)
 
 
 def _redirect(application_id: str, *, message: str = "", warning: str = "") -> RedirectResponse:

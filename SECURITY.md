@@ -9,6 +9,7 @@ Put real secrets only in `.env`, which is ignored by Git:
 ```text
 ANTHROPIC_API_KEY=your_real_key_here
 CLAUDE_MODEL=claude-sonnet-4-20250514
+GMAIL_CLIENT_SECRET=your_google_oauth_client_secret
 ```
 
 Commit `.env.example`, but never commit `.env`.
@@ -34,6 +35,8 @@ git status --short
 ```
 
 The search should not show a real key. It is fine for docs and code to mention the variable name `ANTHROPIC_API_KEY`.
+
+Gmail OAuth tokens are also private. They are written under ignored `runtime/email/gmail_token.json`; do not copy that file into docs, issues, or commits.
 
 ## GitHub Actions
 

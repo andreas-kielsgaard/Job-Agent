@@ -4405,6 +4405,27 @@ td {
   margin: 0;
 }
 
+.application-header-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(240px, 360px);
+  gap: 16px;
+  align-items: center;
+}
+
+.gmail-sync-panel {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  justify-content: flex-end;
+  text-align: right;
+}
+
+.gmail-sync-panel > div {
+  display: grid;
+  gap: 4px;
+}
+
 .application-filter-form {
   display: grid;
   grid-template-columns: minmax(220px, 1fr) minmax(150px, 190px) minmax(180px, 220px) auto;
@@ -4665,6 +4686,7 @@ td {
   }
 
   .application-filter-form,
+  .application-header-row,
   .application-hero,
   .application-communication-grid,
   .application-overview-grid {

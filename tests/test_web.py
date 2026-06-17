@@ -102,6 +102,8 @@ def test_setup_loads_friendly_sections(client: TestClient) -> None:
     assert "canva_oauth_client_id" not in response.text
     assert "canva_connected_account" not in response.text
     assert "email_oauth_client_id" not in response.text
+    assert "Gmail Read-Only" in response.text
+    assert "Connect Gmail read-only" in response.text
     assert "Email Drafts" in response.text
     assert "Sending is disabled by the application boundary" in response.text
     assert "Template variable reference" in response.text

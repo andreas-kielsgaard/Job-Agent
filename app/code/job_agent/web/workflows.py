@@ -417,6 +417,15 @@ class ProfileWorkflowHandler:
     def save_connector_settings_from_form(self, form) -> None:
         self.connectors.save_from_form(form)
 
+    def start_gmail_connection(self) -> str:
+        return self.connectors.gmail_authorization_url()
+
+    def complete_gmail_connection(self, code: str, state: str) -> None:
+        self.connectors.complete_gmail_oauth(code, state)
+
+    def disconnect_gmail(self) -> None:
+        self.connectors.disconnect_gmail()
+
     def start_canva_connection(self) -> str:
         return self.connectors.canva_authorization_url()
 
