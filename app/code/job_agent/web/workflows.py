@@ -19,6 +19,7 @@ from job_agent.services.recipe_generation_run_service import RecipeGenerationRun
 from job_agent.services.recipe_generation_status_service import RecipeGenerationStatusService
 from job_agent.services.setup_guide_service import SetupGuideService
 from job_agent.services.setup_service import SetupService
+from job_agent.web.application_workflow import ApplicationWorkflowHandler
 from job_agent.web.source_auto_setup import SourceAutoSetupWorkflowHandler
 from job_agent.web.source_workflow import SourceWorkflowHandler
 from job_agent.web.view_models.dashboard import build_dashboard_view
@@ -46,6 +47,7 @@ class AppWorkflowHandler:
         self.recipe = RecipeWorkflowHandler(self.root, self.source)
         self.auto_setup = SourceAutoSetupWorkflowHandler(self.root, self.source)
         self.executor = ExecutorWorkflowHandler(self.root)
+        self.applications = ApplicationWorkflowHandler(self.root)
         self.profile = ProfileWorkflowHandler(self.root)
         self.guide = SetupGuideWorkflowHandler(self.root)
 
@@ -102,6 +104,19 @@ class AppWorkflowHandler:
                     "profile contract",
                 ),
                 handoffs=("source", "profile"),
+            ),
+            "applications": WorkflowArea(
+                key="applications",
+                label="Post-application tracking",
+                owner="ApplicationWorkflowHandler",
+                state_inputs=(
+                    "application status store",
+                    "application records",
+                    "manual thread links",
+                    "manual communication events",
+                    "package index",
+                ),
+                handoffs=("executor",),
             ),
         }
 

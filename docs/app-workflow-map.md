@@ -9,6 +9,7 @@ Routes should use this handler as the controller boundary and avoid rebuilding c
 - `SourceWorkflowHandler`: owns source lifecycle state, source overview cards, setup steps, session status, source-test execution, indexing readiness, detail-review launch, and daily-run projection handoffs.
 - `RecipeWorkflowHandler`: owns recipe generation runs, source-test clues passed into recipe regeneration, calibration capture, and candidate approval/adoption/rejection.
 - `ExecutorWorkflowHandler`: owns dashboard/run views, daily-run launch, run status payloads, and run logs.
+- `ApplicationWorkflowHandler`: owns post-application records, manual Gmail thread links, manual communication events, and application detail/list projections.
 
 ## Required Handoffs
 
@@ -17,6 +18,7 @@ Routes should use this handler as the controller boundary and avoid rebuilding c
 - Source to recipe: failed source tests pass canonical `source_test_insight.generation_clues` into recipe regeneration.
 - Recipe to source: approved/adopted candidates update the selected source reading plan and daily-run projection through source workflow state.
 - Source to executor: indexing, detail review, source runs, and daily-run inclusion must pass through source readiness checks.
+- Jobs to applications: applied job statuses create or refresh application records, while application outcomes remain user-controlled post-application state.
 
 ## Controller Rule
 

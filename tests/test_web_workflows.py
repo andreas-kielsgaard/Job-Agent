@@ -20,14 +20,16 @@ def test_app_workflow_map_connects_core_handlers(project_root: Path) -> None:
 
     workflow_map = handler.map()
 
-    assert set(workflow_map) == {"profile", "source", "recipe", "executor"}
+    assert set(workflow_map) == {"profile", "source", "recipe", "executor", "applications"}
     assert workflow_map["source"].owner == "SourceWorkflowHandler"
     assert workflow_map["recipe"].owner == "RecipeWorkflowHandler"
     assert workflow_map["profile"].owner == "ProfileWorkflowHandler"
     assert workflow_map["executor"].owner == "ExecutorWorkflowHandler"
+    assert workflow_map["applications"].owner == "ApplicationWorkflowHandler"
     assert "recipe" in workflow_map["source"].handoffs
     assert "executor" in workflow_map["source"].handoffs
     assert "source workflow diagnosis" in workflow_map["recipe"].state_inputs
+    assert "application records" in workflow_map["applications"].state_inputs
     assert handler.recipe.source is handler.source
 
 

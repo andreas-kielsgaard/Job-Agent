@@ -52,6 +52,12 @@
         <button class="light" type="button" data-status-choice="applied" data-status-label="Applied">Applied</button>
       </div>
     </div>
+    {% if application_detail_url %}
+    <div class="job-primary-link">
+      <p class="eyebrow">Application Tracker</p>
+      <a class="button light" href="{{ application_detail_url }}">Open application record</a>
+    </div>
+    {% endif %}
   </section>
 
   <section class="panel material-generation-panel">

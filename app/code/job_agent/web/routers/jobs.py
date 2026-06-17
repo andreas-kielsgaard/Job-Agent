@@ -14,6 +14,7 @@ from job_agent.services.material_service import MaterialUpdate
 from job_agent.services.review_bundle_service import ReviewBundleService
 from job_agent.web.dependencies import (
     application_status_store,
+    application_tracker_service,
     current_root,
     material_service,
     package_service,
@@ -109,6 +110,8 @@ def _set_job_application_status(
         )
         store.update_status(job_id, status, notes=notes, not_interesting_reason=not_interesting_reason)
     package_service().refresh_package_status(job_id, status)
+    if status == "applied":
+        application_tracker_service().ensure_from_job(job_id)
 
 
 @router.post("/api/jobs/bulk-status")

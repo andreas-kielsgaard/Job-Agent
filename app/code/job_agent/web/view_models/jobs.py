@@ -8,6 +8,7 @@ from typing import Any
 from urllib.parse import quote, urlencode
 
 from job_agent.application_status_store import APPLICATION_STATUSES, ApplicationStatusStore
+from job_agent.application_store import ApplicationStore
 from job_agent.config import ROOT
 from job_agent.llm import LlmService
 from job_agent.models import SeenJobRecord
@@ -85,6 +86,14 @@ def build_job_detail_view(job_id: str, run_id: str = "", root: Path = ROOT) -> d
     job_payload = _json_payload(files.get("job", ""))
     match_payload = _json_payload(files.get("match", ""))
     status = ApplicationStatusStore(root).get(job_id)
+    application_record = ApplicationStore(root).get(str(package.get("stable_id") or job_id))
+    application_detail_url = ""
+    if (
+        application_record
+        or str(package.get("application_status") or "") == "applied"
+        or (status and status.status == "applied")
+    ):
+        application_detail_url = f"/applications/{quote(str(package.get('stable_id') or job_id), safe='')}"
     job_copy_context = JobContextCopyService(root).build(package, files, status)
     return {
         "title": f"Job - {package.get('title') or package.get('stable_id') or 'Detail'}",
@@ -99,6 +108,7 @@ def build_job_detail_view(job_id: str, run_id: str = "", root: Path = ROOT) -> d
         "posting_snapshot": _artifact(package, "posting_snapshot", "Saved posting snapshot"),
         "form_answer_items": _form_answer_items(files.get("form_answers", "")),
         "status": status,
+        "application_detail_url": application_detail_url,
         "statuses": sorted(APPLICATION_STATUSES),
         "render_md": markdown_to_html,
         "cv_reference": CvReferenceService(root).get_cv_reference(),
