@@ -316,7 +316,7 @@ def build_option_summary(options: dict[str, Any]) -> list[str]:
     if options.get("use_llm"):
         labels.append("Claude writing requested")
     if options.get("ai_enhanced_search"):
-        labels.append("AI-assisted scoring requested")
+        labels.append("LLM-enhanced matching requested")
     if options.get("mark_seen"):
         labels.append("Marks reviewed jobs as seen")
     detail_limit = options.get("detail_extraction_limit", 25)

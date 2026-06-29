@@ -96,6 +96,8 @@ def test_run_with_ai_enhanced_search_stores_package_fields_and_events(
                 summary="Strong ABAP fit with Gateway evidence.",
                 recommended_angle="Lead with ABAP/Gateway delivery.",
                 fit_confidence="high",
+                match_score=90,
+                employment_conditions={"employment_type": "contract", "remote": "hybrid"},
                 risk_flags=["Confirm rate"],
                 key_profile_evidence=["ABAP", "OData"],
                 should_prioritize=True,
@@ -119,6 +121,9 @@ def test_run_with_ai_enhanced_search_stores_package_fields_and_events(
     index = read_json(next((local_yaml_source_project / "output").glob("*/*/index.json")), {})
     assert index["ai_evaluation_status"] == "evaluated"
     assert index["ai_summary"] == "Strong ABAP fit with Gateway evidence."
+    assert index["ai_match_score"] == 90
+    assert index["match_score"] == round((index["deterministic_match_score"] + 90) / 2)
+    assert index["ai_employment_conditions"]["remote"] == "hybrid"
     assert index["ai_should_prioritize"] is True
 
 

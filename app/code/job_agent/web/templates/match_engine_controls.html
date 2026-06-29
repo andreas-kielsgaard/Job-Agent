@@ -1,98 +1,160 @@
-<div class="grid">
-  <div>
-    <label title="Controls how strongly remote/hybrid work matters. Required means non-remote/non-hybrid postings are excluded. Strong preference penalizes missing remote. Slight preference only adds points when remote/hybrid is visible. Neutral ignores remote status.">Remote policy</label>
-    <select name="remote_policy">
-      {% for option in match_engine.remote_policy_options %}
-      <option value="{{ option.value }}" {% if match_engine.remote_policy == option.value %}selected{% endif %}>{{ option.label }}</option>
-      {% endfor %}
-    </select>
-  </div>
-  <div>
-    <label title="Controls how permanent employee roles are treated. Exclude removes them from results, Penalize subtracts the configured penalty, Ignore gives no special treatment.">Permanent roles</label>
-    <select name="permanent_policy">
-      {% for option in match_engine.permanent_policy_options %}
-      <option value="{{ option.value }}" {% if match_engine.permanent_policy == option.value %}selected{% endif %}>{{ option.label }}</option>
-      {% endfor %}
-    </select>
-  </div>
-  <div>
-    <label title="Points subtracted when Permanent roles is set to Penalize and the posting appears to be permanent employment. Use a negative value.">Permanent penalty</label>
-    <input type="number" name="permanent_penalty" value="{{ match_engine.permanent_penalty }}">
-  </div>
-  <div>
-    <label title="The maximum total points technical keyword groups can contribute. Example: if five technical groups match for 90 total points and the cap is 55, technical_match is 55.">Technical cap</label>
-    <input type="number" name="technical_cap" value="{{ match_engine.technical_cap }}">
-  </div>
-  <div>
-    <label title="The maximum total points module keyword groups can contribute. Example: matching QM, WM, and MM can add only up to this cap.">Module cap</label>
-    <input type="number" name="module_cap" value="{{ match_engine.module_cap }}">
-  </div>
-</div>
-
-{% macro rules_section(title, prefix, rows) -%}
-<details class="rule-section">
-  <summary>
-    <span>{{ title }}</span>
-    <span class="muted">expand</span>
-  </summary>
-  <p class="muted">Each row is one keyword group. Put alternatives one per line, such as a primary skill and common alternate wording.</p>
-  <table class="rules-table" data-rule-table="{{ prefix }}">
+<section class="match-settings-block">
+  <h3>Keyword Proficiency</h3>
+  <p class="muted">Each row is one grouped set of alternatives. Main matches are averaged; bonus and detractor rows use only the strongest matched value.</p>
+  <input type="hidden" name="keyword_rules_present" value="1">
+  <table class="rules-table" data-rule-table="keyword">
     <thead>
       <tr>
         <th title="Group name shown in explanations and matched signals.">Group</th>
         <th title="Alternatives for this group. Any one matching term triggers the row. Use one term per line.">Alternatives</th>
-        <th title="Points added when this group matches. Higher values make the group more important, unless capped by the section cap.">Points</th>
-        <th title="Bonus adds points when matched. Required excludes the posting when none of this group's alternatives appear.">Mode</th>
+        <th title="Main is proficiency. Bonus boosts the score. Detractor subtracts from the score.">Mode</th>
+        <th title="For Main this is proficiency. For Bonus it is the boost. For Detractor it is the penalty.">Value</th>
+        <th title="Evidence years for this group. Deterministic scoring records over-asked years as a concern only.">Years</th>
         <th></th>
       </tr>
     </thead>
     <tbody>
-      {% for rule in rows %}
+      {% for rule in match_engine.keyword_rows %}
       <tr>
-        <td><input name="{{ prefix }}_rule_label" value="{{ rule.label }}"></td>
-        <td><textarea class="compact-textarea" name="{{ prefix }}_rule_terms">{{ rule.terms | join('\n') }}</textarea></td>
-        <td><input type="number" name="{{ prefix }}_rule_score" value="{{ rule.score }}"></td>
+        <td><input name="keyword_rule_label" value="{{ rule.label }}"></td>
+        <td><textarea class="compact-textarea" name="keyword_rule_terms">{{ rule.terms | join('\n') }}</textarea></td>
         <td>
-          <select name="{{ prefix }}_rule_mode">
+          <select name="keyword_rule_mode">
             {% for option in match_engine.rule_mode_options %}
             <option value="{{ option.value }}" {% if rule.mode == option.value %}selected{% endif %}>{{ option.label }}</option>
             {% endfor %}
           </select>
         </td>
+        <td><input type="number" name="keyword_rule_proficiency" value="{{ rule.proficiency }}"></td>
+        <td><input type="number" name="keyword_rule_years" value="{{ rule.years or '' }}" min="0"></td>
         <td><button class="light" type="button" onclick="removeMatchRuleRow(this)">Remove</button></td>
       </tr>
       {% endfor %}
     </tbody>
   </table>
-  <button class="light" type="button" onclick="addMatchRuleRow('{{ prefix }}')">Add rule</button>
-</details>
-{%- endmacro %}
+  <button class="light" type="button" onclick="addMatchRuleRow()">Add keyword group</button>
+</section>
 
-{{ rules_section("Technical Keyword Rules", "technical", match_engine.technical_rows) }}
-{{ rules_section("Module Keyword Rules", "module", match_engine.module_rows) }}
-{{ rules_section("Contract Keyword Rules", "contract", match_engine.contract_rows) }}
+<section class="match-settings-block employment-conditions-block">
+  <h3>Employment Conditions</h3>
+  <p class="muted">Conditions filter and flag jobs. They do not change the deterministic proficiency score.</p>
+
+  <div class="condition-grid">
+    <div class="condition-card">
+      <h4>Employment Type</h4>
+      {% for key, label in [("contract", "Contract"), ("employed", "Employed"), ("unknown", "Unknown")] %}
+      {% set value = match_engine.employment_conditions.employment_type.get(key, "not_important") %}
+      <label class="condition-select {{ 'lowlight' if value == 'not_important' else '' }}">
+        <span>{{ label }}</span>
+        <select name="employment_type_{{ key }}">
+          {% for option in match_engine.condition_preference_options %}
+          <option value="{{ option.value }}" {% if value == option.value %}selected{% endif %}>{{ option.label }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      {% endfor %}
+    </div>
+
+    <div class="condition-card">
+      <h4>Remote Setup</h4>
+      {% for key, label in [("remote", "Remote"), ("hybrid", "Hybrid"), ("onsite", "On-site"), ("unknown", "Unknown")] %}
+      {% set value = match_engine.employment_conditions.remote.get(key, "not_important") %}
+      <label class="condition-select {{ 'lowlight' if value == 'not_important' else '' }}">
+        <span>{{ label }}</span>
+        <select name="remote_{{ key }}">
+          {% for option in match_engine.remote_condition_options %}
+          <option value="{{ option.value }}" {% if value == option.value %}selected{% endif %}>{{ option.label }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      {% endfor %}
+    </div>
+  </div>
+
+  {% macro condition_rows(title, prefix, rows, placeholder, include_kind=False) -%}
+  <details class="rule-section condition-row-section" open>
+    <summary>
+      <span>{{ title }}</span>
+      <span class="muted">tags</span>
+    </summary>
+    <div class="condition-tag-list" data-condition-list="{{ prefix }}">
+      {% for row in rows %}
+      <div class="condition-tag preference-{{ row.preference }}">
+        <input name="{{ prefix }}_label" value="{{ row.label }}" placeholder="{{ placeholder }}">
+        {% if include_kind %}
+        <select name="{{ prefix }}_kind">
+          {% for option in match_engine.location_kind_options %}
+          <option value="{{ option.value }}" {% if row.kind == option.value %}selected{% endif %}>{{ option.label }}</option>
+          {% endfor %}
+        </select>
+        {% endif %}
+        <select name="{{ prefix }}_preference">
+          {% for option in match_engine.condition_preference_options if option.value != "not_important" %}
+          <option value="{{ option.value }}" {% if row.preference == option.value %}selected{% endif %}>{{ option.label }}</option>
+          {% endfor %}
+        </select>
+        <button class="light" type="button" onclick="removeConditionRow(this)">Remove</button>
+      </div>
+      {% endfor %}
+    </div>
+    <button class="light" type="button" onclick="addConditionRow('{{ prefix }}', {{ 'true' if include_kind else 'false' }})">Add</button>
+  </details>
+  {%- endmacro %}
+
+  {{ condition_rows("Locations", "location", match_engine.employment_conditions.locations, "City, country, or EU", True) }}
+  {{ condition_rows("Contract Length", "contract_length", match_engine.employment_conditions.contract_length, "6 months") }}
+  {{ condition_rows("Language Requirements", "language", match_engine.employment_conditions.languages, "English") }}
+
+  <details class="rule-section condition-row-section">
+    <summary>
+      <span>Compensation</span>
+      <span class="muted">rates</span>
+    </summary>
+    <div class="condition-tag-list" data-condition-list="compensation">
+      {% for row in match_engine.employment_conditions.compensation %}
+      <div class="condition-tag preference-{{ row.preference }}">
+        <select name="compensation_period">
+          {% for option in match_engine.compensation_period_options %}
+          <option value="{{ option.value }}" {% if row.period == option.value %}selected{% endif %}>{{ option.label }}</option>
+          {% endfor %}
+        </select>
+        <input type="number" name="compensation_minimum" value="{{ row.minimum }}" min="0" placeholder="Minimum">
+        <select name="compensation_preference">
+          {% for option in match_engine.condition_preference_options if option.value in ["required", "preferred"] %}
+          <option value="{{ option.value }}" {% if row.preference == option.value %}selected{% endif %}>{{ option.label }}</option>
+          {% endfor %}
+        </select>
+        <button class="light" type="button" onclick="removeConditionRow(this)">Remove</button>
+      </div>
+      {% endfor %}
+    </div>
+    <button class="light" type="button" onclick="addCompensationRow()">Add rate</button>
+  </details>
+</section>
 
 <script>
-  window.matchRuleRowHtml = function(prefix) {
+  window.matchRuleRowHtml = function() {
     return `
       <tr>
-        <td><input name="${prefix}_rule_label" value=""></td>
-        <td><textarea class="compact-textarea" name="${prefix}_rule_terms" placeholder="One alternative per line"></textarea></td>
-        <td><input type="number" name="${prefix}_rule_score" value=""></td>
+        <td><input name="keyword_rule_label" value=""></td>
+        <td><textarea class="compact-textarea" name="keyword_rule_terms" placeholder="One alternative per line"></textarea></td>
         <td>
-          <select name="${prefix}_rule_mode">
+          <select name="keyword_rule_mode">
+            <option value="main">Main</option>
             <option value="bonus">Bonus</option>
-            <option value="required">Required</option>
+            <option value="detractor">Detractor</option>
           </select>
         </td>
+        <td><input type="number" name="keyword_rule_proficiency" value="100"></td>
+        <td><input type="number" name="keyword_rule_years" value="" min="0"></td>
         <td><button class="light" type="button" onclick="removeMatchRuleRow(this)">Remove</button></td>
       </tr>`;
   };
 
-  window.addMatchRuleRow = function(prefix) {
-    const table = document.querySelector(`[data-rule-table="${prefix}"] tbody`);
+  window.addMatchRuleRow = function() {
+    const table = document.querySelector('[data-rule-table="keyword"] tbody');
     if (!table) return;
-    table.insertAdjacentHTML("beforeend", matchRuleRowHtml(prefix));
+    table.insertAdjacentHTML("beforeend", matchRuleRowHtml());
     table.closest("form")?.dispatchEvent(new Event("input", { bubbles: true }));
   };
 
@@ -101,4 +163,61 @@
     button.closest("tr")?.remove();
     form?.dispatchEvent(new Event("input", { bubbles: true }));
   };
+
+  window.addConditionRow = function(prefix, includeKind) {
+    const list = document.querySelector(`[data-condition-list="${prefix}"]`);
+    if (!list) return;
+    const kind = includeKind ? `
+      <select name="${prefix}_kind">
+        <option value="city">City</option>
+        <option value="country">Country</option>
+        <option value="region">Region</option>
+      </select>` : "";
+    list.insertAdjacentHTML("beforeend", `
+      <div class="condition-tag preference-preferred">
+        <input name="${prefix}_label" value="" placeholder="Add value">
+        ${kind}
+        <select name="${prefix}_preference">
+          <option value="preferred">Preferred</option>
+          <option value="required">Required</option>
+          <option value="not_preferred">Not preferred</option>
+          <option value="excluded">Excluded</option>
+        </select>
+        <button class="light" type="button" onclick="removeConditionRow(this)">Remove</button>
+      </div>`);
+    list.closest("form")?.dispatchEvent(new Event("input", { bubbles: true }));
+  };
+
+  window.addCompensationRow = function() {
+    const list = document.querySelector('[data-condition-list="compensation"]');
+    if (!list) return;
+    list.insertAdjacentHTML("beforeend", `
+      <div class="condition-tag preference-preferred">
+        <select name="compensation_period">
+          <option value="hourly">Hourly</option>
+          <option value="daily">Daily</option>
+          <option value="monthly">Monthly</option>
+          <option value="yearly">Yearly</option>
+        </select>
+        <input type="number" name="compensation_minimum" value="" min="0" placeholder="Minimum">
+        <select name="compensation_preference">
+          <option value="preferred">Preferred</option>
+          <option value="required">Required</option>
+        </select>
+        <button class="light" type="button" onclick="removeConditionRow(this)">Remove</button>
+      </div>`);
+    list.closest("form")?.dispatchEvent(new Event("input", { bubbles: true }));
+  };
+
+  window.removeConditionRow = function(button) {
+    const form = button.closest("form");
+    button.closest(".condition-tag")?.remove();
+    form?.dispatchEvent(new Event("input", { bubbles: true }));
+  };
+
+  document.addEventListener("change", (event) => {
+    const select = event.target.closest(".condition-select select");
+    if (!select) return;
+    select.closest(".condition-select")?.classList.toggle("lowlight", select.value === "not_important");
+  });
 </script>

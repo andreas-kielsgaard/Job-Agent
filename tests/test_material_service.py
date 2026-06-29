@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 from tests.helpers import write_sample_package
 
-from job_agent.io.json_store import read_json
+from job_agent.io.json_store import read_json, write_json
 from job_agent.services.material_service import MaterialService, MaterialUpdate
 
 
@@ -67,6 +67,27 @@ def test_generate_job_materials_deterministically_regenerates_package(template_p
     assert "Standard Form Answer Package" in files["form_answers"]
     assert "cv-one-page.pdf" in files["form_answers"]
     assert Path(package["paths"]["focused_cv_pdf"]).read_bytes().startswith(b"%PDF")
+
+
+def test_generate_job_materials_preserves_ai_match_projection(template_project: Path) -> None:
+    paths = write_sample_package(template_project)
+    index_path = Path(paths["index"])
+    index = read_json(index_path, {})
+    index.update(
+        {
+            "ai_evaluation_status": "evaluated",
+            "ai_match_score": 94,
+            "ai_summary": "Strong AI fit.",
+        }
+    )
+    write_json(index_path, index)
+
+    refreshed = MaterialService(template_project).generate_job_materials("stable-1", use_llm=False)
+
+    assert refreshed["ai_match_score"] == 94
+    assert refreshed["deterministic_match_score"] == 82
+    assert refreshed["match_score"] == 88
+    assert refreshed["ai_summary"] == "Strong AI fit."
 
 
 def test_generate_many_continues_after_failure(template_project: Path) -> None:

@@ -205,7 +205,12 @@ class SetupGuideService:
         match_engine = preferences.get("match_engine", {}) if isinstance(preferences.get("match_engine"), dict) else {}
         has_match_terms = any(
             bool(match_engine.get(key))
-            for key in ("technical_keyword_groups", "module_keyword_groups", "contract_keyword_groups")
+            for key in (
+                "keyword_groups",
+                "technical_keyword_groups",
+                "module_keyword_groups",
+                "contract_keyword_groups",
+            )
         )
         has_preferences = _has_any_value(preferences.get("availability")) or _has_any_value(
             preferences.get("location_policy")

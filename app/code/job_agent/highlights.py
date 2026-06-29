@@ -102,8 +102,13 @@ def _core_match_groups(profile: dict[str, Any]) -> list[str]:
     configured = _terms_from_value(highlighting.get("core_match_groups", []))
     if configured:
         return configured
-    technical_rules = match_engine_config_from_profile(profile).get("technical_keyword_groups", [])
-    ranked = sorted(technical_rules, key=lambda rule: int(rule.get("score", 0)), reverse=True)
+    match_engine = match_engine_config_from_profile(profile)
+    technical_rules = match_engine.get("keyword_groups") or match_engine.get("technical_keyword_groups", [])
+    ranked = sorted(
+        technical_rules,
+        key=lambda rule: int(rule.get("proficiency", rule.get("score", 0)) or 0),
+        reverse=True,
+    )
     return _dedupe([normalize_text(rule.get("label", "")) for rule in ranked[:5] if rule.get("label")])
 
 

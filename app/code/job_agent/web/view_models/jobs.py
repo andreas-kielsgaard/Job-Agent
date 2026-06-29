@@ -69,11 +69,13 @@ def build_jobs_view(filters: dict[str, Any] | None = None, root: Path = ROOT) ->
             "posting_status_includes": normalized_filters["posting_status_includes"],
             "posting_status_excludes": normalized_filters["posting_status_excludes"],
             "ai_prioritized": bool(filters.get("ai_prioritized")),
+            "show_condition_excluded": bool(filters.get("show_condition_excluded")),
             "dedupe": bool(filters.get("dedupe", True)),
         },
         "source_options": source_options,
         "run_options": run_options,
         "result_count": len(jobs),
+        "llm_configured": LlmService(root).is_configured(),
     }
 
 
@@ -148,11 +150,16 @@ def _match_summary(match: dict[str, Any], package: dict[str, Any]) -> dict[str, 
     score = match.get("total_score", package.get("match_score"))
     return {
         "score": score,
+        "display_score": package.get("match_score", score),
+        "deterministic_score": package.get("deterministic_match_score", score),
+        "ai_score": package.get("ai_match_score"),
         "category": _display_text(match.get("category") or package.get("match_category") or "not_scored"),
         "recommended_angle": _display_text(match.get("recommended_angle") or package.get("recommended_angle") or ""),
         "matched_keywords": matched_keywords,
         "review_triggers": review_triggers,
         "confidence": confidence,
+        "condition_exclusions": _text_list(match.get("condition_exclusions") or package.get("condition_exclusions")),
+        "condition_preferences": _text_list(match.get("condition_preferences") or package.get("condition_preferences")),
     }
 
 
@@ -490,9 +497,12 @@ def _filter_jobs(jobs: list[dict[str, Any]], filters: dict[str, Any]) -> list[di
     source_text = str(filters.get("source") or "").strip().lower()
     date_from = _date(filters.get("date_from"))
     date_to = _date(filters.get("date_to"))
+    show_condition_excluded = bool(filters.get("show_condition_excluded"))
 
     result = []
     for job in jobs:
+        if not show_condition_excluded and _text_list(job.get("condition_exclusions")):
+            continue
         if not _matches_tri_filter(job.get("application_status"), app_status_includes, app_status_excludes):
             continue
         if not _matches_tri_filter(job.get("match_category"), category_includes, category_excludes):
@@ -591,6 +601,9 @@ def _with_run_context(service: PackageIndexService, job: dict[str, Any], run_lab
     enriched["can_update_status"] = True
     enriched["posting_status"] = str(enriched.get("posting_status") or "active")
     enriched["match_category"] = str(enriched.get("match_category") or "not_scored")
+    enriched["deterministic_match_score"] = _numeric(enriched.get("deterministic_match_score")) or _numeric(
+        enriched.get("match_score")
+    )
     enriched["application_status"] = str(enriched.get("application_status") or "unreviewed")
     enriched["source_url"] = str(
         enriched.get("source_url") or enriched.get("url") or enriched.get("application_url") or ""
@@ -612,6 +625,10 @@ def _with_job_row_display(job: dict[str, Any], service: PackageIndexService | No
     enriched["pay_display"] = pay_display if _has_real_value(pay_display) else "Not listed"
     enriched["pay_sort_value"] = _pay_sort_value(pay_display)
     enriched["preview_description"] = _job_preview_description(enriched, service)
+    enriched["condition_exclusions"] = _text_list(enriched.get("condition_exclusions"))
+    enriched["condition_preferences"] = _text_list(enriched.get("condition_preferences"))
+    enriched["has_condition_warning"] = bool(enriched["condition_preferences"])
+    enriched["has_condition_exclusion"] = bool(enriched["condition_exclusions"])
     return enriched
 
 

@@ -72,6 +72,7 @@
       </div>
       <div class="job-filter-checks">
         <label class="check"><input type="checkbox" name="ai_prioritized" value="1" {% if filters.ai_prioritized %}checked{% endif %}> AI-prioritized</label>
+        <label class="check"><input type="checkbox" name="show_condition_excluded" value="1" {% if filters.show_condition_excluded %}checked{% endif %}> Show employment-condition exclusions</label>
         <input type="hidden" name="dedupe" value="0">
         <label class="check"><input type="checkbox" name="dedupe" value="1" {% if filters.dedupe %}checked{% endif %}> Show latest instance of each job</label>
       </div>
@@ -102,6 +103,15 @@
 
     <div id="tri-filter-inputs"></div>
   </form>
+  {% if request.query_params.get("recalculated") %}
+  <p><span class="badge generated">{{ request.query_params.get("recalculated") }} recalculated</span> <span class="muted">{{ request.query_params.get("skipped", "0") }} skipped; {{ request.query_params.get("failed", "0") }} failed.</span></p>
+  {% endif %}
+  {% if request.query_params.get("ai_matched") %}
+  <p><span class="badge generated">{{ request.query_params.get("ai_matched") }} AI matched</span> <span class="muted">{{ request.query_params.get("skipped", "0") }} skipped; {{ request.query_params.get("failed", "0") }} failed.</span></p>
+  {% endif %}
+  {% if request.query_params.get("warning") %}
+  <p><span class="badge warning">{{ request.query_params.get("warning") }}</span></p>
+  {% endif %}
   <p class="muted">{{ result_count }} job{% if result_count != 1 %}s{% endif %} shown.</p>
 </div>
 
@@ -113,6 +123,16 @@
         <span class="muted">Click a row for a preview. Shift-click selects a range for bulk status.</span>
       </div>
       <div class="job-triage-actions">
+        <form method="post" action="/api/jobs/recalculate-matches" class="inline-form">
+          <input type="hidden" name="return_to" value="{{ return_to }}">
+          <button type="submit" class="light">Recalculate deterministic</button>
+        </form>
+        {% if llm_configured %}
+        <form method="post" action="/api/jobs/apply-ai-matching" class="inline-form" data-llm-model-picker data-llm-model-title="Choose AI power for filtered jobs">
+          <input type="hidden" name="return_to" value="{{ return_to }}">
+          <button type="submit" class="light">Apply LLM match</button>
+        </form>
+        {% endif %}
         <button type="button" class="light" data-bulk-status="interesting" disabled>Interesting</button>
         <button type="button" class="light" data-bulk-status="not_interesting" disabled>Not interesting</button>
         <button type="button" class="light" data-bulk-status="applied" disabled>Applied</button>
@@ -174,7 +194,17 @@
           <td class="secondary-column source-column">{{ job.source or job.source_id }}<br><span class="muted">{{ job.source_id }}</span></td>
           <td>{{ job.location }}<br><span class="muted">{{ job.remote }}</span></td>
           <td class="pay-column">{{ job.pay_display }}{% if job.workload and job.workload != "Not listed" %}<br><span class="muted">{{ job.workload }}</span>{% endif %}</td>
-          <td><span class="badge {{ job.match_category }}">{{ job.match_score }}% {{ job.match_category }}</span></td>
+          <td>
+            <span class="badge {{ job.match_category }}">{{ job.match_score }}% {{ job.match_category }}</span>
+            {% if job.ai_match_score is not none and job.ai_match_score != "" %}
+            <br><span class="muted">det {{ job.deterministic_match_score }} / AI {{ job.ai_match_score }}</span>
+            {% endif %}
+            {% if job.has_condition_exclusion %}
+            <br><span class="badge low">Condition excluded</span>
+            {% elif job.has_condition_warning %}
+            <br><span class="badge warning">Preference miss</span>
+            {% endif %}
+          </td>
           <td class="job-status-cell">
             <div class="job-status-control">
               <div class="job-status-display">

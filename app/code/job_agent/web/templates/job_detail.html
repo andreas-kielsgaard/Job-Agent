@@ -22,6 +22,9 @@
     <div class="job-hero-score">
       <span>Match</span>
       <strong>{{ package.match_score }}%</strong>
+      {% if match_summary.ai_score is not none and match_summary.ai_score != "" %}
+      <small>det {{ match_summary.deterministic_score }} / AI {{ match_summary.ai_score }}</small>
+      {% endif %}
       {% if match_summary.confidence %}<small>{{ match_summary.confidence }} confidence</small>{% endif %}
     </div>
   </section>
@@ -370,6 +373,18 @@
           {% if match_summary.review_triggers %}
           <p class="muted">Review trigger: {{ match_summary.review_triggers | join(", ") }}</p>
           {% endif %}
+          {% if match_summary.condition_exclusions %}
+          <div class="job-signal-list warning">
+            <strong>Employment condition exclusions</strong>
+            {% for item in match_summary.condition_exclusions %}<p>{{ item }}</p>{% endfor %}
+          </div>
+          {% endif %}
+          {% if match_summary.condition_preferences %}
+          <div class="job-signal-list">
+            <strong>Employment preference misses</strong>
+            {% for item in match_summary.condition_preferences %}<p>{{ item }}</p>{% endfor %}
+          </div>
+          {% endif %}
         </section>
 
         <section>
@@ -391,6 +406,7 @@
             {% if package.ai_evaluation_status == "evaluated" %}
               <p>
                 <span class="badge {{ package.ai_fit_confidence }}">{{ package.ai_fit_confidence }} confidence</span>
+                {% if package.ai_match_score is not none and package.ai_match_score != "" %}<span class="badge exploratory">AI {{ package.ai_match_score }}%</span>{% endif %}
                 {% if package.ai_should_prioritize %}<span class="badge strong">Prioritize</span>{% endif %}
               </p>
               <p>{{ package.ai_summary }}</p>

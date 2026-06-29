@@ -11,6 +11,7 @@ from .config import ROOT
 from .io.atomic import atomic_write_bytes, atomic_write_text
 from .io.json_store import write_json
 from .models import GeneratedPackage, Job, MatchResult, SourceWarning
+from .package_projection import match_index_fields
 from .paths import output_dir, templates_dir
 from .store import JobStore
 
@@ -259,10 +260,6 @@ def _package_index(
         "rate": job.rate,
         "workload": job.workload,
         "advised_salary_or_rate": "",
-        "match_score": match.total_score,
-        "match_category": match.category,
-        "recommended_angle": match.recommended_angle,
-        "concerns": match.concerns,
         "application_url": job.application_url,
         "source_url": job.url,
         "listing_key": JobStore.listing_key(job),
@@ -276,4 +273,5 @@ def _package_index(
     }
     if ai_evaluation:
         item.update(ai_evaluation)
+    item.update(match_index_fields(match, item))
     return item

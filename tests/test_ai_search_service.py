@@ -53,7 +53,9 @@ def test_parse_valid_structured_response() -> None:
         {
           "summary": "Strong ABAP/Gateway fit with one caveat.",
           "recommended_angle": "Lead with ABAP and Gateway.",
+          "match_score": 92,
           "fit_confidence": "high",
+          "employment_conditions": {"employment_type": "contract", "remote": "hybrid"},
           "risk_flags": ["Confirm Fiori depth"],
           "key_profile_evidence": ["ABAP", "OData"],
           "should_prioritize": true
@@ -62,6 +64,8 @@ def test_parse_valid_structured_response() -> None:
     )
 
     assert evaluation.summary.startswith("Strong ABAP")
+    assert evaluation.match_score == 92
+    assert evaluation.employment_conditions["remote"] == "hybrid"
     assert evaluation.fit_confidence == "high"
     assert evaluation.risk_flags == ["Confirm Fiori depth"]
     assert evaluation.should_prioritize is True

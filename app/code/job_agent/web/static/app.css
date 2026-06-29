@@ -308,6 +308,81 @@ a:hover {
   margin-top: 18px;
 }
 
+.match-settings-block {
+  border-top: 1px solid var(--line);
+  margin-top: 16px;
+  padding-top: 16px;
+}
+
+.match-settings-block:first-child {
+  border-top: 0;
+  margin-top: 0;
+  padding-top: 0;
+}
+
+.condition-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 14px;
+}
+
+.condition-card {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  background: #fbfcfd;
+}
+
+.condition-card h4 {
+  margin: 0 0 10px;
+}
+
+.condition-select {
+  display: grid;
+  grid-template-columns: minmax(80px, 1fr) minmax(150px, 1.4fr);
+  gap: 10px;
+  align-items: center;
+  margin: 8px 0;
+}
+
+.condition-select.lowlight {
+  opacity: 0.55;
+}
+
+.condition-tag-list {
+  display: grid;
+  gap: 8px;
+  margin: 10px 0;
+}
+
+.condition-tag {
+  display: grid;
+  grid-template-columns: minmax(160px, 1fr) repeat(2, minmax(120px, auto)) auto;
+  gap: 8px;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-left-width: 5px;
+  border-radius: 8px;
+  padding: 8px;
+  background: #ffffff;
+}
+
+.condition-tag.preference-required {
+  border-left-color: #075985;
+}
+
+.condition-tag.preference-preferred {
+  border-left-color: #0f766e;
+}
+
+.condition-tag.preference-not_preferred {
+  border-left-color: #b45309;
+}
+
+.condition-tag.preference-excluded {
+  border-left-color: #991b1b;
+}
+
 .action-row {
   display: flex;
   flex-wrap: wrap;

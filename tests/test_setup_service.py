@@ -512,6 +512,72 @@ class SetupServiceTests(unittest.TestCase):
             self.assertEqual(result["category"], "exploratory")
             self.assertIn("ABAP variants", result["matched_keywords"])
 
+    def test_sandbox_form_scores_unsaved_employment_condition_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            service = SetupService(root)
+            form = FakeForm(
+                {
+                    "keyword_rules_present": "1",
+                    "title": "SAP ABAP Consultant",
+                    "location": "Not listed",
+                    "remote": "Hybrid remote",
+                    "description": "ABAP role.",
+                    "remote_hybrid": "required",
+                    "remote_remote": "excluded",
+                },
+                {
+                    "keyword_rule_label": ["ABAP variants"],
+                    "keyword_rule_terms": ["abap, sap abap"],
+                    "keyword_rule_proficiency": ["100"],
+                    "keyword_rule_mode": ["main"],
+                    "keyword_rule_years": ["6"],
+                },
+            )
+
+            result = service.score_sandbox_form(form)
+            model = service.match_engine_form_model(service.matchmaking_settings_from_form(form))
+
+            self.assertEqual(result["condition_values"]["remote"], "hybrid")
+            self.assertEqual(result["condition_exclusions"], [])
+            self.assertEqual(model["employment_conditions"]["remote"]["hybrid"], "required")
+
+    def test_match_engine_form_migrates_legacy_rows_and_can_save_empty_unified_rules(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            profile = root / "profile"
+            profile.mkdir()
+            (profile / "preferences.yaml").write_text(
+                "match_engine:\n"
+                "  technical_keyword_groups:\n"
+                "    - label: ABAP variants\n"
+                "      terms: [abap, sap abap]\n"
+                "      score: 40\n"
+                "      mode: required\n"
+                "  module_keyword_groups:\n"
+                "    - label: QM\n"
+                "      terms: [qm]\n"
+                "      score: 7\n"
+                "      mode: bonus\n"
+                "employment_conditions:\n"
+                "  remote:\n"
+                "    remote: preferred\n",
+                encoding="utf-8",
+            )
+            service = SetupService(root)
+
+            model = service.match_engine_form_model()
+            self.assertEqual([row["label"] for row in model["keyword_rows"]], ["ABAP variants", "QM"])
+            self.assertEqual(model["keyword_rows"][0]["mode"], "main")
+
+            settings = service.save_match_engine_settings_from_form(FakeForm({"keyword_rules_present": "1"}))
+
+            self.assertEqual(settings["keyword_groups"], [])
+            preferences = yaml.safe_load((profile / "preferences.yaml").read_text(encoding="utf-8"))
+            self.assertEqual(preferences["match_engine"]["keyword_groups"], [])
+            self.assertEqual(preferences["match_engine"]["technical_keyword_groups"], [])
+            self.assertEqual(preferences["employment_conditions"]["remote"]["remote"], "preferred")
+
     def test_auto_configure_profile_from_cv_applies_selected_ai_sections(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
