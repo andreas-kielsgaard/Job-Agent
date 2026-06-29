@@ -10,6 +10,12 @@ $DependencyStamp = Join-Path $VenvDir ".job-agent-dependencies.json"
 $DependencyStampScript = Join-Path $Root "app\environment\scripts\dependency_stamp.py"
 $Url = "http://127.0.0.1:8765/"
 $HealthUrl = "http://127.0.0.1:8765/api/health"
+$LauncherPage = Join-Path $Root "app\code\job_agent\web\static\server-loading.html"
+$LaunchId = [Guid]::NewGuid().ToString("N")
+$LauncherReadyDir = Join-Path $Root "runtime\launcher"
+$LauncherReadyPath = Join-Path $LauncherReadyDir "$LaunchId.json"
+$LauncherReadyUrl = "http://127.0.0.1:8765/api/launcher-ready/$LaunchId"
+$script:LauncherOpened = $false
 
 function Test-PythonCandidate {
   param([string]$Exe, [string[]]$Args)
@@ -62,6 +68,39 @@ function Get-JobAgentHealth {
   } catch {
     return $null
   }
+}
+
+function New-JobAgentLauncherUrl {
+  $pagePath = (Resolve-Path -LiteralPath $LauncherPage).Path
+  $pageUri = [System.Uri]::new($pagePath).AbsoluteUri
+  $query = @(
+    "target=$([System.Uri]::EscapeDataString($Url))",
+    "health=$([System.Uri]::EscapeDataString($HealthUrl))",
+    "ready=$([System.Uri]::EscapeDataString($LauncherReadyUrl))"
+  ) -join "&"
+  return "${pageUri}?${query}"
+}
+
+function Open-JobAgentLauncher {
+  if (Test-Path -LiteralPath $LauncherPage) {
+    Start-Process (New-JobAgentLauncherUrl)
+    $script:LauncherOpened = $true
+    return
+  }
+  Start-Process $Url
+  $script:LauncherOpened = $true
+}
+
+function Set-JobAgentLauncherReady {
+  New-Item -ItemType Directory -Force -Path $LauncherReadyDir *> $null
+  $payload = [ordered]@{
+    ready = $true
+    target = $Url
+    health = $HealthUrl
+    launch_id = $LaunchId
+    ready_at = [DateTime]::UtcNow.ToString("o")
+  }
+  $payload | ConvertTo-Json | Set-Content -LiteralPath $LauncherReadyPath -Encoding UTF8
 }
 
 function Get-CurrentAppVersion {
@@ -195,6 +234,8 @@ with sync_playwright() as playwright:
   return $LASTEXITCODE -eq 0
 }
 
+Open-JobAgentLauncher
+
 $python = Find-Python
 if (-not $python) {
   Install-PythonWithConsent
@@ -240,6 +281,7 @@ if ($health -and -not (Test-HealthMatchesCurrentCheckout -Health $health -Curren
   if ($health.active_run_id) {
     $choice = Read-Host "A different Job Agent server is running an active run ($($health.active_run_id)). Stop it and launch this checkout? [y/N]"
     if ($choice -notin @("y", "Y", "yes", "YES")) {
+      Set-JobAgentLauncherReady
       Start-Process $Url
       exit 0
     }
@@ -260,4 +302,7 @@ if (-not $health) {
   Start-JobAgentWeb
 }
 
-Start-Process $Url
+Set-JobAgentLauncherReady
+if (-not $script:LauncherOpened) {
+  Start-Process $Url
+}

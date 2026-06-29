@@ -1,0 +1,291 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Starting Job Agent</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #f7f8fa;
+        --panel: #ffffff;
+        --text: #16202a;
+        --muted: #667085;
+        --line: #d8dee8;
+        --accent: #0f766e;
+        --accent-soft: #e7f5f2;
+        --warn: #9a3412;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        min-height: 100vh;
+        margin: 0;
+        display: grid;
+        place-items: center;
+        padding: 24px;
+        background: var(--bg);
+        color: var(--text);
+        font-family: "Segoe UI", system-ui, sans-serif;
+      }
+
+      main {
+        width: min(560px, 100%);
+        display: grid;
+        gap: 18px;
+        padding: 26px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--panel);
+        box-shadow: 0 18px 44px rgba(15, 23, 42, 0.12);
+      }
+
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        font-weight: 800;
+      }
+
+      .brand img {
+        width: 34px;
+        height: 34px;
+      }
+
+      h1 {
+        margin: 0;
+        font-size: 28px;
+        line-height: 1.15;
+      }
+
+      p {
+        margin: 0;
+        color: var(--muted);
+        line-height: 1.45;
+      }
+
+      .status {
+        display: grid;
+        grid-template-columns: 14px minmax(0, 1fr);
+        gap: 10px;
+        align-items: center;
+        padding: 12px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #fbfcfd;
+      }
+
+      .pulse {
+        width: 12px;
+        height: 12px;
+        border-radius: 999px;
+        background: var(--accent);
+        box-shadow: 0 0 0 0 rgba(15, 118, 110, 0.4);
+        animation: pulse 1.4s infinite;
+      }
+
+      .progress {
+        height: 8px;
+        overflow: hidden;
+        border-radius: 999px;
+        background: #eef2f6;
+      }
+
+      .progress span {
+        display: block;
+        width: 36%;
+        height: 100%;
+        border-radius: inherit;
+        background: var(--accent);
+        animation: travel 1.6s ease-in-out infinite;
+      }
+
+      .actions {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+
+      a,
+      button {
+        min-height: 38px;
+        padding: 9px 12px;
+        border: 1px solid var(--line);
+        border-radius: 7px;
+        background: #fff;
+        color: var(--text);
+        font: inherit;
+        font-weight: 700;
+        text-decoration: none;
+        cursor: pointer;
+      }
+
+      a.primary,
+      button.primary {
+        border-color: var(--accent);
+        background: var(--accent);
+        color: #fff;
+      }
+
+      .quiet {
+        font-size: 13px;
+      }
+
+      @keyframes pulse {
+        70% {
+          box-shadow: 0 0 0 9px rgba(15, 118, 110, 0);
+        }
+        100% {
+          box-shadow: 0 0 0 0 rgba(15, 118, 110, 0);
+        }
+      }
+
+      @keyframes travel {
+        0% {
+          transform: translateX(-105%);
+        }
+        50% {
+          transform: translateX(85%);
+        }
+        100% {
+          transform: translateX(285%);
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="brand">
+        <img src="icons/job-agent-icon-minimal-autumn.svg" alt="" aria-hidden="true">
+        <span>Job Agent</span>
+      </div>
+      <h1 id="title">Starting the local server</h1>
+      <p id="summary">The app is checking dependencies and preparing the private localhost server.</p>
+      <div class="progress" aria-hidden="true"><span></span></div>
+      <div class="status">
+        <span class="pulse" aria-hidden="true"></span>
+        <p id="status">Waiting for the launcher...</p>
+      </div>
+      <p class="quiet" id="detail">This page will open Job Agent as soon as the server is ready.</p>
+      <div class="actions">
+        <a class="primary" id="open-link" href="http://127.0.0.1:8765/">Open when ready</a>
+        <button type="button" id="retry-button">Check now</button>
+      </div>
+    </main>
+    <script>
+      (() => {
+        const params = new URLSearchParams(window.location.search);
+        const target = params.get("target") || "http://127.0.0.1:8765/";
+        const healthUrl = params.get("health") || new URL("/api/health", target).href;
+        const launchReadyUrl = params.get("ready") || "";
+        const expectedVersion = params.get("version") || "";
+        const restart = params.get("restart") === "1";
+        const restartUrl = params.get("restart_url") || new URL("/api/app-version/restart", target).href;
+        const title = document.getElementById("title");
+        const summary = document.getElementById("summary");
+        const status = document.getElementById("status");
+        const detail = document.getElementById("detail");
+        const openLink = document.getElementById("open-link");
+        const retryButton = document.getElementById("retry-button");
+        let attempts = 0;
+        let restartRequested = false;
+        let restartBlocked = false;
+        let timer = null;
+
+        openLink.href = target;
+        if (restart) {
+          title.textContent = "Restarting the local server";
+          summary.textContent = "The current server is shutting down, then the updated app will open here.";
+          status.textContent = "Requesting restart...";
+        }
+
+        function setStatus(text, extra) {
+          status.textContent = text;
+          detail.textContent = extra || "This page will open Job Agent as soon as the server is ready.";
+        }
+
+        function scheduleNext(delay) {
+          window.clearTimeout(timer);
+          timer = window.setTimeout(checkReady, delay);
+        }
+
+        async function requestRestart() {
+          if (!restart || restartRequested) return true;
+          restartRequested = true;
+          try {
+            const response = await fetch(restartUrl, { method: "POST", cache: "no-store" });
+            const payload = await response.json().catch(() => ({}));
+            if (!response.ok || payload.ok === false) {
+              restartBlocked = true;
+              setStatus(
+                payload.message || "Restart could not be started.",
+                "Return to Job Agent and try again when active work has finished."
+              );
+              return false;
+            }
+            setStatus("Restart requested.", "Waiting for the updated server to answer.");
+          } catch {
+            setStatus("Waiting for restart endpoint.", "The server may already be restarting.");
+          }
+          return true;
+        }
+
+        async function checkLaunchToken() {
+          if (!launchReadyUrl) return false;
+          const response = await fetch(launchReadyUrl, { cache: "no-store" });
+          if (!response.ok) return false;
+          const payload = await response.json();
+          if (!payload.ready) return false;
+          window.location.replace(payload.target || target);
+          return true;
+        }
+
+        async function checkHealth() {
+          const response = await fetch(healthUrl, { cache: "no-store" });
+          if (!response.ok) return false;
+          const payload = await response.json();
+          if (expectedVersion && payload.app_version !== expectedVersion) {
+            setStatus(
+              "Waiting for the updated server...",
+              `Current version ${payload.app_version || "unknown"} is not ready yet.`
+            );
+            return false;
+          }
+          window.location.replace(target);
+          return true;
+        }
+
+        async function checkReady() {
+          if (restartBlocked) return;
+          attempts += 1;
+          if (!(await requestRestart())) return;
+          try {
+            const ready = launchReadyUrl ? await checkLaunchToken() : await checkHealth();
+            if (ready) return;
+            const waitingFor = launchReadyUrl ? "launcher" : "server";
+            setStatus(
+              `Still waiting for the ${waitingFor}...`,
+              attempts < 20
+                ? "Dependency checks, browser setup, or a server restart can take a little while."
+                : "Still working. If this takes several minutes, check the launcher terminal for an error."
+            );
+          } catch {
+            setStatus(
+              "Server is not ready yet.",
+              attempts < 20
+                ? "The browser is open early; the launcher is still preparing the local server."
+                : "Still waiting. If this takes several minutes, check the launcher terminal for an error."
+            );
+          }
+          scheduleNext(Math.min(2500, 700 + attempts * 120));
+        }
+
+        retryButton.addEventListener("click", checkReady);
+        checkReady();
+      })();
+    </script>
+  </body>
+</html>

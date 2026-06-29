@@ -1191,14 +1191,13 @@ def _enrich_jobs_with_detail_pages_with_trace(
             ),
         )
         try:
-            response = _requests_get_with_session_state(
-                job.url,
-                timeout_seconds,
-                user_agent="Job-Agent recipe detail fetcher (public page; low volume)",
+            detail_html, final_url, detail_mode, fetch_warnings = _fetch_detail_page_html(
+                job,
+                recipe,
+                timeout_seconds=timeout_seconds,
                 session_state_path=session_state_path,
             )
-            response.raise_for_status()
-        except requests.RequestException as exc:
+        except (requests.RequestException, ValueError) as exc:
             warnings.append(f"Detail fetch failed for {job.url}: {exc}")
             attempts.append(
                 DetailPageAttempt(
@@ -1219,16 +1218,17 @@ def _enrich_jobs_with_detail_pages_with_trace(
                 ),
             )
             continue
+        warnings.extend(f"Detail fetch warning for {job.url}: {warning}" for warning in fetch_warnings)
 
         _record_material_html(
             material_log,
             kind="detail",
             url=job.url,
-            final_url=str(getattr(response, "url", "") or job.url),
-            html=response.text,
-            mode="static_html",
+            final_url=final_url,
+            html=detail_html,
+            mode=detail_mode,
         )
-        found_values = _apply_detail_html(job, response.text, recipe)
+        found_values = _apply_detail_html(job, detail_html, recipe)
         found_fields = sorted(found_values)
         if found_fields:
             enriched_count += 1
@@ -1270,6 +1270,31 @@ def _enrich_jobs_with_detail_pages_with_trace(
         if not detail_listing_page_sample_target and detail_success_target and enriched_count >= detail_success_target:
             break
     return warnings, attempts
+
+
+def _fetch_detail_page_html(
+    job: Job,
+    recipe: JobBoardRecipe,
+    *,
+    timeout_seconds: int,
+    session_state_path: str | Path | None,
+) -> tuple[str, str, str, list[str]]:
+    if recipe.mode == "rendered_html":
+        html, final_url, warnings = _fetch_rendered_html(
+            job.url,
+            timeout_seconds,
+            session_state_path=session_state_path,
+        )
+        return html, final_url or job.url, "rendered_html", warnings
+
+    response = _requests_get_with_session_state(
+        job.url,
+        timeout_seconds,
+        user_agent="Job-Agent recipe detail fetcher (public page; low volume)",
+        session_state_path=session_state_path,
+    )
+    response.raise_for_status()
+    return response.text, str(getattr(response, "url", "") or job.url), "static_html", []
 
 
 def _detail_sample_jobs_by_listing_page(
@@ -1512,13 +1537,15 @@ def check_recipe_against_html(
     recipe: JobBoardRecipe,
     follow_detail: bool = False,
 ) -> ExtractionQuality:
-    jobs = extract_jobs_with_recipe(html, base_url=base_url, recipe=recipe)
+    result = extract_jobs_with_recipe_from_html(html, base_url=base_url, recipe=recipe, warnings=[])
+    jobs = result.jobs
     quality = ExtractionQuality(label=f"Recipe: {recipe.source_name}")
+    quality.warnings = list(result.warnings)
     if follow_detail:
         quality.warnings.extend(enrich_jobs_with_detail_pages(jobs, recipe))
     quality.candidates = [candidate_quality(job) for job in jobs]
     if not jobs:
-        quality.warnings.append("Recipe extraction found no matching job cards.")
+        quality.warnings.append(_no_jobs_warning_from_result(result))
     return quality
 
 
@@ -1528,8 +1555,22 @@ def quality_from_recipe_result(result: RecipeExtractionResult, recipe: JobBoardR
     quality.warnings = list(result.warnings)
     quality.candidates = [candidate_quality(job) for job in result.jobs]
     if not result.jobs:
-        quality.warnings.append("Recipe extraction found no matching job cards.")
+        quality.warnings.append(_no_jobs_warning_from_result(result))
     return quality
+
+
+def _no_jobs_warning_from_result(result: RecipeExtractionResult) -> str:
+    listing_pages = result.listing_pages or []
+    observed = sum(page.observed_cards for page in listing_pages)
+    rejected = sum(page.rejected_count for page in listing_pages)
+    missing_url = sum(page.missing_url_count for page in listing_pages)
+    duplicate = sum(page.duplicate_count for page in listing_pages)
+    if observed:
+        return (
+            f"Recipe matched {observed} listing card(s), but extracted 0 jobs after filtering "
+            f"({rejected} rejected, {missing_url} missing URL, {duplicate} duplicate)."
+        )
+    return "Recipe extraction found no matching job cards."
 
 
 def _fetch_html_for_mode(

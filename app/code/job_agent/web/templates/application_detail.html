@@ -61,11 +61,33 @@
             {% for link in thread_links %}
             <article class="application-thread-row">
               <div>
-                <strong>{{ link.thread_id }}</strong>
+                <strong>{{ link.subject or link.thread_id }}</strong>
                 <span class="badge {{ link.status }}">{{ link.status }}</span>
                 {% if link.account_id %}<span class="muted">{{ link.account_id }}</span>{% endif %}
+                <p class="muted">{{ link.thread_id }}</p>
+                {% if link.synced %}
+                <p>{{ link.snippet or "No snippet cached." }}</p>
+                <p class="muted">{{ link.message_count }} cached message{% if link.message_count != 1 %}s{% endif %}{% if link.last_message_at %}, latest {{ link.last_message_at }}{% endif %}</p>
+                {% else %}
+                <p class="muted">No synced metadata for this thread yet. Run Gmail sync after linking the thread.</p>
+                {% endif %}
                 {% if link.rejected_reason %}<p class="muted">{{ link.rejected_reason }}</p>{% endif %}
               </div>
+              {% if link.messages %}
+              <div class="application-gmail-message-list">
+                {% for message in link.messages %}
+                <div class="application-gmail-message-row">
+                  <div>
+                    <span class="badge {{ message.direction }}">{{ message.direction_label }}</span>
+                    <strong>{{ message.subject or "Gmail message" }}</strong>
+                    {% if message.contact %}<span class="muted">{{ message.contact }}</span>{% endif %}
+                  </div>
+                  {% if message.sent_at %}<time>{{ message.sent_at }}</time>{% endif %}
+                  {% if message.snippet %}<p>{{ message.snippet }}</p>{% endif %}
+                </div>
+                {% endfor %}
+              </div>
+              {% endif %}
               <div class="application-row-actions">
                 {% if link.status == "linked" %}
                 <form method="post" action="/api/applications/{{ application.application_id }}/gmail-thread/{{ link.link_id }}/unlink">

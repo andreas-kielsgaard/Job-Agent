@@ -210,8 +210,10 @@ class ConnectorSettingsService:
     def gmail_authorization_url(self) -> str:
         config = self._gmail_oauth_config()
         if not config["client_id"] or not config["client_secret"]:
-            raise ValueError("Gmail read-only sync needs GMAIL_CLIENT_ID and GMAIL_CLIENT_SECRET in user/.env.")
+            raise ValueError("Gmail connection needs GMAIL_CLIENT_ID and GMAIL_CLIENT_SECRET in user/.env.")
         state = secrets.token_urlsafe(48)
+        client = GmailOAuthClient(config)
+        authorization_url = client.authorization_url(state)
         store = self._read_store()
         email = _dict(store.get("email"))
         email.update(
@@ -223,6 +225,7 @@ class ConnectorSettingsService:
                 "oauth_scopes": list(config["scopes"]),
                 "pending_oauth": {
                     "state": state,
+                    "code_verifier": str(getattr(client, "code_verifier", "") or ""),
                     "redirect_uri": config["redirect_uri"],
                     "scopes": list(config["scopes"]),
                     "created_at": datetime.now(UTC).isoformat(),
@@ -231,7 +234,7 @@ class ConnectorSettingsService:
         )
         store["email"] = email
         write_yaml(self.path, store)
-        return GmailOAuthClient(config).authorization_url(state)
+        return authorization_url
 
     def complete_gmail_oauth(self, code: str, state: str) -> dict[str, Any]:
         store = self._read_store()
@@ -243,8 +246,14 @@ class ConnectorSettingsService:
             raise ValueError("Gmail sign-in state did not match. Please try connecting again.")
         config = self._gmail_oauth_config()
         if not config["client_id"] or not config["client_secret"]:
-            raise ValueError("Gmail read-only sync needs GMAIL_CLIENT_ID and GMAIL_CLIENT_SECRET in user/.env.")
-        result = GmailOAuthClient(config).complete_oauth(code, state)
+            raise ValueError("Gmail connection needs GMAIL_CLIENT_ID and GMAIL_CLIENT_SECRET in user/.env.")
+        code_verifier = str(pending.get("code_verifier") or "")
+        if not code_verifier:
+            raise ValueError("Gmail sign-in must be restarted. Please click Connect Gmail again.")
+        try:
+            result = GmailOAuthClient(config).complete_oauth(code, state, code_verifier=code_verifier)
+        except Exception as exc:
+            raise ValueError(f"Gmail sign-in failed while requesting tokens: {exc}") from exc
         GmailCredentialStore(self.root).write_text(result.credentials_json)
         email.update(
             {

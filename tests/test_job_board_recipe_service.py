@@ -52,6 +52,38 @@ def test_recipe_extracts_real_job_cards_and_dedupes_urls() -> None:
     assert jobs[0].extraction_notes == ["Recipe-based extraction; verify details manually."]
 
 
+def test_recipe_title_selector_skips_empty_overlay_and_apply_cta_matches() -> None:
+    html = """
+    <!doctype html>
+    <html><body>
+      <article class="job-card">
+        <a class="overlay" href="/job-detail/sap-abap-1"></a>
+        <a class="apply" href="/job-detail/sap-abap-1">Easy Apply</a>
+        <a class="title" href="/job-detail/sap-abap-1">SAP ABAP Consultant</a>
+        <p>Contract SAP ABAP role with RAP, CDS, OData and Gateway work.</p>
+      </article>
+    </body></html>
+    """
+    recipe = job_board_recipe_from_mapping(
+        {
+            "source_name": "Dice-like",
+            "listing": {
+                "card_selector": ".job-card",
+                "title_selector": 'a[href*="/job-detail/"]',
+                "link_selector": 'a[href*="/job-detail/"]',
+                "description_selector": "p",
+            },
+            "accept": {"url_contains": ["/job-detail/"]},
+        }
+    )
+
+    jobs = extract_jobs_with_recipe(html, "https://www.dice.com/jobs", recipe)
+
+    assert len(jobs) == 1
+    assert jobs[0].title == "SAP ABAP Consultant"
+    assert jobs[0].url == "https://www.dice.com/job-detail/sap-abap-1"
+
+
 def test_generated_class_card_selector_falls_back_to_accepted_job_links() -> None:
     html = """
     <!doctype html>
@@ -1608,6 +1640,37 @@ def test_url_extraction_uses_recipe_rendered_mode_by_default(monkeypatch: pytest
     assert calls == {"rendered": "https://example.com/jobs"}
     assert result.mode_used == "rendered_html"
     assert len(result.jobs) == 2
+
+
+def test_rendered_recipe_uses_rendered_fetch_for_detail_pages(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = []
+
+    def fake_rendered(url: str, timeout_seconds: int, **kwargs):
+        calls.append(url)
+        if url == "https://example.com/jobs":
+            return HTML, "https://example.com/jobs", []
+        return (
+            "<main><section class='detail-description'>Rendered ABAP detail with delivery scope.</section></main>",
+            url,
+            [],
+        )
+
+    def fail_static_detail(*args, **kwargs):
+        raise AssertionError("rendered detail recipes should not use static requests")
+
+    recipe = _recipe(
+        mode="rendered_html",
+        detail=DetailRecipe(follow=True, description_selector=".detail-description", max_detail_pages=1),
+    )
+    monkeypatch.setattr("job_agent.services.job_board_recipe_service._fetch_rendered_html", fake_rendered)
+    monkeypatch.setattr("job_agent.services.job_board_recipe_service.requests.get", fail_static_detail)
+
+    result = extract_jobs_with_recipe_from_url("https://example.com/jobs", recipe)
+
+    assert calls == ["https://example.com/jobs", "https://example.com/jobs/sap-abap"]
+    assert result.detail_fetch_count == 1
+    assert result.detail_enriched_count == 1
+    assert result.jobs[0].description.startswith("Rendered ABAP detail")
 
 
 def test_cli_local_fixture_ignores_rendered_recipe_mode(capsys: pytest.CaptureFixture[str], tmp_path: Path) -> None:

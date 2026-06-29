@@ -9,7 +9,7 @@ from inspect import Parameter, signature
 from pathlib import Path
 from queue import Queue
 from threading import Lock
-from time import perf_counter
+from time import perf_counter, sleep
 from typing import Any
 from urllib.parse import urljoin, urlparse
 
@@ -44,6 +44,7 @@ SourceFetchProgressCallback = Callable[[dict[str, Any]], None]
 
 _HOST_LOCKS: dict[str, Lock] = {}
 _HOST_LOCKS_GUARD = Lock()
+_WAITABLE_SOURCE_ACCESS_STATUSES = {"needs_login", "needs_verification"}
 
 
 @dataclass
@@ -60,6 +61,10 @@ class SourceFetchOptions:
     require_setup_complete: bool = False
     max_parallel_sources: int | None = 10
     material_log: Any | None = None
+    access_purpose: str = "daily_run"
+    wait_for_source_access: bool = False
+    source_access_wait_timeout_seconds: float = 0.0
+    source_access_wait_poll_seconds: float = 2.0
 
 
 @dataclass
@@ -235,7 +240,7 @@ class RecipeHtmlAdapter(SourceAdapter):
         try:
             from .services.job_board_recipe_service import extract_jobs_with_recipe_from_url
             from .services.recipes.mapping import load_project_job_board_recipe
-            from .services.source_session_service import SourceSessionService
+            from .services.source_access_gate_service import SourceAccessGateService
 
             recipe = load_project_job_board_recipe(self.root, recipe_path)
             options = options or SourceFetchOptions()
@@ -246,42 +251,34 @@ class RecipeHtmlAdapter(SourceAdapter):
                 "completed",
                 f"Using {recipe.source_name} from {recipe_path}.",
             )
-            session_state_path = options.session_state_path
-            session_status = None
-            if not session_state_path:
-                candidate_session_status = SourceSessionService(self.root).status_for_source(
-                    str(self.source.get("source_id") or ""),
-                    session_scope=recipe.access.session_scope,
+            access_decision = SourceAccessGateService(self.root).evaluate_source(
+                self.source,
+                purpose=options.access_purpose,
+            )
+            if not access_decision.can_execute:
+                _emit_fetch_progress(
+                    progress_callback,
+                    "Source access blocked",
+                    "failed",
+                    access_decision.message,
+                    "source_access",
                 )
-                if recipe.access.requires_session or candidate_session_status.usable:
-                    session_status = candidate_session_status
-            if recipe.access.requires_session and not session_state_path:
-                if not session_status.usable:
-                    message = (
-                        f"Connected source session required for {recipe.access.session_scope or recipe.source_name}; "
-                        f"current status is {session_status.label}. {session_status.summary}"
-                    )
-                    _emit_fetch_progress(
-                        progress_callback, "Source session required", "failed", message, "source_access"
-                    )
-                    return SourceRunResult(
-                        warnings=[SourceWarning(source_name, message, url)],
-                        metadata=_session_required_metadata(
-                            source=self.source,
-                            recipe_path=recipe_path,
-                            recipe=recipe,
-                            session_status=session_status,
-                        ),
-                    )
-                session_state_path = session_status.storage_state_path
-            elif session_status and session_status.usable and not session_state_path:
-                session_state_path = session_status.storage_state_path
-            if session_state_path and session_status and session_status.usable:
+                return SourceRunResult(
+                    warnings=[SourceWarning(source_name, access_decision.message, url)],
+                    metadata=_source_access_block_metadata(
+                        source=self.source,
+                        recipe_path=recipe_path,
+                        recipe=recipe,
+                        decision=access_decision,
+                    ),
+                )
+            session_state_path = options.session_state_path or access_decision.session_state_path
+            if session_state_path and access_decision.uses_session:
                 _emit_fetch_progress(
                     progress_callback,
                     "Source session selected",
                     "completed",
-                    f"Using connected session for {session_status.session_scope or recipe.source_name}.",
+                    access_decision.message,
                     "source_access",
                 )
             max_results = (
@@ -337,7 +334,7 @@ class RecipeHtmlAdapter(SourceAdapter):
                 result=result,
                 retained_job_count=len(jobs),
                 max_results=max_results,
-                session_status=session_status,
+                access_decision=access_decision,
             ),
         )
 
@@ -365,7 +362,7 @@ def iter_source_results(
     if source_id:
         sources = [source for source in sources if str(source.get("source_id") or "") == source_id]
     if fetch_options and fetch_options.require_setup_complete and not source_id:
-        sources, skipped_sources = _filter_setup_complete_sources(sources, root)
+        sources, skipped_sources = _filter_setup_complete_sources(sources, root, fetch_options)
         if skipped_sources:
             _emit_source_progress(
                 progress_callback,
@@ -379,12 +376,7 @@ def iter_source_results(
                     details={
                         "skipped_source_count": len(skipped_sources),
                         "skipped_sources": [
-                            {
-                                "source_name": str(source.get("name") or source.get("source_id") or "Unknown source"),
-                                "source_id": str(source.get("source_id") or ""),
-                                "reason": reason,
-                            }
-                            for source, reason in skipped_sources
+                            _setup_skipped_source_detail(source, reason, root) for source, reason in skipped_sources
                         ],
                     },
                 ),
@@ -487,15 +479,23 @@ def _run_source_item(
     )
     adapter = adapter_for_source(item.source, root)
     try:
-        readiness_warning = saved_readiness_warning_for_source(
+        access_decision, access_warning = _source_access_check_for_source(
             item.source,
             root,
             enforce=bool(fetch_options and fetch_options.enforce_saved_readiness),
+            purpose=(fetch_options.access_purpose if fetch_options else "daily_run"),
         )
-        if readiness_warning:
-            source_result = SourceRunResult(
-                warnings=[SourceWarning(item.source_name, readiness_warning, item.source_url)]
+        if access_warning and _should_wait_for_source_access(access_decision, fetch_options):
+            access_decision, access_warning = _wait_for_source_access(
+                item,
+                root,
+                progress_callback,
+                fetch_options,
+                access_decision,
+                started_at=started_at,
             )
+        if access_warning:
+            source_result = SourceRunResult(warnings=[SourceWarning(item.source_name, access_warning, item.source_url)])
         else:
             host_lock = _host_lock(item.source_url)
             with host_lock:
@@ -693,38 +693,236 @@ def saved_readiness_warning_for_source(
     *,
     enforce: bool = False,
 ) -> str:
+    return source_access_warning_for_source(source, root, enforce=enforce, purpose="daily_run")
+
+
+def source_access_decision_for_source(
+    source: dict,
+    root: Path,
+    *,
+    enforce: bool = False,
+    purpose: str = "daily_run",
+) -> Any | None:
+    decision, _warning = _source_access_check_for_source(source, root, enforce=enforce, purpose=purpose)
+    return decision
+
+
+def source_access_warning_for_source(
+    source: dict,
+    root: Path,
+    *,
+    enforce: bool = False,
+    purpose: str = "daily_run",
+) -> str:
+    _decision, warning = _source_access_check_for_source(source, root, enforce=enforce, purpose=purpose)
+    return warning
+
+
+def _source_access_check_for_source(
+    source: dict,
+    root: Path,
+    *,
+    enforce: bool = False,
+    purpose: str = "daily_run",
+) -> tuple[Any | None, str]:
     if not enforce:
-        return ""
+        return None, ""
     source_id = str(source.get("source_id") or "").strip()
     if not source_id or not str(source.get("recipe_path") or "").strip():
-        return ""
+        return None, ""
     try:
-        from .services.source_execution_readiness_service import SourceExecutionReadinessService
+        from .services.source_access_gate_service import SourceAccessGateService
 
-        service = SourceExecutionReadinessService(root)
-        saved = service.load(source_id)
-        if not saved.last_checked_at:
-            return ""
-        readiness = service.evaluate(source_id)
+        decision = SourceAccessGateService(root).evaluate_source(source, purpose=purpose, source_id=source_id)
     except Exception as exc:
-        return f"Saved source readiness could not be checked before execution: {exc}"
-    if readiness.readiness_status == "ready":
-        return ""
-    detail = readiness.blockers[0] if readiness.blockers else readiness.readiness_summary
-    return (
-        f"Saved source readiness is {readiness.readiness_status}; {detail} "
-        "Rerun the safe source test or refresh source access before this source is used."
+        return None, f"Saved source readiness could not be checked before execution: {exc}"
+    return decision, "" if decision.can_execute else decision.message
+
+
+def _should_wait_for_source_access(
+    decision: Any | None,
+    fetch_options: SourceFetchOptions | None,
+) -> bool:
+    if not fetch_options or not fetch_options.wait_for_source_access:
+        return False
+    if decision is None:
+        return False
+    return str(getattr(decision, "status", "") or "") in _WAITABLE_SOURCE_ACCESS_STATUSES
+
+
+def _wait_for_source_access(
+    item: _SourceWorkItem,
+    root: Path,
+    progress_callback: SourceProgressCallback | None,
+    fetch_options: SourceFetchOptions | None,
+    initial_decision: Any,
+    *,
+    started_at: float,
+) -> tuple[Any | None, str]:
+    timeout_seconds = _source_access_wait_timeout_seconds(fetch_options)
+    poll_seconds = _source_access_wait_poll_seconds(fetch_options)
+    purpose = fetch_options.access_purpose if fetch_options else "daily_run"
+    deadline = perf_counter() + timeout_seconds
+    decision = initial_decision
+    _emit_source_access_event(
+        progress_callback,
+        "source_access_waiting",
+        item,
+        decision,
+        message=f"Waiting for source access for {item.source_name}: {decision.message}",
+        started_at=started_at,
+        wait_timeout_seconds=timeout_seconds,
     )
+    last_status = str(getattr(decision, "status", "") or "")
+    while True:
+        remaining_seconds = deadline - perf_counter()
+        if remaining_seconds <= 0:
+            decision, warning = _source_access_check_for_source(
+                item.source,
+                root,
+                enforce=True,
+                purpose=purpose,
+            )
+            if decision is not None and decision.can_execute:
+                _emit_source_access_event(
+                    progress_callback,
+                    "source_access_resumed",
+                    item,
+                    decision,
+                    message=f"Source access refreshed for {item.source_name}; resuming execution.",
+                    started_at=started_at,
+                )
+                return decision, ""
+            _emit_source_access_event(
+                progress_callback,
+                "source_access_timeout",
+                item,
+                decision,
+                message=f"Source access still blocked for {item.source_name}: {warning}",
+                started_at=started_at,
+                warnings_count=1,
+            )
+            return decision, warning
+        sleep(min(poll_seconds, remaining_seconds))
+        decision, warning = _source_access_check_for_source(item.source, root, enforce=True, purpose=purpose)
+        if decision is not None and decision.can_execute:
+            _emit_source_access_event(
+                progress_callback,
+                "source_access_resumed",
+                item,
+                decision,
+                message=f"Source access refreshed for {item.source_name}; resuming execution.",
+                started_at=started_at,
+            )
+            return decision, ""
+        current_status = str(getattr(decision, "status", "") or "")
+        if current_status and current_status != last_status:
+            _emit_source_access_event(
+                progress_callback,
+                "source_access_waiting",
+                item,
+                decision,
+                message=f"Waiting for source access for {item.source_name}: {warning}",
+                started_at=started_at,
+                wait_timeout_seconds=timeout_seconds,
+            )
+            last_status = current_status
+        if decision is None or current_status not in _WAITABLE_SOURCE_ACCESS_STATUSES:
+            _emit_source_access_event(
+                progress_callback,
+                "source_access_timeout",
+                item,
+                decision,
+                message=f"Source access can no longer wait for {item.source_name}: {warning}",
+                started_at=started_at,
+                warnings_count=1,
+            )
+            return decision, warning
+
+
+def _source_access_wait_timeout_seconds(fetch_options: SourceFetchOptions | None) -> float:
+    if not fetch_options:
+        return 0.0
+    try:
+        return max(0.0, float(fetch_options.source_access_wait_timeout_seconds or 0.0))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _source_access_wait_poll_seconds(fetch_options: SourceFetchOptions | None) -> float:
+    if not fetch_options:
+        return 2.0
+    try:
+        return max(0.05, float(fetch_options.source_access_wait_poll_seconds or 2.0))
+    except (TypeError, ValueError):
+        return 2.0
+
+
+def _emit_source_access_event(
+    callback: SourceProgressCallback | None,
+    event_type: str,
+    item: _SourceWorkItem,
+    decision: Any | None,
+    *,
+    message: str,
+    started_at: float,
+    warnings_count: int = 0,
+    wait_timeout_seconds: float | None = None,
+) -> None:
+    details = _source_access_progress_details(item.source, decision)
+    if wait_timeout_seconds is not None:
+        details["source_access_wait_timeout_seconds"] = wait_timeout_seconds
+    _emit_source_progress(
+        callback,
+        SourceProgressEvent(
+            event_type=event_type,
+            source_name=item.source_name,
+            source_index=item.source_index,
+            source_count=item.source_count,
+            source_type=item.source_type,
+            source_url=item.source_url,
+            warnings_count=warnings_count,
+            elapsed_time_seconds=round(perf_counter() - started_at, 3),
+            message=message,
+            details=details,
+        ),
+    )
+
+
+def _source_access_progress_details(source: dict, decision: Any | None) -> dict[str, Any]:
+    source_id = str(source.get("source_id") or "").strip()
+    status = str(getattr(decision, "status", "") or "").strip()
+    message = str(getattr(decision, "message", "") or "").strip()
+    action_href = f"/sources/{source_id}" if source_id else ""
+    action_label = "Open source"
+    if status in {"needs_login", "needs_verification"} and source_id:
+        action_href = f"/sources/{source_id}/session"
+        action_label = "Verify session" if status == "needs_verification" else "Connect session"
+    elif status == "blocked" and source_id:
+        action_href = f"/sources/{source_id}/test-run?start=1"
+        action_label = "Run source test"
+    return {
+        "source_id": source_id,
+        "source_access_status": status,
+        "source_access_message": message,
+        "source_action_href": action_href,
+        "source_action_label": action_label,
+    }
 
 
 def _filter_setup_complete_sources(
     sources: list[dict],
     root: Path,
+    fetch_options: SourceFetchOptions | None = None,
 ) -> tuple[list[dict], list[tuple[dict, str]]]:
     included = []
     skipped = []
     for source in sources:
-        ready, reason = _source_setup_complete_for_daily_run(source, root)
+        ready, reason = _source_setup_complete_for_daily_run(
+            source,
+            root,
+            wait_for_source_access=bool(fetch_options and fetch_options.wait_for_source_access),
+        )
         if ready:
             included.append(source)
         else:
@@ -732,29 +930,56 @@ def _filter_setup_complete_sources(
     return included, skipped
 
 
-def _source_setup_complete_for_daily_run(source: dict, root: Path) -> tuple[bool, str]:
+def _source_setup_complete_for_daily_run(
+    source: dict,
+    root: Path,
+    *,
+    wait_for_source_access: bool = False,
+) -> tuple[bool, str]:
     if source.get("type") != "recipe_html" or not str(source.get("recipe_path") or "").strip():
         return True, ""
     source_id = str(source.get("source_id") or "").strip()
     if not source_id:
         return False, "missing source_id"
     try:
+        from .services.source_access_gate_service import SourceAccessGateService
+
+        access_decision = SourceAccessGateService(root).evaluate_source(
+            source, purpose="daily_run", source_id=source_id
+        )
+    except Exception as exc:
+        return False, f"source access check failed: {exc}"
+    if not access_decision.can_execute:
+        if wait_for_source_access and str(access_decision.status) in _WAITABLE_SOURCE_ACCESS_STATUSES:
+            setup_reason = _daily_run_saved_setup_blocker(source, root, source_id)
+            return (False, setup_reason) if setup_reason else (True, "")
+        return False, access_decision.message
+    setup_reason = _daily_run_saved_setup_blocker(source, root, source_id)
+    return (False, setup_reason) if setup_reason else (True, "")
+
+
+def _daily_run_saved_setup_blocker(source: dict, root: Path, source_id: str) -> str:
+    try:
         from .services.source_execution_readiness_service import SourceExecutionReadinessService
 
-        readiness = SourceExecutionReadinessService(root).evaluate(source_id)
+        service = SourceExecutionReadinessService(root)
+        readiness = service.load(source_id)
+        registry_source = service.registry.get_source(source_id)
+        if registry_source:
+            readiness = service.with_current_recipe_file_checks(registry_source, readiness)
     except Exception as exc:
-        return False, f"readiness check failed: {exc}"
+        return f"readiness check failed: {exc}"
     if readiness.readiness_status != "ready":
-        return False, f"readiness is {readiness.readiness_status}"
+        return f"readiness is {readiness.readiness_status}"
     try:
         from .services.source_listing_index_store import SourceListingIndexStore
 
         index = SourceListingIndexStore(root).summary_for_source(source_id, str(source.get("name") or source_id))
     except Exception as exc:
-        return False, f"listing index check failed: {exc}"
+        return f"listing index check failed: {exc}"
     if not index.is_indexed:
-        return False, "listing index is missing"
-    return True, ""
+        return "listing index is missing"
+    return ""
 
 
 def _setup_skipped_message(skipped_sources: list[tuple[dict, str]]) -> str:
@@ -764,6 +989,36 @@ def _setup_skipped_message(skipped_sources: list[tuple[dict, str]]) -> str:
         names.append(f"{name} ({reason})" if reason else name)
     suffix = "" if len(skipped_sources) <= 5 else f" and {len(skipped_sources) - 5} more"
     return "Skipped sources still in setup: " + ", ".join(names) + suffix + "."
+
+
+def _setup_skipped_source_detail(source: dict, reason: str, root: Path) -> dict[str, Any]:
+    source_id = str(source.get("source_id") or "").strip()
+    detail: dict[str, Any] = {
+        "source_name": str(source.get("name") or source_id or "Unknown source"),
+        "source_id": source_id,
+        "reason": reason,
+        "source_access_status": "",
+        "source_action_href": f"/sources/{source_id}" if source_id else "",
+        "source_action_label": "Open source",
+    }
+    if not source_id or not str(source.get("recipe_path") or "").strip():
+        return detail
+    try:
+        from .services.source_access_gate_service import SourceAccessGateService
+
+        decision = SourceAccessGateService(root).evaluate_source(source, purpose="daily_run", source_id=source_id)
+    except Exception:
+        return detail
+    detail["source_access_status"] = decision.status
+    if decision.status in {"needs_login", "needs_verification"}:
+        detail["source_action_href"] = f"/sources/{source_id}/session"
+        detail["source_action_label"] = (
+            "Verify session" if decision.status == "needs_verification" else "Connect session"
+        )
+    elif decision.status == "blocked" and str((decision.metadata or {}).get("readiness_status") or "").strip():
+        detail["source_action_href"] = f"/sources/{source_id}/test-run?start=1"
+        detail["source_action_label"] = "Run source test"
+    return detail
 
 
 def _adapter_accepts_parameter(adapter: SourceAdapter, name: str) -> bool:
@@ -801,7 +1056,7 @@ def _recipe_result_metadata(
     result: Any,
     retained_job_count: int,
     max_results: int | None,
-    session_status: Any | None = None,
+    access_decision: Any | None = None,
 ) -> dict[str, Any]:
     api_pagination_configured = bool(
         getattr(recipe, "listing_api", None)
@@ -819,7 +1074,8 @@ def _recipe_result_metadata(
     pagination_max_pages = (
         recipe.listing_api.pagination.max_pages if api_pagination_configured else recipe.pagination.max_pages
     )
-    return {
+    access_metadata = dict(getattr(access_decision, "metadata", {}) or {})
+    metadata = {
         "adapter": "recipe_html",
         "recipe_path": recipe_path,
         "recipe_source_name": recipe.source_name,
@@ -859,8 +1115,8 @@ def _recipe_result_metadata(
         "source_access_session_used": bool(result.source_access_session_used),
         "source_access_session_scope": recipe.access.session_scope,
         "source_access_setup_hint": recipe.access.setup_hint,
-        "source_access_session_status": getattr(session_status, "status", ""),
-        "source_access_session_label": getattr(session_status, "label", ""),
+        "source_access_session_status": "",
+        "source_access_session_label": "",
         "source_access_login_gate_detected": bool(getattr(result, "source_access_login_gate_detected", False)),
         "listing_observed_count": result.listing_observed_count,
         "listing_extracted_count": result.listing_extracted_count,
@@ -928,31 +1184,35 @@ def _recipe_result_metadata(
             for check in result.capability_checks
         ],
     }
+    metadata.update(access_metadata)
+    metadata["source_access_session_used"] = bool(result.source_access_session_used) or bool(
+        metadata.get("source_access_session_used")
+    )
+    return metadata
 
 
-def _session_required_metadata(
+def _source_access_block_metadata(
     *,
     source: dict,
     recipe_path: str,
     recipe: Any,
-    session_status: Any,
+    decision: Any,
 ) -> dict[str, Any]:
-    detail = (
-        f"Recipe declares that this source requires a connected session. "
-        f"Current session status: {session_status.label}. {session_status.summary}"
-    )
+    detail = decision.message
+    access_metadata = dict(getattr(decision, "metadata", {}) or {})
     return {
+        **access_metadata,
         "adapter": "recipe_html",
         "recipe_path": recipe_path,
         "recipe_source_name": recipe.source_name,
         "base_url": source.get("url", ""),
         "configured_source_url": source.get("url", ""),
-        "source_access_requires_session": True,
+        "source_access_requires_session": bool(getattr(decision, "session_required", False)),
         "source_access_session_used": False,
         "source_access_session_scope": recipe.access.session_scope,
         "source_access_setup_hint": recipe.access.setup_hint,
-        "source_access_session_status": session_status.status,
-        "source_access_session_label": session_status.label,
+        "source_access_session_status": access_metadata.get("source_access_session_status", ""),
+        "source_access_session_label": access_metadata.get("source_access_session_label", ""),
         "capability_checks": [
             {
                 "capability": "source_access",

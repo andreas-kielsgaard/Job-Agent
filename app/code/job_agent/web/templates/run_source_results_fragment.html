@@ -46,8 +46,15 @@
       {% if source.listing_limit_skipped_count %}
       <p><span class="badge warning">Limit hit</span> {{ source.listing_limit_skipped_count }} listing card(s) were outside the configured limit.</p>
       {% endif %}
+      {% set source_access_action_statuses = ["needs_login", "needs_verification", "blocked"] %}
+      {% set show_source_action = source.source_action_href and (source.skipped_reason or source.status == "waiting" or source.source_access_status in source_access_action_statuses) %}
       {% if source.skipped_reason %}
       <p><span class="badge warning">Not run</span> {{ source.skipped_reason }}</p>
+      {% endif %}
+      {% if show_source_action %}
+      <div class="action-row">
+        <a class="button light" href="{{ source.source_action_href }}">{{ source.source_action_label or "Open source" }}</a>
+      </div>
       {% endif %}
     </section>
     {% endfor %}

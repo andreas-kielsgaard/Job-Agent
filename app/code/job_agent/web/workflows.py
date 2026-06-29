@@ -366,6 +366,12 @@ class ProfileWorkflowHandler:
     def setup_view(self) -> dict[str, Any]:
         return build_setup_view(self.root)
 
+    def connectors_view(self) -> dict[str, Any]:
+        return {
+            "title": "Connectors",
+            "connector_settings": self.connectors.load(),
+        }
+
     def active_draft(self) -> dict[str, Any]:
         return self.drafts.active_draft()
 
@@ -380,6 +386,9 @@ class ProfileWorkflowHandler:
 
     def save_env_settings(self, anthropic_api_key: str, claude_model: str, claude_use_by_default: bool) -> None:
         self.setup.save_env_settings(anthropic_api_key, claude_model, claude_use_by_default)
+
+    def save_gmail_oauth_app_credentials(self, client_id: str, client_secret: str) -> None:
+        self.setup.save_gmail_oauth_app_credentials(client_id, client_secret)
 
     def save_contact(self, data: dict[str, Any]) -> None:
         self.setup.save_contact(data)

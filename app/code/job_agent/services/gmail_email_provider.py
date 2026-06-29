@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import base64
 import json
+import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -24,6 +26,7 @@ class GmailOAuthResult:
 class GmailOAuthClient:
     def __init__(self, config: dict[str, Any]) -> None:
         self.config = config
+        self.code_verifier = ""
 
     def authorization_url(self, state: str) -> str:
         Flow = _google_flow()
@@ -35,11 +38,17 @@ class GmailOAuthClient:
             prompt="consent",
             state=state,
         )
+        self.code_verifier = str(flow.code_verifier or "")
         return str(authorization_url)
 
-    def complete_oauth(self, code: str, state: str) -> GmailOAuthResult:
+    def complete_oauth(self, code: str, state: str, *, code_verifier: str = "") -> GmailOAuthResult:
         Flow = _google_flow()
-        flow = Flow.from_client_config(_client_config(self.config), scopes=list(self.config["scopes"]), state=state)
+        flow = Flow.from_client_config(
+            _client_config(self.config),
+            scopes=list(self.config["scopes"]),
+            state=state,
+            code_verifier=code_verifier,
+        )
         flow.redirect_uri = self.config["redirect_uri"]
         flow.fetch_token(code=code)
         credentials = flow.credentials
@@ -138,12 +147,7 @@ class GmailEmailProvider:
         return _dedupe(result)[:max_results], latest_history_id
 
     def get_message(self, message_id: str) -> GmailMessageRecord:
-        payload = (
-            self.service.users()
-            .messages()
-            .get(userId="me", id=message_id, format="metadata", metadataHeaders=list(GMAIL_METADATA_HEADERS))
-            .execute()
-        )
+        payload = self.service.users().messages().get(userId="me", id=message_id, format="full").execute()
         return _record_from_message(payload, self.account_id)
 
 
@@ -151,6 +155,7 @@ def _record_from_message(message: dict[str, Any], account_id: str) -> GmailMessa
     headers = _headers(message)
     label_ids = [str(item) for item in message.get("labelIds", [])]
     snippet = str(message.get("snippet") or "")
+    body_preview = _body_preview(message) or snippet
     return GmailMessageRecord(
         provider="gmail",
         account_id=account_id,
@@ -163,7 +168,7 @@ def _record_from_message(message: dict[str, Any], account_id: str) -> GmailMessa
         to_text=headers.get("to", ""),
         subject=headers.get("subject", ""),
         snippet=snippet,
-        body_preview=snippet,
+        body_preview=body_preview,
         label_ids=label_ids,
     )
 
@@ -183,6 +188,50 @@ def _internal_date(value: Any) -> str:
     except (TypeError, ValueError):
         return ""
     return datetime.fromtimestamp(timestamp, UTC).isoformat()
+
+
+def _body_preview(message: dict[str, Any], limit: int = 12000) -> str:
+    payload = message.get("payload", {})
+    parts = _payload_text_parts(payload)
+    text = "\n\n".join(part for part in parts if part.strip())
+    return _compact_body_text(text)[:limit]
+
+
+def _payload_text_parts(payload: dict[str, Any]) -> list[str]:
+    mime_type = str(payload.get("mimeType") or "")
+    body_text = _decode_body(payload.get("body", {}))
+    if body_text and mime_type in {"text/plain", "text/html", ""}:
+        return [_html_to_text(body_text) if mime_type == "text/html" else body_text]
+    result: list[str] = []
+    for part in payload.get("parts", []) or []:
+        if isinstance(part, dict):
+            result.extend(_payload_text_parts(part))
+    return result
+
+
+def _decode_body(body: dict[str, Any]) -> str:
+    data = str((body or {}).get("data") or "")
+    if not data:
+        return ""
+    try:
+        return base64.urlsafe_b64decode(data + "=" * (-len(data) % 4)).decode("utf-8", errors="replace")
+    except (ValueError, TypeError):
+        return ""
+
+
+def _html_to_text(value: str) -> str:
+    text = re.sub(r"(?is)<(script|style).*?>.*?</\1>", " ", value)
+    text = re.sub(r"(?i)<br\s*/?>", "\n", text)
+    text = re.sub(r"(?i)</p\s*>", "\n", text)
+    text = re.sub(r"<[^>]+>", " ", text)
+    return _compact_body_text(text)
+
+
+def _compact_body_text(value: str) -> str:
+    lines = [re.sub(r"[ \t]+", " ", line).strip() for line in value.splitlines()]
+    text = "\n".join(lines)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
 
 
 def _client_config(config: dict[str, Any]) -> dict[str, Any]:

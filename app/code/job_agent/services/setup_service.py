@@ -777,6 +777,16 @@ CV text:
         values["CLAUDE_USE_BY_DEFAULT"] = "true" if claude_use_by_default else "false"
         self.write_env(values)
 
+    def save_gmail_oauth_app_credentials(self, client_id: str, client_secret: str) -> None:
+        client_id = client_id.strip()
+        client_secret = client_secret.strip()
+        if not client_id or not client_secret:
+            raise ValueError("Gmail client ID and client secret are required.")
+        values = load_env(self.root)
+        values["GMAIL_CLIENT_ID"] = client_id
+        values["GMAIL_CLIENT_SECRET"] = client_secret
+        self.write_env(values)
+
     def save_contact(self, contact_update: dict[str, Any]) -> None:
         path = profile_dir(self.root) / "contact.yaml"
         data = read_yaml(path, {})

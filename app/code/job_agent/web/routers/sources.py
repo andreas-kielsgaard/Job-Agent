@@ -588,6 +588,19 @@ def update_source_recipe(
     return _redirect_to_source(source_id, message="Source recipe updated.")
 
 
+@router.post("/sources/{source_id}/learned-state/reset")
+def reset_source_learned_state(source_id: str) -> RedirectResponse:
+    try:
+        workflow_handler().source.reset_learned_state(source_id)
+    except (KeyError, ValueError) as exc:
+        return _redirect_to_source(source_id, warning=f"Could not reset learned source state: {exc}")
+    return _redirect_to_source(
+        source_id,
+        message="Learned source state reset. Teach the app this source again before testing or running it.",
+        fragment="reading-plan",
+    )
+
+
 @router.post("/sources/{source_id}/execution/create")
 def create_execution_source(source_id: str) -> RedirectResponse:
     try:
@@ -829,6 +842,15 @@ def index_source_listings(source_id: str) -> RedirectResponse:
 def investigate_all_source_jobs(source_id: str) -> RedirectResponse:
     try:
         record = workflow_handler().source.launch_detail_review(runtime, source_id)
+    except (RuntimeError, ValueError) as exc:
+        return _redirect_to_source(source_id, warning=str(exc))
+    return RedirectResponse(f"/runs/{record.run_id}", status_code=303)
+
+
+@router.post("/sources/{source_id}/reingest-all")
+def reingest_all_source_jobs(source_id: str) -> RedirectResponse:
+    try:
+        record = workflow_handler().source.launch_detail_review(runtime, source_id, include_seen=True)
     except (RuntimeError, ValueError) as exc:
         return _redirect_to_source(source_id, warning=str(exc))
     return RedirectResponse(f"/runs/{record.run_id}", status_code=303)

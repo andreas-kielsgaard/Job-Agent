@@ -151,6 +151,7 @@ class SourceListingIndexService:
                     use_recipe_card_limit=False,
                     pagination_page_limit=0,
                     enforce_saved_readiness=True,
+                    access_purpose="listing_index",
                 ),
             )
         except Exception as exc:

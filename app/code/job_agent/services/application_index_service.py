@@ -16,6 +16,8 @@ from job_agent.application_models import (
 )
 from job_agent.application_store import ApplicationStore, EmailThreadLinkStore, ManualCommunicationEventStore
 from job_agent.config import ROOT
+from job_agent.email_models import GmailMessageRecord
+from job_agent.email_store import GmailMessageStore, GmailThreadStore
 from job_agent.services.application_tracker_service import ApplicationTrackerService
 from job_agent.services.package_index_service import PackageIndexService
 
@@ -33,6 +35,8 @@ class ApplicationIndexService:
         self.applications = ApplicationStore(self.root)
         self.thread_links = EmailThreadLinkStore(self.root)
         self.manual_events = ManualCommunicationEventStore(self.root)
+        self.gmail_messages = GmailMessageStore(self.root)
+        self.gmail_threads = GmailThreadStore(self.root)
         self.packages = PackageIndexService(self.root)
         self.tracker = ApplicationTrackerService(self.root)
 
@@ -51,13 +55,14 @@ class ApplicationIndexService:
         job_payload = _json_payload(files.get("job", ""))
         links = self.thread_links.list_for_application(record.application_id)
         events = self.manual_events.list_for_application(record.application_id)
+        threads, messages_by_thread = self._gmail_context(links)
         return {
             "title": f"Application - {record.title or record.application_id}",
             "application": self._application_payload(record, links, events),
             "package": package or {},
             "files": files,
             "job_detail": self._job_detail(record, package or {}, job_payload),
-            "thread_links": [self._thread_payload(link) for link in links],
+            "thread_links": [self._thread_payload(link, threads, messages_by_thread) for link in links],
             "manual_events": [self._event_payload(event) for event in events],
             "material_sections": self._material_sections(package or {}, files),
             "outcomes": sorted(APPLICATION_OUTCOMES),
@@ -71,8 +76,14 @@ class ApplicationIndexService:
         events = self.manual_events.list_for_application(record.application_id)
         linked_count = len([link for link in links if link.status == "linked"])
         rejected_count = len([link for link in links if link.status == "rejected"])
-        latest_event = events[0] if events else None
-        preview_events = list(reversed(events[:3]))
+        _threads, messages_by_thread = self._gmail_context(links)
+        activity = [
+            *[self._event_payload(event) for event in events],
+            *self._gmail_preview_payloads(links, messages_by_thread),
+        ]
+        activity.sort(key=_activity_key, reverse=True)
+        latest_event = activity[0] if activity else {}
+        preview_events = list(reversed(activity[:3]))
         communication_state = "linked" if linked_count else "manual events" if events else "no thread linked"
         return {
             "application_id": record.application_id,
@@ -87,10 +98,10 @@ class ApplicationIndexService:
             "communication_state": communication_state,
             "linked_thread_count": linked_count,
             "rejected_thread_count": rejected_count,
-            "latest_event": self._event_payload(latest_event) if latest_event else {},
-            "preview_events": [self._event_payload(event) for event in preview_events],
-            "last_activity_at": _display_date(latest_event.occurred_at if latest_event else ""),
-            "last_activity_age": _age_label(latest_event.occurred_at if latest_event else ""),
+            "latest_event": latest_event,
+            "preview_events": preview_events,
+            "last_activity_at": _display_date(latest_event.get("occurred_at_raw", "")),
+            "last_activity_age": _age_label(latest_event.get("occurred_at_raw", "")),
         }
 
     def _application_payload(
@@ -144,7 +155,15 @@ class ApplicationIndexService:
             "job_detail_url": self._job_detail_url(record, package),
         }
 
-    def _thread_payload(self, link: EmailThreadLink) -> dict[str, str]:
+    def _thread_payload(
+        self,
+        link: EmailThreadLink,
+        threads: dict[str, Any],
+        messages_by_thread: dict[str, list[GmailMessageRecord]],
+    ) -> dict[str, Any]:
+        thread = threads.get(link.thread_id)
+        messages = [self._gmail_message_payload(message) for message in messages_by_thread.get(link.thread_id, [])]
+        latest_message = messages[-1] if messages else {}
         return {
             "link_id": link.link_id,
             "application_id": link.application_id,
@@ -156,6 +175,14 @@ class ApplicationIndexService:
             "rejected_reason": link.rejected_reason,
             "created_at": _display_date(link.created_at),
             "updated_at": _display_date(link.updated_at),
+            "subject": (thread.subject if thread else "") or latest_message.get("subject", ""),
+            "snippet": (thread.snippet if thread else "") or latest_message.get("snippet", ""),
+            "last_message_at": _display_date(
+                (thread.last_message_at if thread else "") or latest_message.get("sent_at_raw", "")
+            ),
+            "message_count": len(thread.message_ids) if thread else len(messages),
+            "messages": messages,
+            "synced": bool(thread or messages),
         }
 
     def _event_payload(self, event: ManualCommunicationEvent | None) -> dict[str, Any]:
@@ -170,11 +197,58 @@ class ApplicationIndexService:
             "direction": event.direction,
             "direction_label": direction_label,
             "occurred_at": _display_date(event.occurred_at),
+            "occurred_at_raw": event.occurred_at,
             "contact": event.contact,
             "subject": event.subject,
             "note": event.note,
             "summary": summary,
+            "source": "manual",
             "created_at": _display_date(event.created_at),
+        }
+
+    def _gmail_context(
+        self,
+        links: list[EmailThreadLink],
+    ) -> tuple[dict[str, Any], dict[str, list[GmailMessageRecord]]]:
+        thread_ids = {link.thread_id for link in links if link.status == "linked" and link.thread_id}
+        threads = self.gmail_threads.get_many(thread_ids)
+        messages_by_thread: dict[str, list[GmailMessageRecord]] = {thread_id: [] for thread_id in thread_ids}
+        for message in self.gmail_messages.list_for_thread_ids(thread_ids):
+            messages_by_thread.setdefault(message.thread_id, []).append(message)
+        for messages in messages_by_thread.values():
+            messages.sort(key=lambda item: (item.sent_at, item.message_id))
+        return threads, messages_by_thread
+
+    def _gmail_preview_payloads(
+        self,
+        links: list[EmailThreadLink],
+        messages_by_thread: dict[str, list[GmailMessageRecord]],
+    ) -> list[dict[str, Any]]:
+        linked_thread_ids = {link.thread_id for link in links if link.status == "linked"}
+        messages = [message for thread_id in linked_thread_ids for message in messages_by_thread.get(thread_id, [])]
+        messages.sort(key=lambda item: (item.sent_at, item.message_id), reverse=True)
+        return [self._gmail_message_payload(message) for message in messages[:6]]
+
+    def _gmail_message_payload(self, message: GmailMessageRecord) -> dict[str, Any]:
+        direction_label = {"outbound": "You", "inbound": "Them"}.get(message.direction, "Gmail")
+        contact = message.to_text if message.direction == "outbound" else message.from_text
+        return {
+            "message_id": message.message_id,
+            "thread_id": message.thread_id,
+            "direction": message.direction,
+            "direction_label": direction_label,
+            "sent_at": _display_date(message.sent_at),
+            "sent_at_raw": message.sent_at,
+            "occurred_at": _display_date(message.sent_at),
+            "occurred_at_raw": message.sent_at,
+            "contact": contact,
+            "from_text": message.from_text,
+            "to_text": message.to_text,
+            "subject": message.subject,
+            "snippet": message.snippet,
+            "summary": message.subject or message.snippet or contact,
+            "note": message.snippet,
+            "source": "gmail",
         }
 
     def _material_sections(self, package: dict[str, Any], files: dict[str, str]) -> list[dict[str, str]]:
@@ -276,6 +350,10 @@ def _display_date(value: Any) -> str:
 def _has_real_value(value: Any) -> bool:
     text = _text(value)
     return bool(text) and text.lower() not in {"unknown", "not listed", "n/a", "none", "-"}
+
+
+def _activity_key(item: dict[str, Any]) -> tuple[str, str]:
+    return (str(item.get("occurred_at_raw") or ""), str(item.get("summary") or ""))
 
 
 def _age_label(value: str) -> str:

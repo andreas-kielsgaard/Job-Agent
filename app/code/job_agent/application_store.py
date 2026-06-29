@@ -90,10 +90,12 @@ class EmailThreadLinkStore:
         *,
         account_id: str = "",
         provider: str = "gmail",
+        linked_by: str = "manual",
     ) -> EmailThreadLink:
         thread_id = thread_id.strip()
         account_id = account_id.strip()
         provider = provider.strip() or "gmail"
+        linked_by = linked_by.strip() or "manual"
         if not thread_id:
             raise ValueError("Gmail thread ID is required.")
         now = utc_now()
@@ -109,7 +111,7 @@ class EmailThreadLinkStore:
         if existing:
             existing.application_id = application_id
             existing.status = "linked"
-            existing.linked_by = "manual"
+            existing.linked_by = linked_by
             existing.rejected_reason = ""
             existing.updated_at = now
             self._save(links)
@@ -121,7 +123,7 @@ class EmailThreadLinkStore:
             account_id=account_id,
             thread_id=thread_id,
             status="linked",
-            linked_by="manual",
+            linked_by=linked_by,
             created_at=now,
             updated_at=now,
         )

@@ -263,6 +263,13 @@ def test_recipe_generation_live_capture_uses_connected_source_session(monkeypatc
     assert captured["source_session_scope"] == "eursap.eu"
     assert run["source_session_used"] is True
     assert run["source_session_scope"] == "eursap.eu"
+    assert run["learner_access_evidence"]["session_used"] is True
+    assert run["learner_access_evidence"]["session_scope"] == "eursap.eu"
+    assert run["learner_detail_evidence"]["run_id"] == run["run_id"]
+    candidate = RecipeCandidateStore(project_root).load_candidate(run["candidate_id"])
+    assert candidate.learner_access_evidence["session_used"] is True
+    assert candidate.learner_access_evidence["session_scope"] == "eursap.eu"
+    assert candidate.learner_detail_evidence["run_id"] == run["run_id"]
 
 
 def _write_artifact(project_root: Path) -> Path:

@@ -185,9 +185,20 @@
               </div>
               {% if job.can_update_status %}
               <div class="job-row-actions" aria-label="Set status for {{ job.title }}">
-                <button type="button" data-row-status="interesting">Interesting</button>
-                <button type="button" data-row-status="not_interesting">Not interesting</button>
-                <button type="button" data-row-status="applied">Applied</button>
+                {% for option in [
+                  {"value": "interesting", "label": "Interesting"},
+                  {"value": "not_interesting", "label": "Not interesting"},
+                  {"value": "applied", "label": "Applied"}
+                ] %}
+                {% set is_current_status = job.application_status == option.value %}
+                <button
+                  type="button"
+                  class="{{ 'active' if is_current_status else '' }}"
+                  data-row-status="{{ option.value }}"
+                  aria-pressed="{{ 'true' if is_current_status else 'false' }}"
+                  {% if is_current_status %}disabled aria-disabled="true"{% endif %}
+                >{{ option.label }}</button>
+                {% endfor %}
               </div>
               {% endif %}
             </div>
@@ -378,16 +389,23 @@
 
     function renderSelection() {
       const count = selected.size;
+      const activeSelectedStatuses = new Set();
       rows().forEach((row) => {
         const isSelected = selected.has(row.dataset.jobId);
         row.classList.toggle("job-row-selected", isSelected);
         row.setAttribute("aria-selected", isSelected ? "true" : "false");
+        if (isSelected) activeSelectedStatuses.add(row.dataset.currentStatus || "");
+        syncRowStatusButtons(row);
       });
+      const activeBulkStatus = activeSelectedStatuses.size === 1 ? [...activeSelectedStatuses][0] : "";
       if (selectedCount) {
         selectedCount.textContent = count === 1 ? "1 row selected" : count ? `${count} rows selected` : "No rows selected";
       }
       bulkButtons.forEach((button) => {
-        button.disabled = saving || count === 0;
+        const isActive = count > 0 && button.dataset.bulkStatus === activeBulkStatus;
+        button.classList.toggle("active", isActive);
+        button.setAttribute("aria-pressed", isActive ? "true" : "false");
+        button.disabled = saving || count === 0 || isActive;
       });
       if (clearButton) clearButton.disabled = saving || count === 0;
     }
@@ -417,6 +435,22 @@
         badge.classList.add(status);
         badge.textContent = status;
       }
+      syncRowStatusButtons(row);
+    }
+
+    function syncRowStatusButtons(row) {
+      const currentStatus = row.dataset.currentStatus || "";
+      row.querySelectorAll("[data-row-status]").forEach((button) => {
+        const isActive = button.dataset.rowStatus === currentStatus;
+        button.classList.toggle("active", isActive);
+        button.setAttribute("aria-pressed", isActive ? "true" : "false");
+        button.disabled = saving || isActive;
+        if (isActive) {
+          button.setAttribute("aria-disabled", "true");
+        } else {
+          button.removeAttribute("aria-disabled");
+        }
+      });
     }
 
     async function applyStatus(jobIds, status) {
@@ -479,6 +513,7 @@
         button.addEventListener("click", (event) => {
           event.stopPropagation();
           if (!canUpdate(row)) return;
+          if (button.dataset.rowStatus === row.dataset.currentStatus) return;
           selected.clear();
           selected.add(row.dataset.jobId);
           lastSelectedId = row.dataset.jobId;

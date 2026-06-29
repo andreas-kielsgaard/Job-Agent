@@ -346,6 +346,74 @@ def test_source_test_collects_warnings(monkeypatch, project_root: Path) -> None:
     assert result.warnings == ["Sample: Check details"]
 
 
+def test_source_test_records_good_detail_description_quality(monkeypatch, project_root: Path) -> None:
+    _write_execution_source(project_root, enabled=True)
+
+    class FakeAdapter:
+        def fetch(self):
+            return SourceRunResult(
+                jobs=[
+                    Job(
+                        title="SAP ABAP Consultant",
+                        source="Sample",
+                        source_id="sample-source",
+                        description=(
+                            "Long ABAP RAP implementation role with CDS views, Fiori integration, "
+                            "S/4HANA migration work, stakeholder workshops, and production support."
+                        ),
+                    )
+                ],
+                metadata={
+                    "detail_follow_enabled": True,
+                    "detail_fetch_count": 1,
+                    "detail_enriched_count": 1,
+                },
+            )
+
+    monkeypatch.setattr("job_agent.services.source_test_service.adapter_for_source", lambda source, root: FakeAdapter())
+
+    result = SourceTestService(project_root).run_test("sample-source")
+    checks = {check["capability"]: check for check in result.capability_checks}
+
+    assert result.detail_quality_status == "good"
+    assert result.detail_description_present_count == 1
+    assert result.detail_description_distinct_count == 1
+    assert result.detail_average_description_length >= 120
+    assert checks["detail_description_quality"]["status"] == "pass"
+
+
+def test_source_test_records_headline_only_detail_description_quality(monkeypatch, project_root: Path) -> None:
+    _write_execution_source(project_root, enabled=True)
+
+    class FakeAdapter:
+        def fetch(self):
+            return SourceRunResult(
+                jobs=[
+                    Job(
+                        title="SAP ABAP Consultant",
+                        source="Sample",
+                        source_id="sample-source",
+                        description="SAP ABAP Consultant",
+                    )
+                ],
+                metadata={
+                    "detail_follow_enabled": True,
+                    "detail_fetch_count": 1,
+                    "detail_enriched_count": 1,
+                },
+            )
+
+    monkeypatch.setattr("job_agent.services.source_test_service.adapter_for_source", lambda source, root: FakeAdapter())
+
+    result = SourceTestService(project_root).run_test("sample-source")
+    checks = {check["capability"]: check for check in result.capability_checks}
+
+    assert result.detail_quality_status == "headline_only"
+    assert result.detail_description_present_count == 0
+    assert result.detail_description_distinct_count == 0
+    assert checks["detail_description_quality"]["status"] == "observed"
+
+
 def test_source_test_explains_count_mismatch_and_seen_state(monkeypatch, project_root: Path) -> None:
     _write_execution_source(project_root, enabled=True)
     seen_job = Job(

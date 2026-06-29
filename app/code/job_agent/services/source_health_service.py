@@ -71,6 +71,17 @@ class SourceHealthService:
         self._save_record(record)
         return record
 
+    def clear(self, source_id: str) -> None:
+        data = read_yaml(self.path, {"sources": {}})
+        if not isinstance(data, dict):
+            return
+        sources = data.get("sources")
+        if not isinstance(sources, dict) or source_id not in sources:
+            return
+        sources.pop(source_id, None)
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        write_yaml(self.path, data)
+
     def record_from_preview(self, source_id: str, preview: RecipePreviewResult) -> SourceHealthRecord:
         status = derive_health_status(
             extracted_job_count=preview.extracted_job_count,

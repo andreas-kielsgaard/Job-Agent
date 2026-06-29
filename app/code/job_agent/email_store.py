@@ -46,6 +46,11 @@ class GmailMessageStore:
     def list_all(self) -> list[GmailMessageRecord]:
         return _load_records(self.path, GmailMessageRecord)
 
+    def list_for_thread_ids(self, thread_ids: set[str]) -> list[GmailMessageRecord]:
+        if not thread_ids:
+            return []
+        return [message for message in self.list_all() if message.thread_id in thread_ids]
+
     def upsert_many(self, messages: list[GmailMessageRecord]) -> list[GmailMessageRecord]:
         existing = {message.message_id: message for message in self.list_all()}
         now = utc_now()
@@ -65,10 +70,17 @@ class GmailThreadStore:
     def list_all(self) -> list[GmailThreadRecord]:
         return _load_records(self.path, GmailThreadRecord)
 
+    def get_many(self, thread_ids: set[str]) -> dict[str, GmailThreadRecord]:
+        if not thread_ids:
+            return {}
+        return {thread.thread_id: thread for thread in self.list_all() if thread.thread_id in thread_ids}
+
     def upsert_from_messages(self, messages: list[GmailMessageRecord]) -> list[GmailThreadRecord]:
         existing = {thread.thread_id: thread for thread in self.list_all()}
         grouped: dict[str, list[GmailMessageRecord]] = {}
         for message in messages:
+            if not message.thread_id:
+                continue
             grouped.setdefault(message.thread_id, []).append(message)
         now = utc_now()
         for thread_id, thread_messages in grouped.items():

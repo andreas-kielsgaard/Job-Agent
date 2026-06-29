@@ -144,7 +144,10 @@ def sync_gmail(
     force_full: bool = Form(False),
 ) -> RedirectResponse:
     try:
-        result = workflow_handler().applications.sync_gmail(max_messages=max_messages, force_full=force_full)
+        result, match_result = workflow_handler().applications.sync_gmail(
+            max_messages=max_messages,
+            force_full=force_full,
+        )
     except ValueError as exc:
         return RedirectResponse(
             url=f"/applications?{urlencode({'warning': str(exc)})}",
@@ -153,6 +156,19 @@ def sync_gmail(
     message = (
         f"Gmail {result.sync_type} sync completed: "
         f"{result.messages_fetched} message{'s' if result.messages_fetched != 1 else ''} fetched."
+    )
+    if match_result.linked_count:
+        message += f" Auto-linked {match_result.linked_count} thread{'s' if match_result.linked_count != 1 else ''}."
+    return RedirectResponse(url=f"/applications?{urlencode({'message': message})}", status_code=303)
+
+
+@router.post("/api/applications/gmail-match")
+def match_gmail_threads() -> RedirectResponse:
+    result = workflow_handler().applications.match_gmail_threads()
+    message = (
+        f"Reviewed {result.reviewed_threads} cached Gmail thread"
+        f"{'s' if result.reviewed_threads != 1 else ''}; "
+        f"auto-linked {result.linked_count}."
     )
     return RedirectResponse(url=f"/applications?{urlencode({'message': message})}", status_code=303)
 

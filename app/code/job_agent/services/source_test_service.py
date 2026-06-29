@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from inspect import Parameter, signature
@@ -99,6 +100,11 @@ class SourceTestResult:
     detail_verified_listing_page_count: int = 0
     detail_request_delay_seconds: float = 0.0
     detail_attempts: list[dict] = field(default_factory=list)
+    detail_description_present_count: int = 0
+    detail_description_distinct_count: int = 0
+    detail_average_description_length: int = 0
+    detail_quality_status: str = ""
+    detail_quality_summary: str = ""
     field_checks: list[dict] = field(default_factory=list)
     capability_checks: list[dict] = field(default_factory=list)
     log_dir: str = ""
@@ -169,6 +175,14 @@ class SourceTestService:
         metadata = result.metadata or {}
         seen_counts = _seen_state_counts(self.root, result.jobs)
         count_explanations = _count_explanations(len(jobs), metadata, seen_counts)
+        detail_follow_enabled = bool(metadata.get("detail_follow_enabled", False))
+        detail_quality = _detail_quality(jobs, detail_follow_enabled=detail_follow_enabled)
+        capability_checks = list(metadata.get("capability_checks") or [])
+        detail_quality_check = _detail_quality_capability_check(
+            detail_quality, detail_follow_enabled=detail_follow_enabled
+        )
+        if detail_quality_check:
+            capability_checks.append(detail_quality_check)
         _emit_progress(
             progress_callback,
             "Source test extracted jobs",
@@ -226,7 +240,7 @@ class SourceTestService:
             seen_changed_count=seen_counts["changed"],
             seen_previously_seen_count=seen_counts["previously_seen"],
             count_explanations=count_explanations,
-            detail_follow_enabled=bool(metadata.get("detail_follow_enabled", False)),
+            detail_follow_enabled=detail_follow_enabled,
             detail_fetch_limit=_optional_int(metadata.get("detail_fetch_limit")),
             detail_fetch_count=_int(metadata.get("detail_fetch_count")),
             detail_enriched_count=_int(metadata.get("detail_enriched_count")),
@@ -234,8 +248,13 @@ class SourceTestService:
             detail_verified_listing_page_count=_int(metadata.get("detail_verified_listing_page_count")),
             detail_request_delay_seconds=float(metadata.get("detail_request_delay_seconds") or 0.0),
             detail_attempts=list(metadata.get("detail_attempts") or []),
+            detail_description_present_count=detail_quality["present_count"],
+            detail_description_distinct_count=detail_quality["distinct_count"],
+            detail_average_description_length=detail_quality["average_length"],
+            detail_quality_status=detail_quality["status"],
+            detail_quality_summary=detail_quality["summary"],
             field_checks=list(metadata.get("field_checks") or []),
-            capability_checks=list(metadata.get("capability_checks") or []),
+            capability_checks=capability_checks,
         )
         _finalize_material_log(material_log, source_test_result, source_run_metadata=metadata)
         return source_test_result
@@ -282,6 +301,90 @@ def _job_preview(job: Job) -> SourceTestJobPreview:
         description_preview=description[:320],
         extraction_notes=list(job.extraction_notes),
     )
+
+
+def _detail_quality(jobs: list[SourceTestJobPreview], *, detail_follow_enabled: bool) -> dict[str, Any]:
+    if not detail_follow_enabled:
+        return {
+            "status": "not_expected",
+            "summary": "Recipe does not request job detail pages.",
+            "present_count": 0,
+            "distinct_count": 0,
+            "average_length": 0,
+        }
+    descriptions = [(job, " ".join(job.description.split())) for job in jobs if job.description.strip()]
+    if not descriptions:
+        return {
+            "status": "missing",
+            "summary": "Detail pages were requested, but no job descriptions were present.",
+            "present_count": 0,
+            "distinct_count": 0,
+            "average_length": 0,
+        }
+    meaningful = [(job, description) for job, description in descriptions if len(description) >= 40]
+    distinct = [
+        (job, description) for job, description in meaningful if not _description_is_title_like(description, job.title)
+    ]
+    average_length = round(sum(len(description) for _job, description in descriptions) / len(descriptions))
+    if not distinct:
+        return {
+            "status": "headline_only",
+            "summary": (
+                "Detail pages were requested, but descriptions look like headlines or very short listing snippets."
+            ),
+            "present_count": len(meaningful),
+            "distinct_count": 0,
+            "average_length": average_length,
+        }
+    if average_length < 120:
+        return {
+            "status": "weak",
+            "summary": f"Detail descriptions were distinct but short on average ({average_length} characters).",
+            "present_count": len(meaningful),
+            "distinct_count": len(distinct),
+            "average_length": average_length,
+        }
+    return {
+        "status": "good",
+        "summary": f"Detail descriptions look distinct from headlines ({average_length} average characters).",
+        "present_count": len(meaningful),
+        "distinct_count": len(distinct),
+        "average_length": average_length,
+    }
+
+
+def _detail_quality_capability_check(
+    quality: dict[str, Any],
+    *,
+    detail_follow_enabled: bool,
+) -> dict[str, Any] | None:
+    if not detail_follow_enabled:
+        return None
+    status = str(quality.get("status") or "")
+    return {
+        "capability": "detail_description_quality",
+        "label": "Detail description quality",
+        "expected": True,
+        "observed": status in {"good", "weak"},
+        "status": "pass" if status == "good" else "warning" if status == "weak" else "observed",
+        "detail": str(quality.get("summary") or ""),
+    }
+
+
+def _description_is_title_like(description: str, title: str) -> bool:
+    description_norm = _quality_text(description)
+    title_norm = _quality_text(title)
+    if not description_norm or not title_norm:
+        return False
+    if description_norm == title_norm:
+        return True
+    if title_norm in description_norm and len(description_norm) <= len(title_norm) + 60:
+        return True
+    return description_norm in title_norm
+
+
+def _quality_text(value: str) -> str:
+    return " ".join(re.sub(r"[^a-z0-9]+", " ", str(value).lower()).split())
 
 
 def _int(value) -> int:
@@ -392,6 +495,7 @@ def _fetch_source_test_adapter(
         detail_listing_page_sample_target=SOURCE_TEST_DETAIL_LISTING_PAGE_SAMPLE_TARGET,
         pagination_page_limit=0,
         material_log=material_log,
+        access_purpose="source_test",
     )
     kwargs: dict[str, Any] = {}
     if _adapter_accepts_parameter(adapter, "progress_callback") and progress_callback:

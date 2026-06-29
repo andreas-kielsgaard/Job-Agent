@@ -21,8 +21,11 @@
           <input type="hidden" name="max_messages" value="100">
           <button type="submit">Sync Gmail</button>
         </form>
+        <form method="post" action="/api/applications/gmail-match" class="application-filter-actions">
+          <button class="light" type="submit">Match cached threads</button>
+        </form>
         {% else %}
-        <a class="button light" href="/setup#advanced-profile-config">Connect Gmail</a>
+        <a class="button light" href="/connectors">Connect Gmail</a>
         {% endif %}
       </div>
     </div>
@@ -91,11 +94,11 @@
               {% if application.preview_events %}
               <div class="application-preview-lines">
                 {% for event in application.preview_events %}
-                <p><strong>{{ event.direction_label }}</strong>{% if event.occurred_at %}, {{ event.occurred_at }}{% endif %}: {{ event.summary }}</p>
+                <p><strong>{{ event.direction_label }}</strong>{% if event.occurred_at %}, {{ event.occurred_at }}{% endif %}: {{ event.summary }}{% if event.source == "gmail" and event.note and event.note != event.summary %}<span class="muted"> - {{ event.note }}</span>{% endif %}</p>
                 {% endfor %}
               </div>
               {% else %}
-              <span class="muted">No manual communication recorded.</span>
+              <span class="muted">No communication recorded.</span>
               {% endif %}
             </td>
             <td>{{ application.applied_at or "Not listed" }}</td>

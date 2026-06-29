@@ -125,6 +125,17 @@ class SourceExecutionReadinessService:
     def save_from_dry_run(self, result: SourceTestResult) -> SourceExecutionReadiness:
         return self.save_from_source_test(result)
 
+    def clear(self, source_id: str) -> None:
+        data = read_yaml(self.path, {"sources": {}})
+        if not isinstance(data, dict):
+            return
+        sources = data.get("sources")
+        if not isinstance(sources, dict) or source_id not in sources:
+            return
+        sources.pop(source_id, None)
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        write_yaml(self.path, data)
+
     def evaluate(
         self,
         source_id: str,
@@ -322,6 +333,15 @@ _SOURCE_TEST_METRIC_KEYS = (
     "detail_enriched_count",
     "detail_fetch_limit",
     "detail_verified_listing_page_count",
+    "detail_description_present_count",
+    "detail_description_distinct_count",
+    "detail_average_description_length",
+    "detail_quality_status",
+    "detail_quality_summary",
+    "source_access_session_used",
+    "source_access_session_status",
+    "source_access_session_scope",
+    "source_access_login_gate_detected",
 )
 
 
@@ -344,6 +364,15 @@ def _record_source_test_metrics(checks: dict[str, Any], result: SourceTestResult
             "detail_enriched_count": result.detail_enriched_count,
             "detail_fetch_limit": result.detail_fetch_limit,
             "detail_verified_listing_page_count": result.detail_verified_listing_page_count,
+            "detail_description_present_count": result.detail_description_present_count,
+            "detail_description_distinct_count": result.detail_description_distinct_count,
+            "detail_average_description_length": result.detail_average_description_length,
+            "detail_quality_status": result.detail_quality_status,
+            "detail_quality_summary": result.detail_quality_summary,
+            "source_access_session_used": result.source_access_session_used,
+            "source_access_session_status": result.source_access_session_status,
+            "source_access_session_scope": result.source_access_session_scope,
+            "source_access_login_gate_detected": result.source_access_login_gate_detected,
         }
     )
 

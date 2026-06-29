@@ -9,6 +9,7 @@ import requests
 from job_agent.digest import write_placeholder_job_package
 from job_agent.io.json_store import read_json
 from job_agent.models import Job, MatchResult, SourceRunResult
+from job_agent.services.source_session_service import SourceSessionService
 from job_agent.sources import (
     GenericHtmlAdapter,
     LocalYamlAdapter,
@@ -411,6 +412,77 @@ def test_iter_source_results_converts_unexpected_adapter_exception_to_failure(
     assert "boom" in events[-1].message
 
 
+def test_iter_source_results_waits_for_source_access_then_fetches(
+    monkeypatch: pytest.MonkeyPatch, project_root: Path
+) -> None:
+    recipe_path = _write_required_session_recipe(project_root)
+    (project_root / "sources" / "recruiting-sites.yaml").write_text(
+        "sources:\n"
+        "  - name: Session Source\n"
+        "    source_id: session-source\n"
+        "    type: recipe_html\n"
+        "    url: https://example.com/jobs\n"
+        f"    recipe_path: {recipe_path.relative_to(project_root).as_posix()}\n",
+        encoding="utf-8",
+    )
+    fetched = []
+
+    class FastAdapter(SourceAdapter):
+        def fetch(self, progress_callback=None, options=None):
+            fetched.append(self.source["name"])
+            return SourceRunResult(
+                jobs=[
+                    Job(
+                        title="SAP ABAP Consultant",
+                        source="Session Source",
+                        source_id="session-source",
+                        url="https://example.com/jobs/1",
+                    )
+                ]
+            )
+
+    monkeypatch.setattr("job_agent.sources.adapter_for_source", lambda source, root: FastAdapter(source, root))
+    events = []
+
+    def capture(event):
+        events.append(event)
+        if event.event_type != "source_access_waiting":
+            return
+        state_path = project_root / "sources" / "sessions" / "session-source.storage-state.json"
+        state_path.parent.mkdir(parents=True, exist_ok=True)
+        state_path.write_text('{"cookies": [], "origins": []}', encoding="utf-8")
+        service = SourceSessionService(project_root)
+        service.record_storage_state(
+            "session-source",
+            session_scope="example.com",
+            storage_state_path=state_path.relative_to(project_root).as_posix(),
+        )
+        service.mark_verified("session-source", session_scope="example.com")
+
+    results = list(
+        iter_source_results(
+            project_root,
+            progress_callback=capture,
+            fetch_options=SourceFetchOptions(
+                enforce_saved_readiness=True,
+                wait_for_source_access=True,
+                source_access_wait_timeout_seconds=1.0,
+                source_access_wait_poll_seconds=0.01,
+            ),
+        )
+    )
+
+    assert fetched == ["Session Source"]
+    assert len(results[0].result.jobs) == 1
+    assert [event.event_type for event in events] == [
+        "source_started",
+        "source_access_waiting",
+        "source_access_resumed",
+        "source_completed",
+    ]
+    assert events[1].details["source_action_href"] == "/sources/session-source/session"
+
+
 def _write_recipe(project_root: Path) -> Path:
     recipe_path = project_root / "sources" / "recipes" / "test-recipe.yaml"
     recipe_path.parent.mkdir(parents=True, exist_ok=True)
@@ -426,6 +498,24 @@ def _write_recipe(project_root: Path) -> Path:
         "accept:\n"
         "  url_contains:\n"
         "    - /jobs/\n",
+        encoding="utf-8",
+    )
+    return recipe_path
+
+
+def _write_required_session_recipe(project_root: Path) -> Path:
+    recipe_path = project_root / "sources" / "recipes" / "required-session.yaml"
+    recipe_path.parent.mkdir(parents=True, exist_ok=True)
+    recipe_path.write_text(
+        "source_name: Session Source\n"
+        "mode: static_html\n"
+        "access:\n"
+        "  requires_session: true\n"
+        "  session_scope: example.com\n"
+        "listing:\n"
+        "  card_selector: article.job-card\n"
+        "  title_selector: a.job-link\n"
+        "  link_selector: a.job-link\n",
         encoding="utf-8",
     )
     return recipe_path

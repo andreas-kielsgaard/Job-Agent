@@ -547,11 +547,28 @@ def build_source_progress(events: list[dict[str, Any]]) -> dict[str, Any]:
         if elapsed is not None:
             item["elapsed_time_seconds"] = elapsed
         _apply_source_progress_counts(item, counts)
+        _apply_source_access_counts(item, counts)
 
         if event_type == "source_started":
             item["status"] = "running"
             item["started_at"] = event.get("timestamp", "")
             item["stage"] = "Starting"
+        elif event_type == "source_access_waiting":
+            item["status"] = "waiting"
+            item["stage"] = "Waiting for source access"
+            item["latest_message"] = event.get("message") or "Waiting for source access to be refreshed."
+            _apply_source_access_highlight(item)
+        elif event_type == "source_access_resumed":
+            item["status"] = "running"
+            item["stage"] = "Source access refreshed"
+            item["latest_message"] = event.get("message") or "Source access refreshed; resuming this source."
+            _apply_source_access_highlight(item, resumed=True)
+        elif event_type == "source_access_timeout":
+            item["status"] = "running"
+            item["stage"] = "Source access blocked"
+            item["latest_message"] = event.get("message") or "Source access is still blocked."
+            item["warnings_count"] = max(item["warnings_count"], int(counts.get("warnings_count") or 1))
+            _apply_source_access_highlight(item)
         elif event_type == "source_warning":
             item["warnings_count"] = max(item["warnings_count"], 0) + int(counts.get("warnings_count") or 1)
         elif event_type == "source_activity":
@@ -641,8 +658,7 @@ def build_source_progress(events: list[dict[str, Any]]) -> dict[str, Any]:
             items_by_index[source_index] = _skipped_source_item(
                 source_index,
                 total_count,
-                skipped.get("source_name") or "Skipped source",
-                skipped.get("reason") or "setup is not complete",
+                skipped,
             )
 
     for event in events:
@@ -746,6 +762,10 @@ def _waiting_source_item(source_index: int, source_count: int) -> dict[str, Any]
         else f"Waiting source {source_index}",
         "source_index": source_index,
         "source_count": source_count,
+        "source_id": "",
+        "source_action_href": "",
+        "source_action_label": "",
+        "source_access_status": "",
         "status": "waiting",
         "jobs_found": 0,
         "warnings_count": 0,
@@ -794,11 +814,17 @@ def _waiting_source_item(source_index: int, source_count: int) -> dict[str, Any]
     }
 
 
-def _skipped_source_item(source_index: int, source_count: int, source_name: str, reason: str) -> dict[str, Any]:
+def _skipped_source_item(source_index: int, source_count: int, skipped: dict[str, str]) -> dict[str, Any]:
+    source_name = skipped.get("source_name") or "Skipped source"
+    reason = skipped.get("reason") or "setup is not complete"
     item = _waiting_source_item(source_index, source_count)
     item.update(
         {
             "source_name": source_name,
+            "source_id": skipped.get("source_id") or "",
+            "source_action_href": skipped.get("source_action_href") or "",
+            "source_action_label": skipped.get("source_action_label") or "",
+            "source_access_status": skipped.get("source_access_status") or "",
             "status": "deferred",
             "stage": "Skipped by readiness",
             "latest_message": f"Not run: {reason}.",
@@ -827,7 +853,23 @@ def _source_setup_skips_from_counts(counts: dict[str, Any]) -> list[dict[str, st
             continue
         source_name = str(raw.get("source_name") or raw.get("source_id") or "Skipped source").strip()
         reason = str(raw.get("reason") or "setup is not complete").strip()
-        skipped.append({"source_name": source_name, "reason": reason})
+        source_id = str(raw.get("source_id") or "").strip()
+        source_action_href = str(raw.get("source_action_href") or "").strip()
+        source_action_label = str(raw.get("source_action_label") or "").strip()
+        if source_id and not source_action_href:
+            source_action_href = f"/sources/{source_id}"
+        if source_action_href and not source_action_label:
+            source_action_label = "Open source"
+        skipped.append(
+            {
+                "source_name": source_name,
+                "source_id": source_id,
+                "reason": reason,
+                "source_action_href": source_action_href,
+                "source_action_label": source_action_label,
+                "source_access_status": str(raw.get("source_access_status") or "").strip(),
+            }
+        )
     return skipped
 
 
@@ -861,6 +903,37 @@ def _apply_source_progress_counts(item: dict[str, Any], counts: dict[str, Any]) 
             continue
         if value or key in {"jobs_found"}:
             item[key] = max(int(item.get(key) or 0), value)
+
+
+def _apply_source_access_counts(item: dict[str, Any], counts: dict[str, Any]) -> None:
+    for key in ("source_id", "source_action_href", "source_action_label", "source_access_status"):
+        value = str(counts.get(key) or "").strip()
+        if value:
+            item[key] = value
+
+
+def _apply_source_access_highlight(item: dict[str, Any], *, resumed: bool = False) -> None:
+    if resumed:
+        highlight = {
+            "kind": "medium",
+            "label": "Access refreshed",
+            "title": "Session is ready",
+            "detail": str(item.get("latest_message") or "Source access was refreshed and the source can continue."),
+            "score": 0,
+        }
+    else:
+        status = str(item.get("source_access_status") or "").strip()
+        action = str(item.get("source_action_label") or "Refresh source access").strip()
+        title = "Source session needs verification" if status == "needs_verification" else "Source session needed"
+        highlight = {
+            "kind": "warning",
+            "label": "Needs login" if status == "needs_login" else "Needs access",
+            "title": title,
+            "detail": f"{str(item.get('latest_message') or 'Refresh source access before this source can run.')} {action}.",
+            "score": 0,
+        }
+    item["highlight"] = highlight
+    item["source_summary_highlight"] = highlight
 
 
 def _listing_progress_text(item: dict[str, Any]) -> str:

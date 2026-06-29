@@ -18,6 +18,7 @@ from .scoring import score_job
 from .services.ai_search_service import AiSearchEvaluation, AiSearchService, should_ai_evaluate_job
 from .services.job_board_recipe_service import enrich_jobs_with_detail_pages_with_trace
 from .services.recipes.mapping import load_project_job_board_recipe
+from .services.source_run_field_health_service import SourceRunFieldHealthService
 from .services.source_session_service import SourceSessionService
 from .sources import SourceFetchOptions, SourceFetchResult, SourceProgressEvent, iter_source_results
 from .store import JobStore
@@ -132,6 +133,7 @@ def run_daily_agent(
         processed_states = []
         processed_keys: set[str] = set()
         max_parallel_sources = _max_parallel_sources_from_profile(profile)
+        source_access_purpose = _source_access_purpose(options, source_id)
         fetch_options = SourceFetchOptions(
             fetch_details=False,
             use_source_job_limit=False,
@@ -140,6 +142,10 @@ def run_daily_agent(
             enforce_saved_readiness=True,
             require_setup_complete=not bool(source_id),
             max_parallel_sources=max_parallel_sources,
+            access_purpose=source_access_purpose,
+            wait_for_source_access=options.wait_for_source_access,
+            source_access_wait_timeout_seconds=options.source_access_wait_timeout_seconds,
+            source_access_wait_poll_seconds=options.source_access_wait_poll_seconds,
         )
         if options.full_source_ingestion:
             emit(
@@ -476,6 +482,14 @@ def run_daily_agent(
                 counts=source_counts,
             )
 
+        _record_source_run_field_health(
+            processed_states,
+            run_id=run_id,
+            root=root,
+            all_warnings=all_warnings,
+            emit=emit,
+        )
+
         emit(
             "jobs_loaded",
             f"Loaded {total_loaded} jobs.",
@@ -552,6 +566,56 @@ def _store_nested_event(run_store: RunStore, event: RunEvent, progress_callback:
         progress_callback(event)
 
 
+def _record_source_run_field_health(
+    processed_states: list[JobState],
+    *,
+    run_id: str,
+    root: Path,
+    all_warnings: list[SourceWarning],
+    emit: Callable[..., None],
+) -> None:
+    jobs_by_source: dict[str, list] = {}
+    for state in processed_states:
+        source_id = str(state.job.source_id or "").strip()
+        if not source_id:
+            continue
+        jobs_by_source.setdefault(source_id, []).append(state.job)
+    if not jobs_by_source:
+        return
+    service = SourceRunFieldHealthService(root)
+    for source_id, jobs in sorted(jobs_by_source.items()):
+        source_name = str(jobs[0].source or source_id)
+        try:
+            record = service.update_from_jobs(source_id, source_name=source_name, jobs=jobs, run_id=run_id)
+        except Exception as exc:
+            warning = SourceWarning(source_name, f"Latest-run field health check failed: {exc}")
+            all_warnings.append(warning)
+            emit(
+                "source_field_health_failed",
+                warning.message,
+                "finalize",
+                current_source=source_name,
+            )
+            continue
+        if record.status == "not_applicable":
+            continue
+        emit(
+            "source_field_health_checked",
+            record.summary,
+            "finalize",
+            status="warning" if record.status == "needs_relearn" else "running",
+            current_source=source_name,
+            counts={
+                "jobs_checked": record.job_count,
+                "required_missing_field_count": len(record.required_missing_fields),
+                "advisory_missing_field_count": len(record.advisory_missing_fields),
+                "description_strong_count": record.description_strong_count,
+            },
+        )
+        if record.status == "needs_relearn":
+            all_warnings.append(SourceWarning(source_name, record.summary))
+
+
 def _run_label(options: RunOptions, source_id: str = "") -> str:
     if source_id:
         return f"Single-source run for {source_id}"
@@ -567,6 +631,14 @@ def _max_parallel_sources_from_profile(profile: dict) -> int:
     except (TypeError, ValueError):
         configured = 10
     return max(1, configured)
+
+
+def _source_access_purpose(options: RunOptions, source_id: str = "") -> str:
+    if options.full_source_ingestion:
+        return "full_ingest"
+    if source_id and options.detail_extraction_limit is None and options.mark_seen and not options.generate_materials:
+        return "detail_ingest"
+    return "daily_run"
 
 
 def _prepare_detail_review(
@@ -623,7 +695,7 @@ def _prepare_detail_review(
 
     emit(
         "detail_review_started",
-        f"Reviewing {len(jobs)} new job(s) in detail for {source_fetch.source_name}.",
+        f"Reviewing {len(jobs)} job(s) in detail for {source_fetch.source_name}.",
         "source_processing",
         current_source=source_fetch.source_name,
         counts={

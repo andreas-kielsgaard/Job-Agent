@@ -7,6 +7,7 @@ from job_agent.application_store import ApplicationStore, EmailThreadLinkStore, 
 from job_agent.config import ROOT
 from job_agent.services.application_tracker_service import ApplicationTrackerService
 from job_agent.services.email_sync_service import EmailSyncService
+from job_agent.services.gmail_application_match_service import GmailApplicationMatchService
 from job_agent.web.view_models.applications import build_application_detail_view, build_applications_view
 
 
@@ -18,6 +19,7 @@ class ApplicationWorkflowHandler:
         self.manual_events = ManualCommunicationEventStore(self.root)
         self.tracker = ApplicationTrackerService(self.root)
         self.email_sync = EmailSyncService(self.root)
+        self.gmail_matcher = GmailApplicationMatchService(self.root)
 
     def list_view(self, filters: dict[str, Any] | None = None) -> dict[str, Any]:
         self.tracker.backfill_applied()
@@ -73,7 +75,12 @@ class ApplicationWorkflowHandler:
         )
 
     def sync_gmail(self, *, max_messages: int = 100, force_full: bool = False):
-        return self.email_sync.sync_recent_candidates(max_messages=max_messages, force_full=force_full)
+        sync_result = self.email_sync.sync_recent_candidates(max_messages=max_messages, force_full=force_full)
+        match_result = self.gmail_matcher.match_cached_threads()
+        return sync_result, match_result
+
+    def match_gmail_threads(self):
+        return self.gmail_matcher.match_cached_threads()
 
     def require_application(self, application_id: str):
         self.tracker.backfill_applied()

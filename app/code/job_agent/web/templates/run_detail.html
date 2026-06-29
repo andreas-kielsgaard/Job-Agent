@@ -249,14 +249,12 @@
   (() => {
     const runId = "{{ run.run_id }}";
     const hasFilters = window.location.search.length > 0;
-    const terminalStatuses = new Set(["completed", "failed"]);
     const esc = window.escapeHtml || ((value) => String(value || "")
       .replaceAll("&", "&amp;")
       .replaceAll("<", "&lt;")
       .replaceAll(">", "&gt;")
       .replaceAll('"', "&quot;")
       .replaceAll("'", "&#039;"));
-    let pollTimer = null;
 
     function setText(selector, value) {
       const element = document.querySelector(selector);
@@ -466,18 +464,19 @@
         updateSourceResults(data);
         updateMatchHighlights(data.match_highlights, data.run_overview || {});
         updatePackages(data.packages);
-        const status = String((data.run && data.run.status) || "").toLowerCase();
-        if (terminalStatuses.has(status) && pollTimer) {
-          window.clearInterval(pollTimer);
-          pollTimer = null;
-        }
       } catch {
-        // The regular health check will recover on the next poll if the local server is still running.
+        // The app event stream will trigger another refresh when runtime state changes.
       }
     }
 
-    pollTimer = window.setInterval(refreshRunDetail, 2000);
     window.setTimeout(refreshRunDetail, 500);
+    if (window.onAppChangeEvent) {
+      window.onAppChangeEvent((event) => {
+        if (event.kind === "work_status" && event.task_id === `run-${runId}`) {
+          refreshRunDetail();
+        }
+      });
+    }
   })();
 </script>
 {% endif %}

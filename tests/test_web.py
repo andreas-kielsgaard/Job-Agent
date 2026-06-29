@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -94,18 +95,15 @@ def test_setup_loads_friendly_sections(client: TestClient) -> None:
     assert "data-case-linked-skills" not in response.text
     assert 'data-case-link-list="skills"' in response.text
     assert "Advanced profile files and writing templates" in response.text
-    assert "Connector setup" in response.text
-    assert "Canva" in response.text
-    assert "Connect to Canva" in response.text
-    assert "/connectors/canva/start" in response.text
+    assert "Connect Canva" not in response.text
+    assert "/connectors/canva/start" not in response.text
     assert "canva_mcp_server_url" not in response.text
     assert "canva_oauth_client_id" not in response.text
     assert "canva_connected_account" not in response.text
     assert "email_oauth_client_id" not in response.text
-    assert "Gmail Read-Only" in response.text
-    assert "Connect Gmail read-only" in response.text
-    assert "Email Drafts" in response.text
-    assert "Sending is disabled by the application boundary" in response.text
+    assert "Connect Gmail" not in response.text
+    assert "Email Drafts" not in response.text
+    assert "Sending is disabled by the application boundary" not in response.text
     assert "Template variable reference" in response.text
     assert "Highest performance" in response.text
     assert "Daily-run inclusion score" in response.text
@@ -113,6 +111,21 @@ def test_setup_loads_friendly_sections(client: TestClient) -> None:
     assert "Job Sources" not in response.text
     assert "Manage sources" not in response.text
     assert "Add source" not in response.text
+    connectors = client.get("/connectors")
+    assert connectors.status_code == 200
+    assert "Connectors" in connectors.text
+    assert "Canva" in connectors.text
+    assert "Connect Canva" in connectors.text
+    assert "Gmail" in connectors.text
+    assert "Connect Gmail" in connectors.text
+    assert "Connect Gmail read-only" not in connectors.text
+    assert 'id="gmail-credentials-dialog"' in connectors.text
+    assert "Google Cloud Console credentials" in connectors.text
+    assert "Gmail API" in connectors.text
+    assert "http://127.0.0.1:8765/connectors/email/callback" in connectors.text
+    assert "Save and connect Gmail" in connectors.text
+    assert "Email Drafts" in connectors.text
+    assert "Sending is disabled by the application boundary" in connectors.text
     assert "Add Simple Source" not in response.text
 
 
@@ -233,6 +246,10 @@ def test_jobs_filters_by_source_run_date_and_low_relevance(client: TestClient, p
     assert "job-status-control" in response.text
     assert "job-status-display" in response.text
     assert 'data-row-status="interesting"' in response.text
+    assert re.search(
+        r'<button[^>]*class="active"[^>]*data-row-status="not_interesting"[^>]*aria-pressed="true"[^>]*disabled',
+        response.text,
+    )
     assert "job-hover-card" not in response.text
     assert 'data-sort-pay="650.0"' in response.text
     assert 'data-value="sample-jobs"' in response.text
@@ -276,6 +293,10 @@ def test_jobs_status_json_updates_package_without_page_reload(client: TestClient
     assert "Strong SAP Role" in jobs.text
     assert 'data-current-status="applied"' in jobs.text
     assert '<span class="badge applied" data-application-status-badge>applied</span>' in jobs.text
+    assert re.search(
+        r'<button[^>]*class="active"[^>]*data-row-status="applied"[^>]*aria-pressed="true"[^>]*disabled',
+        jobs.text,
+    )
 
 
 def test_applied_jobs_use_effective_strong_match_in_jobs_view(client: TestClient, project_root) -> None:
@@ -626,6 +647,11 @@ def test_job_detail_status_save_redirects_with_confirmation(client: TestClient, 
     assert "Saved as not interesting." in detail.text
     assert "Rate too low" in detail.text
     assert "Keep recruiter in mind." in detail.text
+    assert re.search(
+        r'<button[^>]*class="light active"[^>]*data-status-choice="not_interesting"'
+        r'[^>]*aria-pressed="true"[^>]*disabled',
+        detail.text,
+    )
 
 
 def test_job_detail_copy_context_includes_job_app_and_profile_context(client: TestClient, project_root) -> None:

@@ -31,6 +31,23 @@ def test_successful_source_test_saves_ready_readiness_with_samples(project_root:
     assert saved["sources"]["eursap-jobs"]["readiness_status"] == "ready"
 
 
+def test_source_test_detail_quality_metrics_are_saved_without_blocking(project_root: Path) -> None:
+    _prepare_good_source(project_root)
+
+    readiness = SourceExecutionReadinessService(project_root).save_from_source_test(
+        _source_test_result(
+            detail_quality_status="headline_only",
+            detail_quality_summary="Detail pages only returned headlines.",
+        )
+    )
+
+    assert readiness.readiness_status == "ready"
+    assert readiness.checks["detail_quality_status"] == "headline_only"
+    assert readiness.checks["detail_quality_summary"] == "Detail pages only returned headlines."
+    saved = read_yaml(project_root / "sources" / "source-execution-readiness.yaml", {})
+    assert saved["sources"]["eursap-jobs"]["checks"]["detail_quality_status"] == "headline_only"
+
+
 def test_failing_or_zero_job_source_test_records_blocked(project_root: Path) -> None:
     _prepare_good_source(project_root)
 
@@ -508,6 +525,11 @@ def _source_test_result(
     pagination_duplicate_page_count: int = 0,
     pagination_duplicate_ratio: float = 0.0,
     pagination_unique_jobs_from_fetched_pages: int = 0,
+    source_access_session_used: bool = False,
+    source_access_session_status: str = "",
+    source_access_session_scope: str = "",
+    detail_quality_status: str = "",
+    detail_quality_summary: str = "",
 ):
     jobs = []
     if job_count:
@@ -534,4 +556,9 @@ def _source_test_result(
         pagination_duplicate_page_count=pagination_duplicate_page_count,
         pagination_duplicate_ratio=pagination_duplicate_ratio,
         pagination_unique_jobs_from_fetched_pages=pagination_unique_jobs_from_fetched_pages,
+        source_access_session_used=source_access_session_used,
+        source_access_session_status=source_access_session_status,
+        source_access_session_scope=source_access_session_scope,
+        detail_quality_status=detail_quality_status,
+        detail_quality_summary=detail_quality_summary,
     )

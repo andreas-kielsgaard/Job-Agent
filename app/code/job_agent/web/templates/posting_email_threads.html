@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="source-detail-header">
+  <div>
+    <p class="eyebrow">Gmail intake</p>
+    <h1>Add Posting From Gmail</h1>
+    <p class="muted">Use a cached recruiter email chain as the source for a local job posting, or link the chain to an existing application/job record.</p>
+  </div>
+  <div class="source-actions">
+    <a class="button light" href="/applications">Sync Gmail</a>
+    <a class="button light" href="/postings/new">Paste posting</a>
+  </div>
+</div>
+
+{% if message %}
+<div class="panel hero-status today"><strong>{{ message }}</strong></div>
+{% endif %}
+{% if warning %}
+<div class="panel"><span class="badge low">{{ warning }}</span></div>
+{% endif %}
+
+<section class="panel">
+  {% if threads %}
+  <div class="application-thread-list">
+    {% for thread in threads %}
+    <article class="application-thread-row">
+      <div>
+        <strong>{{ thread.subject }}</strong>
+        {% if thread.last_message_at %}<span class="muted">{{ thread.last_message_at }}</span>{% endif %}
+        {% if thread.participants %}<p class="muted">{{ thread.participants }}</p>{% endif %}
+        {% if thread.snippet %}<p>{{ thread.snippet }}</p>{% endif %}
+        <p class="muted">{{ thread.message_count }} cached message{% if thread.message_count != 1 %}s{% endif %}</p>
+      </div>
+      <div class="application-row-actions">
+        <form method="post" action="/postings/email-threads/import" data-llm-model-picker data-llm-model-requires="use_llm" data-llm-model-title="Choose AI power for Gmail thread summary">
+          <input type="hidden" name="thread_id" value="{{ thread.thread_id }}">
+          {% if llm_configured %}
+          <label class="check"><input type="checkbox" name="use_llm" checked> Use Claude summary</label>
+          {% else %}
+          <label class="check"><input type="checkbox" disabled> Claude not connected</label>
+          {% endif %}
+          <label class="check"><input type="checkbox" name="ai_enhanced_search"> AI evaluation</label>
+          <label class="check"><input type="checkbox" name="generate_materials"> Generate materials</label>
+          <button type="submit">Create posting</button>
+        </form>
+
+        <form method="post" action="/postings/email-threads/link" class="application-reassign-form">
+          <input type="hidden" name="thread_id" value="{{ thread.thread_id }}">
+          <input type="hidden" name="account_id" value="{{ thread.account_id }}">
+          <select name="application_id" {% if not applications %}disabled{% endif %}>
+            {% for application in applications %}
+            <option value="{{ application.application_id }}">{{ application.title }} - {{ application.company }}</option>
+            {% endfor %}
+          </select>
+          <button class="light" type="submit" {% if not applications %}disabled{% endif %}>Link chain to job</button>
+        </form>
+      </div>
+    </article>
+    {% endfor %}
+  </div>
+  {% else %}
+  <p class="muted">No Gmail threads are cached yet. Connect Gmail, then run Sync Gmail from Applications.</p>
+  {% endif %}
+</section>
+{% endblock %}

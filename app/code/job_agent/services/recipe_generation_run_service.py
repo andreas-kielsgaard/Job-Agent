@@ -23,9 +23,8 @@ from job_agent.services.recipe_suggestion_service import (
     suggest_recipe_from_artifact,
     suggest_recipe_with_refinement,
 )
-from job_agent.services.recipes.mapping import load_project_job_board_recipe
+from job_agent.services.source_access_gate_service import SourceAccessGateService
 from job_agent.services.source_registry_service import SourceRegistryService
-from job_agent.services.source_session_service import SourceSessionService
 
 _EXECUTOR = ThreadPoolExecutor(max_workers=1)
 _RUN_ID_PATTERN = re.compile(r"[A-Za-z0-9_.-]+")
@@ -158,19 +157,27 @@ class RecipeGenerationRunService:
             source = SourceRegistryService(self.root).get_source(str(run["source_id"]))
             if not source:
                 raise ValueError(f"Source not found: {run['source_id']}")
+            learner_access_evidence: dict[str, Any] = {}
             if run.get("capture_source"):
-                session_status = _usable_source_session(self.root, source)
+                access_decision = SourceAccessGateService(self.root).evaluate_source(source, purpose="learn")
+                if not access_decision.can_execute:
+                    self._append_step(run_id, "Resolve source and capture", "failed", access_decision.message)
+                    raise RuntimeError(access_decision.message)
+                learner_access_evidence = _learner_access_evidence(source, access_decision)
                 session_state_path = (
-                    resolve_project_path(self.root, session_status.storage_state_path) if session_status else None
+                    resolve_project_path(self.root, access_decision.session_state_path)
+                    if access_decision.session_state_path
+                    else None
                 )
                 self._update_run(
                     run_id,
-                    source_session_used=bool(session_status),
-                    source_session_scope=session_status.session_scope if session_status else "",
+                    source_session_used=bool(access_decision.uses_session),
+                    source_session_scope=access_decision.session_scope if access_decision.uses_session else "",
+                    learner_access_evidence=learner_access_evidence,
                 )
                 session_note = (
-                    f" using a connected source session for {session_status.session_scope or source.name}"
-                    if session_status
+                    f" using a connected source session for {access_decision.session_scope or source.name}"
+                    if access_decision.uses_session
                     else ""
                 )
                 self._append_step(
@@ -190,7 +197,7 @@ class RecipeGenerationRunService:
                     max_candidates=int(run.get("max_candidates") or 30),
                     capture_detail=bool(run.get("capture_detail")),
                     session_state_path=session_state_path,
-                    source_session_scope=session_status.session_scope if session_status else "",
+                    source_session_scope=access_decision.session_scope if access_decision.uses_session else "",
                 )
                 artifact_path = capture.artifact_dir
                 relative_artifact = _display_path(artifact_path, self.root)
@@ -235,12 +242,14 @@ class RecipeGenerationRunService:
                 source_test_insight=source_test_insight,
             )
             observations = _evidence_observations(evidence.prompt_payload)
+            learner_detail_evidence = _learner_detail_evidence(run_id, artifact_path, observations, self.root)
             self._update_run(
                 run_id,
                 evidence_summary=evidence.evidence_summary,
                 referenced_artifact_files=evidence.referenced_artifact_files,
                 warnings=list(evidence.warnings),
                 evidence_observations=observations,
+                learner_detail_evidence=learner_detail_evidence,
             )
             self._append_step(
                 run_id,
@@ -272,7 +281,13 @@ class RecipeGenerationRunService:
                     llm_model=str(run.get("llm_model") or ""),
                 )
                 result = refinement.final_result
-                candidate = RecipeCandidateStore(self.root).save_candidate_from_refinement(refinement)
+                candidate_store = RecipeCandidateStore(self.root)
+                candidate = candidate_store.save_candidate_from_refinement(refinement)
+                candidate = candidate_store.update_candidate_evidence(
+                    candidate.candidate_id,
+                    learner_access_evidence=learner_access_evidence,
+                    learner_detail_evidence=learner_detail_evidence,
+                )
                 self._append_step(
                     run_id,
                     "Generate and refine reading plan",
@@ -297,7 +312,13 @@ class RecipeGenerationRunService:
                     root=self.root,
                     llm_model=str(run.get("llm_model") or ""),
                 )
-                candidate = RecipeCandidateStore(self.root).save_candidate_from_suggestion(result)
+                candidate_store = RecipeCandidateStore(self.root)
+                candidate = candidate_store.save_candidate_from_suggestion(result)
+                candidate = candidate_store.update_candidate_evidence(
+                    candidate.candidate_id,
+                    learner_access_evidence=learner_access_evidence,
+                    learner_detail_evidence=learner_detail_evidence,
+                )
                 self._append_step(
                     run_id,
                     "Generate reading plan",
@@ -404,6 +425,8 @@ class RecipeGenerationRunService:
             "quality_warnings": [],
             "evidence_summary": "",
             "evidence_observations": {},
+            "learner_access_evidence": {},
+            "learner_detail_evidence": {},
             "source_test_insight": {},
             "source_session_used": False,
             "source_session_scope": "",
@@ -557,6 +580,39 @@ def _evidence_observations(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _learner_access_evidence(source, decision) -> dict[str, Any]:
+    return {
+        "source_id": str(getattr(source, "id", "") or ""),
+        "source_name": str(getattr(source, "name", "") or ""),
+        "captured_at": _now(),
+        "status": str(getattr(decision, "status", "") or ""),
+        "message": str(getattr(decision, "message", "") or ""),
+        "can_execute": bool(getattr(decision, "can_execute", False)),
+        "session_required": bool(getattr(decision, "session_required", False)),
+        "session_usable": bool(getattr(decision, "session_usable", False)),
+        "session_verified": bool(getattr(decision, "session_verified", False)),
+        "session_used": bool(getattr(decision, "uses_session", False)),
+        "session_scope": str(getattr(decision, "session_scope", "") or ""),
+        "session_state_path": str(getattr(decision, "session_state_path", "") or ""),
+    }
+
+
+def _learner_detail_evidence(
+    run_id: str,
+    artifact_path: Path,
+    observations: dict[str, Any],
+    root: Path,
+) -> dict[str, Any]:
+    return {
+        "run_id": run_id,
+        "artifact_dir": _display_path(artifact_path, root),
+        "captured_at": _now(),
+        "detail_sample_captured": bool(observations.get("detail_sample_captured")),
+        "source_session_used": bool(observations.get("source_session_used")),
+        "source_session_scope": str(observations.get("source_session_scope") or ""),
+    }
+
+
 def _observation_summary(observations: dict[str, Any]) -> str:
     parts = [
         f"{observations.get('top_candidate_count', 0)} candidate selector region(s)",
@@ -644,18 +700,6 @@ def _source_test_insight_prefers_rendered_capture(insight: dict[str, Any]) -> bo
         or "does not declare browser-click pagination" in haystack
         or "interactive pagination controls were observed" in haystack
     )
-
-
-def _usable_source_session(root: Path, source) -> Any | None:
-    session_scope = ""
-    if getattr(source, "recipe_path", ""):
-        try:
-            recipe = load_project_job_board_recipe(root, source.recipe_path)
-            session_scope = recipe.access.session_scope
-        except (OSError, ValueError):
-            session_scope = ""
-    status = SourceSessionService(root).status_for_source(source.id, session_scope=session_scope)
-    return status if status.usable else None
 
 
 def _positive_int(value: Any, default: int = 0) -> int:

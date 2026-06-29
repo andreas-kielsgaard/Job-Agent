@@ -201,6 +201,12 @@
 
   refreshAutoSetupMonitor();
   startQueuedAutoSetup();
-  window.setInterval(refreshAutoSetupMonitor, 2000);
+  if (window.onAppChangeEvent) {
+    window.onAppChangeEvent((event) => {
+      if (event.kind !== "work_status" || event.scope !== "source_auto_setup") return;
+      if (sourceFilter && event.source_id !== sourceFilter) return;
+      refreshAutoSetupMonitor();
+    });
+  }
 </script>
 {% endblock %}

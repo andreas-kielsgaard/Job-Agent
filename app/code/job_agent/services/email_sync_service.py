@@ -74,7 +74,9 @@ class EmailSyncService:
             if not message.account_id:
                 message.account_id = account_id
         all_messages = self.messages.upsert_many(fetched)
-        updated_threads = self.threads.upsert_from_messages(fetched)
+        fetched_thread_ids = {message.thread_id for message in fetched if message.thread_id}
+        cached_threads = self.threads.upsert_from_messages(all_messages)
+        updated_threads = [thread for thread in cached_threads if thread.thread_id in fetched_thread_ids]
         state = self._updated_state(
             state,
             account_id=account_id,

@@ -13,6 +13,7 @@
   <div class="source-header-actions">
     {% if source.status == "archived" %}<span class="badge low">Archived</span>{% endif %}
     <span class="badge {{ source_run_eligibility.badge_class }}">{{ source_run_eligibility.label }}</span>
+    {% if source_access.show %}<span class="badge {{ source_access.badge_class }}">{{ source_access.label }}</span>{% endif %}
     <a class="button light" href="{{ source_jobs_url }}">View all jobs from this source</a>
     <a class="button light" href="/sources">Back to sources</a>
   </div>
@@ -23,6 +24,52 @@
 {% endif %}
 {% if execution_warning %}
 <div class="panel"><span class="badge low">{{ execution_warning }}</span></div>
+{% endif %}
+
+{% if source_run_field_health.status in ["needs_relearn", "warning"] %}
+<div class="panel source-health-panel">
+  <div class="section-heading-row">
+    <div>
+      <h2>Latest Run Field Health</h2>
+      <p class="muted">{{ source_run_field_health.summary }}</p>
+    </div>
+    <span class="badge {% if source_run_field_health.status == 'needs_relearn' %}low{% else %}medium{% endif %}">
+      {{ source_run_field_health.status|replace("_", " ")|title }}
+    </span>
+  </div>
+  <div class="source-proof-grid">
+    <div>
+      <span>Jobs checked</span>
+      <strong>{{ source_run_field_health.job_count }}</strong>
+      <p>{% if source_run_field_health.run_id %}Run {{ source_run_field_health.run_id }}{% else %}Latest saved packages{% endif %}</p>
+    </div>
+    <div>
+      <span>Descriptions</span>
+      <strong>{{ source_run_field_health.description_strong_count }}/{{ source_run_field_health.job_count }}</strong>
+      <p>{{ source_run_field_health.description_present_count }} meaningful; average {{ source_run_field_health.average_description_length }} chars.</p>
+    </div>
+    {% if source_run_field_health.required_missing_fields %}
+    <div>
+      <span>Required fields</span>
+      <strong>{{ source_run_field_health.required_missing_fields|join(", ") }}</strong>
+      <p>These should be present before this reading plan is trusted.</p>
+    </div>
+    {% endif %}
+  </div>
+  {% if source_run_field_health.warnings %}
+  <ul>
+    {% for warning in source_run_field_health.warnings %}
+    <li>{{ warning }}</li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+  <div class="action-row">
+    <form method="post" action="/sources/{{ source.id }}/learned-state/reset" class="inline-form">
+      <button type="submit" class="button{% if source_run_field_health.status == 'warning' %} light{% endif %}">Reset learned state</button>
+    </form>
+    <span class="muted">This removes the selected reading plan and saved readiness/index evidence, then returns the source to learning.</span>
+  </div>
+</div>
 {% endif %}
 
 {% if source_auto_setup.show %}
@@ -100,9 +147,13 @@
     <h2>Running in daily checks</h2>
     <p class="muted">{{ source_run_eligibility.summary }}</p>
     <div class="action-row">
+      {% if source_access.needs_action and source_access.action %}
+      <a class="button" href="{{ source_access.action.href }}">{{ source_access.action.label }}</a>
+      {% else %}
       <form method="post" action="/sources/{{ source.id }}/run-now" class="inline-form">
         <button type="submit" class="button">Run daily check now</button>
       </form>
+      {% endif %}
       <form method="post" action="/sources/{{ source.id }}/execution/disable" class="inline-form">
         <button type="submit" class="button light">Remove from daily run</button>
       </form>
@@ -146,6 +197,13 @@
       <strong>{{ source_card.detail.reviewed_count }}/{{ source_card.detail.total_count or source_card.index.indexed_count or source_card.detail.reviewed_count }}</strong>
       <p>{{ source_card.detail.summary }}</p>
     </div>
+    {% if source_access.show %}
+    <div>
+      <span>Source access</span>
+      <strong>{{ source_access.title }}</strong>
+      <p>{{ source_access.summary }}</p>
+    </div>
+    {% endif %}
     <div>
       <span>High matches</span>
       <strong>{{ source.stats.strong_matches }}</strong>
@@ -174,11 +232,34 @@
       <strong>{{ source_session.label }}</strong>
       <p>{{ source_session.summary }}</p>
     </div>
+    {% if source_access.show %}
+    <div>
+      <span>Source access</span>
+      <strong>{{ source_access.title }}</strong>
+      <p>{{ source_access.summary }}</p>
+    </div>
+    {% endif %}
     <div>
       <span>Run eligibility</span>
       <strong>{{ source_run_eligibility.title }}</strong>
       <p>{% if source_run_eligibility.blockers %}{{ source_run_eligibility.blockers|join(" ") }}{% else %}{{ source_run_eligibility.summary }}{% endif %}</p>
     </div>
+  </div>
+  {% endif %}
+  {% if source.status != "archived" and source.recipe_path and source_card.index.complete and source_run_eligibility.readiness_ready %}
+  <div class="action-row source-ingestion-actions">
+    {% if source_access.needs_action and source_access.action %}
+    <span class="badge warning">Source access required</span>
+    <span class="muted">{{ source_access.summary }}</span>
+    <a class="button" href="{{ source_access.action.href }}">{{ source_access.action.label }}</a>
+    {% else %}
+    <form method="post" action="/sources/{{ source.id }}/investigate-all" class="inline-form">
+      <button type="submit" class="button light">Full ingestion</button>
+    </form>
+    <form method="post" action="/sources/{{ source.id }}/reingest-all" class="inline-form">
+      <button type="submit" class="button light">Re-ingest details</button>
+    </form>
+    {% endif %}
   </div>
   {% endif %}
   {% if source_status.blockers %}

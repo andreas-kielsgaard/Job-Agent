@@ -10,7 +10,13 @@ from tests.helpers import EURSAP_SOURCE, seed_eursap_source, seed_source_registr
 from job_agent.models import Job
 from job_agent.services.execution_source_service import ExecutionSourceService
 from job_agent.services.source_execution_readiness_service import SourceExecutionReadinessService
+from job_agent.services.source_health_service import SourceHealthService
 from job_agent.services.source_listing_index_store import SourceListingIndexStore
+from job_agent.services.source_run_field_health_service import (
+    SourceRunFieldHealthRecord,
+    SourceRunFieldHealthService,
+)
+from job_agent.services.source_session_service import SourceSessionService
 from job_agent.services.source_test_service import SourceTestResult
 from job_agent.web.workflows import AppWorkflowHandler
 
@@ -114,6 +120,73 @@ def test_source_workflow_overview_uses_current_readiness_for_run_eligibility(pro
     assert card["auto_setup"]["stale_recipe_source_test"] is True
 
 
+def test_source_workflow_overview_blocks_ready_source_when_required_session_is_missing(project_root: Path) -> None:
+    seed_eursap_source(project_root)
+    handler = AppWorkflowHandler(project_root)
+    source = handler.source.require_source("eursap-jobs")
+    recipe_path = project_root / "sources" / "recipes" / "experimental" / "eursap-jobs.yaml"
+    recipe_path.write_text(
+        "source_name: Eursap Jobs\n"
+        "mode: static_html\n"
+        "access:\n"
+        "  requires_session: true\n"
+        "  session_scope: eursap.eu\n"
+        "listing:\n"
+        "  card_selector: article.job-card\n"
+        "  title_selector: a\n"
+        "  link_selector: a\n",
+        encoding="utf-8",
+    )
+    session_state = project_root / "sources" / "sessions" / "eursap-jobs.storage-state.json"
+    session_state.parent.mkdir(parents=True, exist_ok=True)
+    session_state.write_text('{"cookies": [], "origins": []}', encoding="utf-8")
+    session_service = SourceSessionService(project_root)
+    session_service.record_storage_state(
+        source.id,
+        session_scope="eursap.eu",
+        storage_state_path="sources/sessions/eursap-jobs.storage-state.json",
+    )
+    session_service.mark_verified(source.id, session_scope="eursap.eu")
+    ExecutionSourceService(project_root).create_or_update_recipe_source(source, enabled=True)
+    SourceExecutionReadinessService(project_root).save_from_source_test(
+        SourceTestResult(
+            source_id=source.id,
+            source_name=source.name,
+            source_type="recipe_html",
+            source_enabled=True,
+            status="success",
+            job_count=1,
+            source_access_requires_session=True,
+            source_access_session_status="connected",
+        )
+    )
+    SourceListingIndexStore(project_root).record_index(
+        source_id=source.id,
+        source_name=source.name,
+        jobs=[
+            Job(
+                title="SAP Basis Consultant",
+                source=source.name,
+                source_id=source.id,
+                url="https://eursap.eu/jobs/sap-basis",
+            )
+        ],
+    )
+    session_service.clear(source.id)
+
+    overview = handler.source.overview_context()
+
+    card = next(card for card in overview["source_cards"] if card["source"].id == source.id)
+    assert overview["daily_run_eligible_count"] == 0
+    assert overview["daily_run_skipped_count"] == 1
+    assert overview["source_access_attention_count"] == 1
+    assert card["access"]["status"] == "needs_login"
+    assert card["access"]["action"]["href"] == "/sources/eursap-jobs/session"
+    assert card["run_eligibility"]["eligible"] is False
+    assert card["run_eligibility"]["label"] == "Will be skipped"
+    assert "requires a connected session" in " ".join(card["run_eligibility"]["blockers"])
+
+
 def test_source_workflow_excludes_setup_complete_disabled_source_from_prepare_all(project_root: Path) -> None:
     handler = AppWorkflowHandler(project_root)
     seed_eursap_source(project_root)
@@ -151,6 +224,58 @@ def test_source_workflow_excludes_setup_complete_disabled_source_from_prepare_al
     assert card["auto_setup"]["label"] == "Setup complete"
     assert card["auto_setup"]["can_start"] is False
     assert overview["auto_setup_all"]["can_start"] is False
+
+
+def test_source_workflow_reset_learned_state_clears_cross_source_state(project_root: Path) -> None:
+    seed_eursap_source(project_root)
+    handler = AppWorkflowHandler(project_root)
+    source = handler.source.require_source("eursap-jobs")
+    ExecutionSourceService(project_root).create_or_update_recipe_source(source, enabled=True)
+    SourceExecutionReadinessService(project_root).save_from_source_test(
+        SourceTestResult(
+            source_id=source.id,
+            source_name=source.name,
+            source_type="recipe_html",
+            source_enabled=True,
+            status="success",
+            job_count=1,
+        )
+    )
+    SourceHealthService(project_root).save_failure(source.id, "sample.html", "local_fixture_html", "old failure")
+    SourceListingIndexStore(project_root).record_index(
+        source_id=source.id,
+        source_name=source.name,
+        jobs=[
+            Job(
+                title="SAP Basis Consultant",
+                source=source.name,
+                source_id=source.id,
+                url="https://eursap.eu/jobs/sap-basis",
+            )
+        ],
+    )
+    SourceRunFieldHealthService(project_root).save(
+        SourceRunFieldHealthRecord(
+            source_id=source.id,
+            source_name=source.name,
+            status="needs_relearn",
+            summary="Descriptions missing.",
+            job_count=1,
+        )
+    )
+
+    updated = handler.source.reset_learned_state(source.id)
+
+    assert updated.kind == "job_board"
+    assert updated.status == "needs_review"
+    assert updated.recipe_path == ""
+    assert updated.enabled is False
+    assert "recipe" not in updated.tags
+    assert ExecutionSourceService(project_root).find_by_source_id(source.id) is None
+    assert SourceExecutionReadinessService(project_root).load(source.id).readiness_status == "untested"
+    assert SourceHealthService(project_root).get_health(source.id).health_status == "untested"
+    assert SourceListingIndexStore(project_root).summary_for_source(source.id).indexed_count == 0
+    assert SourceRunFieldHealthService(project_root).get(source.id).status == "unknown"
 
 
 def test_source_workflow_overview_avoids_detail_building(monkeypatch, project_root: Path) -> None:

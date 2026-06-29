@@ -49,6 +49,20 @@ class SetupServiceTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 SetupService(root).save_env_settings("bad\nkey", "model", True)
 
+    def test_gmail_oauth_app_credentials_are_saved_to_env(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / ".env").write_text("ANTHROPIC_API_KEY=secret\n", encoding="utf-8")
+
+            SetupService(root).save_gmail_oauth_app_credentials(" gmail-client ", " gmail-secret ")
+
+            env = (root / ".env").read_text(encoding="utf-8")
+            self.assertIn("ANTHROPIC_API_KEY=secret", env)
+            self.assertIn("GMAIL_CLIENT_ID=gmail-client", env)
+            self.assertIn("GMAIL_CLIENT_SECRET=gmail-secret", env)
+            with self.assertRaises(ValueError):
+                SetupService(root).save_gmail_oauth_app_credentials("", "secret")
+
     def test_connector_settings_save_canva_and_draft_only_email(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -154,13 +168,16 @@ class SetupServiceTests(unittest.TestCase):
             class FakeGmailOAuthClient:
                 def __init__(self, config):
                     self.config = config
+                    self.code_verifier = ""
 
                 def authorization_url(self, state):
                     test_case.assertEqual(self.config["scopes"], (GMAIL_READONLY_SCOPE,))
+                    self.code_verifier = "gmail-code-verifier"
                     return f"https://accounts.example/auth?state={state}"
 
-                def complete_oauth(self, code, state):
+                def complete_oauth(self, code, state, *, code_verifier):
                     test_case.assertEqual(code, "returned-code")
+                    test_case.assertEqual(code_verifier, "gmail-code-verifier")
                     return GmailOAuthResult(
                         credentials_json='{"token": "gmail-token"}',
                         account_email="me@example.com",
@@ -171,6 +188,7 @@ class SetupServiceTests(unittest.TestCase):
                 authorization_url = service.gmail_authorization_url()
                 stored = yaml.safe_load((root / "connectors.yaml").read_text(encoding="utf-8"))
                 state = stored["email"]["pending_oauth"]["state"]
+                self.assertEqual(stored["email"]["pending_oauth"]["code_verifier"], "gmail-code-verifier")
                 self.assertIn(f"state={state}", authorization_url)
                 settings = service.complete_gmail_oauth("returned-code", state)
 

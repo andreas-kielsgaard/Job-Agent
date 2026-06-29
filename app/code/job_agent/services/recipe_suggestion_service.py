@@ -20,6 +20,7 @@ from job_agent.services.job_board_recipe_service import (
     quality_from_recipe_result,
 )
 from job_agent.services.recipe_calibration_service import classify_recipe_field_label, label_unsupported_reason
+from job_agent.services.recipes.extraction import has_detail_selectors
 from job_agent.services.recipes.mapping import _selectors, job_board_recipe_from_mapping
 from job_agent.services.recipes.source_test_insight import (
     apply_source_test_insight_to_recipe as _apply_source_test_insight_to_recipe,
@@ -417,15 +418,22 @@ def evaluate_suggestion_against_artifact(result: RecipeSuggestionResult) -> Reci
                 revision_reason = revision_reason or "Recipe omitted detail-page navigation."
         else:
             detail_html = detail_path.read_text(encoding="utf-8", errors="replace")
-            detail_job = extract_job_detail_from_html(detail_html, detail_url, recipe)
-            found_detail_fields = _present_detail_fields(detail_job)
-            if not found_detail_fields:
+            if not has_detail_selectors(recipe):
                 quality_status = "poor"
-                warnings.append("Detail-page sample did not produce reportable fields.")
-                revision_reason = revision_reason or "Recipe detail selectors did not extract useful detail fields."
-            elif len(detail_job.description.strip()) < 120:
-                quality_status = "warning" if quality_status == "good" else quality_status
-                warnings.append("Detail-page sample produced a short description; verify detail selectors.")
+                warnings.append(
+                    "Recipe follows detail pages, but no detail selectors, JSON-LD, or detail patterns are configured."
+                )
+                revision_reason = revision_reason or "Recipe follows details without an extraction plan."
+            else:
+                detail_job = extract_job_detail_from_html(detail_html, detail_url, recipe)
+                found_detail_fields = _present_detail_fields(detail_job)
+                if not found_detail_fields:
+                    quality_status = "poor"
+                    warnings.append("Detail-page sample did not produce reportable fields.")
+                    revision_reason = revision_reason or "Recipe detail selectors did not extract useful detail fields."
+                elif len(detail_job.description.strip()) < 120:
+                    quality_status = "warning" if quality_status == "good" else quality_status
+                    warnings.append("Detail-page sample produced a short description; verify detail selectors.")
 
     return RecipeRefinementAttempt(
         attempt_number=0,

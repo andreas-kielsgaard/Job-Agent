@@ -1,8 +1,14 @@
 from __future__ import annotations
 
+from urllib.parse import urlparse
+
 GENERIC_TITLE_LABELS = {
     "apply",
     "apply now",
+    "all jobs",
+    "browse jobs",
+    "easy apply",
+    "quick apply",
     "apply today",
     "contact us",
     "cookie policy",
@@ -16,6 +22,7 @@ GENERIC_TITLE_LABELS = {
     "reporting violations",
     "read more",
     "see details",
+    "search jobs",
     "services",
     "sitemap",
     "terms of use",
@@ -44,7 +51,11 @@ NOISE_TEXT_TERMS = (
 )
 
 NOISE_LINK_TERMS = (
+    "all jobs",
     "apply now",
+    "browse jobs",
+    "easy apply",
+    "quick apply",
     "#job-application",
     "find your plan",
     "find-your-plan",
@@ -58,8 +69,29 @@ NOISE_LINK_TERMS = (
     "privacy policy",
     "data protection officer",
     "sitemap",
+    "search jobs",
     "view all jobs",
 )
+
+LISTING_PATH_LEAFS = {
+    "all-jobs",
+    "browse",
+    "browse-jobs",
+    "job-search",
+    "jobs",
+    "openings",
+    "search",
+    "vacancies",
+}
+
+LISTING_PATH_PAIRS = {
+    ("careers", "search"),
+    ("job", "search"),
+    ("jobs", "browse"),
+    ("jobs", "search"),
+    ("openings", "search"),
+    ("vacancies", "search"),
+}
 
 NON_JOB_URL_FRAGMENTS = (
     "/-/media/",
@@ -124,7 +156,16 @@ def is_non_job_url(url: str) -> bool:
 
 
 def is_probable_detail_url(url_or_path: str) -> bool:
-    return bool(url_or_path.strip()) and not is_non_job_url(url_or_path)
+    value = url_or_path.strip()
+    if not value or is_non_job_url(value):
+        return False
+    path = _url_path(value).lower()
+    segments = [segment for segment in path.strip("/").split("/") if segment]
+    if not segments:
+        return False
+    if segments[-1] in LISTING_PATH_LEAFS:
+        return False
+    return len(segments) < 2 or (segments[-2], segments[-1]) not in LISTING_PATH_PAIRS
 
 
 def link_text_is_noise(text: str, href: str) -> bool:
@@ -139,3 +180,10 @@ def text_has_noise_term(text: str) -> bool:
 
 def normalize_text(value: str) -> str:
     return " ".join(value.lower().split())
+
+
+def _url_path(value: str) -> str:
+    parsed = urlparse(value)
+    if parsed.scheme or parsed.netloc:
+        return parsed.path
+    return value.split("?", 1)[0].split("#", 1)[0]

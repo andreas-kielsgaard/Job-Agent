@@ -9,8 +9,10 @@ def build_source_run_eligibility(
     readiness,
     *,
     index_status: dict[str, object] | None = None,
+    source_access: dict[str, object] | None = None,
 ) -> dict[str, Any]:
     index_status = index_status or {}
+    source_access = source_access or {}
     source_kind = str(getattr(source, "kind", "") or "")
     source_status = str(getattr(source, "status", "") or "")
     archived = source_status == "archived"
@@ -19,8 +21,9 @@ def build_source_run_eligibility(
     enabled = bool(execution_entry and execution_entry.get("enabled", True))
     readiness_ready = bool(local_or_manual or getattr(readiness, "readiness_status", "") == "ready")
     index_complete = bool(local_or_manual or index_status.get("complete"))
+    access_ready = bool(source_access.get("can_execute", True))
     stale_recipe_source_test = readiness_has_stale_recipe_test(readiness)
-    eligible = bool(enabled and readiness_ready and index_complete and not archived)
+    eligible = bool(enabled and readiness_ready and index_complete and access_ready and not archived)
     blockers: list[str] = []
     if archived:
         blockers.append("Archived sources are skipped.")
@@ -32,6 +35,8 @@ def build_source_run_eligibility(
         blockers.extend(_readiness_blockers(readiness))
     if readiness_ready and not index_complete:
         blockers.append("Listing index is missing or stale.")
+    if not access_ready:
+        blockers.extend(_source_access_blockers(source_access))
     if eligible:
         label = "Will run"
         badge_class = "high"
@@ -58,6 +63,7 @@ def build_source_run_eligibility(
         "enabled": enabled,
         "readiness_ready": readiness_ready,
         "index_complete": index_complete,
+        "access_ready": access_ready,
         "stale_recipe_source_test": stale_recipe_source_test,
         "label": label,
         "badge_class": badge_class,
@@ -83,9 +89,11 @@ def build_source_page_status(
     generation_status=None,
     session_status=None,
     index_status: dict[str, object] | None = None,
+    source_access: dict[str, object] | None = None,
 ) -> dict[str, Any]:
     execution_enabled = bool(execution_entry and execution_entry.get("enabled", True))
     index_status = index_status or {}
+    source_access = source_access or {}
     index_complete = bool(index_status.get("complete"))
     latest_reviewable_candidate_id = (
         getattr(generation_status, "latest_reviewable_candidate_id", "") if generation_status else ""
@@ -235,6 +243,18 @@ def build_source_page_status(
                 "blockers": ["No reading plan is selected."],
             }
         )
+    elif _source_access_blocks_execution(source_access):
+        action = source_access.get("action") if isinstance(source_access.get("action"), dict) else None
+        status.update(
+            {
+                "title": str(source_access.get("title") or "Refresh source access"),
+                "summary": str(source_access.get("summary") or "Refresh source access before this source runs."),
+                "badge": str(source_access.get("label") or "Needs access"),
+                "badge_class": str(source_access.get("badge_class") or "medium"),
+                "primary_action": action,
+                "blockers": _source_access_blockers(source_access),
+            }
+        )
     elif readiness.readiness_status != "ready":
         pagination_issue = _pagination_access_issue(readiness, source=source, session_status=session_status)
         if pagination_issue:
@@ -342,6 +362,7 @@ def build_source_setup_steps(
     index_status: dict[str, object] | None = None,
     detail_status: dict[str, object] | None = None,
     session_status=None,
+    source_access: dict[str, object] | None = None,
 ) -> list[dict[str, object]]:
     if source.kind == "manual":
         return [
@@ -382,6 +403,9 @@ def build_source_setup_steps(
     detail_status = detail_status or {}
     index_complete = bool(index_status.get("complete"))
     detail_complete = bool(detail_status.get("complete"))
+    source_access = source_access or {}
+    access_blocked = _source_access_blocks_execution(source_access)
+    access_action = source_access.get("action") if isinstance(source_access.get("action"), dict) else None
     pagination_issue = _pagination_access_issue(readiness, source=source, session_status=session_status)
     steps = [
         {
@@ -436,7 +460,8 @@ def build_source_setup_steps(
         }
     )
     test_ready = readiness.readiness_status == "ready"
-    test_blocked_by_issue = bool(pagination_issue and not test_ready)
+    source_access_test_issue = access_blocked and not test_ready
+    test_blocked_by_issue = bool((pagination_issue or source_access_test_issue) and not test_ready)
     test_issue_action = pagination_issue.get("action") if pagination_issue else None
     default_test_action = (
         {"type": "link", "label": "Test source", "href": f"/sources/{source.id}/test-run?start=1"}
@@ -444,18 +469,26 @@ def build_source_setup_steps(
         else None
     )
     test_action = (
-        test_issue_action if source.recipe_path and not test_ready and test_blocked_by_issue else default_test_action
+        access_action
+        if source.recipe_path and source_access_test_issue and access_action
+        else test_issue_action
+        if source.recipe_path and not test_ready and test_blocked_by_issue
+        else default_test_action
     )
     steps.append(
         {
             "title": "Test safely",
-            "summary": pagination_issue["step_summary"]
+            "summary": str(source_access.get("summary") or "Refresh source access before running the safe source test.")
+            if source_access_test_issue
+            else pagination_issue["step_summary"]
             if test_blocked_by_issue
             else readiness.readiness_summary
             if source.recipe_path
             else "A source test runs the plan without saving job packages.",
             "badge": "Passed"
             if test_ready
+            else str(source_access.get("label") or "Needs access")
+            if source_access_test_issue
             else str(pagination_issue.get("badge") or "Needs attention")
             if test_blocked_by_issue
             else "Run test"
@@ -470,11 +503,19 @@ def build_source_setup_steps(
             "action": test_action,
         }
     )
-    index_available = bool(source.recipe_path and test_ready and source.status != "archived" and not pagination_issue)
+    index_available = bool(
+        source.recipe_path
+        and test_ready
+        and source.status != "archived"
+        and not pagination_issue
+        and not access_blocked
+    )
     steps.append(
         {
             "title": "Listing index",
-            "summary": str(
+            "summary": str(source_access.get("summary"))
+            if test_ready and access_blocked
+            else str(
                 index_status.get("summary")
                 or "Scan all listing and pagination pages without opening posting details or marking jobs as seen."
             ),
@@ -482,17 +523,27 @@ def build_source_setup_steps(
             "badge_class": "high" if index_complete else "medium",
             "state": "complete" if index_complete else ("active" if index_available else "blocked"),
             "action": (
-                {"type": "post", "label": "Refresh listing index", "action": f"/sources/{source.id}/index-listings"}
+                access_action
+                if test_ready and access_blocked and access_action
+                else {
+                    "type": "post",
+                    "label": "Refresh listing index",
+                    "action": f"/sources/{source.id}/index-listings",
+                }
                 if index_available and not index_complete
                 else None
             ),
         }
     )
-    include_step_verified = bool(execution_enabled and test_ready and not pagination_issue)
+    include_step_verified = bool(execution_enabled and test_ready and not pagination_issue and not access_blocked)
     if include_step_verified:
         include_summary = "This source is included in automatic job checks."
         include_badge = "Included"
         include_state = "complete"
+    elif execution_enabled and access_blocked:
+        include_summary = str(source_access.get("summary") or "Refresh source access before this source runs.")
+        include_badge = str(source_access.get("label") or "Needs access")
+        include_state = "blocked"
     elif execution_enabled:
         include_summary = (
             "This source has a daily-run entry, but it needs a fresh passing source test before it is treated "
@@ -512,13 +563,21 @@ def build_source_setup_steps(
             "badge_class": "high" if include_step_verified or (test_ready and not execution_enabled) else "medium",
             "state": include_state,
             "action": (
-                {"type": "post", "label": "Include in daily run", "action": f"/sources/{source.id}/enable-when-ready"}
+                access_action
+                if test_ready and access_blocked and access_action
+                else {
+                    "type": "post",
+                    "label": "Include in daily run",
+                    "action": f"/sources/{source.id}/enable-when-ready",
+                }
                 if test_ready and index_complete and not execution_enabled
                 else None
             ),
         }
     )
-    detail_available = bool(index_complete and source.status != "archived" and not pagination_issue)
+    detail_available = bool(
+        index_complete and source.status != "archived" and not pagination_issue and not access_blocked
+    )
     steps.append(
         {
             "title": "Initial ingestion",
@@ -533,10 +592,10 @@ def build_source_setup_steps(
             "action": (
                 {
                     "type": "post",
-                    "label": "Ingest all indexed jobs",
+                    "label": "Full ingestion",
                     "action": f"/sources/{source.id}/investigate-all",
                 }
-                if source.recipe_path and detail_available and not detail_complete
+                if source.recipe_path and detail_available
                 else None
             ),
         }
@@ -572,6 +631,22 @@ def _readiness_blockers(readiness) -> list[str]:
     if summary:
         return [summary]
     return ["Safe source test has not passed for the current reading plan."]
+
+
+def _source_access_blocks_execution(source_access: dict[str, object]) -> bool:
+    return bool(source_access.get("show") and not source_access.get("can_execute", True))
+
+
+def _source_access_blockers(source_access: dict[str, object]) -> list[str]:
+    raw = source_access.get("blockers")
+    if isinstance(raw, list):
+        blockers = [str(item).strip() for item in raw if str(item).strip()]
+        if blockers:
+            return blockers
+    summary = str(source_access.get("summary") or source_access.get("message") or "").strip()
+    if summary:
+        return [summary]
+    return ["Refresh source access before this source runs."]
 
 
 def _pagination_access_issue(readiness, *, source=None, session_status=None) -> dict[str, Any] | None:

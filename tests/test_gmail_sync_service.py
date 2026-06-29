@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import tempfile
 from pathlib import Path
 
@@ -7,6 +8,7 @@ from job_agent.email_models import GmailMessageRecord
 from job_agent.email_store import GmailMessageStore, GmailSyncStateStore, GmailThreadStore
 from job_agent.services.email_provider import GmailHistoryStaleError
 from job_agent.services.email_sync_service import EmailSyncService
+from job_agent.services.gmail_email_provider import _record_from_message
 
 
 class FakeGmailProvider:
@@ -113,6 +115,24 @@ def test_gmail_sync_uses_history_after_initial_sync() -> None:
         assert GmailSyncStateStore(root).get().last_history_id == "251"
 
 
+def test_gmail_partial_sync_preserves_existing_thread_message_ids() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        provider = FakeGmailProvider()
+        service = EmailSyncService(root, provider)
+
+        service.sync_recent_candidates(max_messages=10)
+        result = service.sync_recent_candidates(max_messages=10)
+
+        assert result.sync_type == "partial"
+        messages = GmailMessageStore(root).list_all()
+        thread = next(thread for thread in GmailThreadStore(root).list_all() if thread.thread_id == "t1")
+        assert {message.message_id for message in messages} == {"m1", "m2", "m3"}
+        assert thread.message_ids == ["m1", "m3"]
+        assert thread.snippet == "Confirmed."
+        assert thread.last_message_at == "2026-06-17T09:30:00+00:00"
+
+
 def test_gmail_sync_falls_back_to_full_when_history_is_stale() -> None:
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
@@ -128,3 +148,24 @@ def test_gmail_sync_falls_back_to_full_when_history_is_stale() -> None:
         assert result.sync_type == "full"
         assert provider.history_starts == ["old"]
         assert provider.candidate_queries
+
+
+def test_gmail_message_record_preserves_body_lines_for_extraction() -> None:
+    body = "Client: End Client A\nLocation: Copenhagen\nRate: DKK 900/hour"
+    message = {
+        "id": "m1",
+        "threadId": "t1",
+        "historyId": "101",
+        "internalDate": "1781439000000",
+        "labelIds": ["INBOX"],
+        "snippet": "Client role",
+        "payload": {
+            "mimeType": "text/plain",
+            "headers": [{"name": "Subject", "value": "SAP ABAP Consultant"}],
+            "body": {"data": base64.urlsafe_b64encode(body.encode("utf-8")).decode("ascii").rstrip("=")},
+        },
+    }
+
+    record = _record_from_message(message, "me@example.com")
+
+    assert "Client: End Client A\nLocation: Copenhagen\nRate: DKK 900/hour" in record.body_preview

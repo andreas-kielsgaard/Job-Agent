@@ -47,9 +47,21 @@
         <strong>{{ package.application_status | replace("_", " ") }}</strong>
       </div>
       <div class="quick-status-buttons">
-        <button class="light" type="button" data-status-choice="interesting" data-status-label="Interesting">Interesting</button>
-        <button class="light" type="button" data-status-choice="not_interesting" data-status-label="Not interesting">Not interesting</button>
-        <button class="light" type="button" data-status-choice="applied" data-status-label="Applied">Applied</button>
+        {% for option in [
+          {"value": "interesting", "label": "Interesting"},
+          {"value": "not_interesting", "label": "Not interesting"},
+          {"value": "applied", "label": "Applied"}
+        ] %}
+        {% set is_current_status = package.application_status == option.value %}
+        <button
+          class="light {{ 'active' if is_current_status else '' }}"
+          type="button"
+          data-status-choice="{{ option.value }}"
+          data-status-label="{{ option.label }}"
+          aria-pressed="{{ 'true' if is_current_status else 'false' }}"
+          {% if is_current_status %}disabled aria-disabled="true"{% endif %}
+        >{{ option.label }}</button>
+        {% endfor %}
       </div>
     </div>
     {% if application_detail_url %}
@@ -563,7 +575,10 @@
   }
 
   document.querySelectorAll("[data-status-choice]").forEach((button) => {
-    button.addEventListener("click", () => openStatusModal(button.dataset.statusChoice, button.dataset.statusLabel));
+    button.addEventListener("click", () => {
+      if (button.disabled || button.getAttribute("aria-pressed") === "true") return;
+      openStatusModal(button.dataset.statusChoice, button.dataset.statusLabel);
+    });
   });
 
   (() => {
