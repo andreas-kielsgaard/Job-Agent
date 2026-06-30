@@ -6,15 +6,22 @@ Use this file to choose focused verification from the files you touched. Prefer 
 
 | Situation | Command |
 | --- | --- |
-| Fast product suite | `python app/environment/scripts/test_handler.py` |
-| Full local quality gate | `.\app\environment\scripts\check.ps1` |
+| Targeted iteration | `python app/environment/scripts/test_handler.py tests/test_scoring.py` |
+| Profile a target | `python app/environment/scripts/test_handler.py --profile tests/test_scoring.py` |
+| Fast product suite | `python app/environment/scripts/test_handler.py --fast` |
+| Full non-exploratory suite | `python app/environment/scripts/test_handler.py --full` |
+| Normal local quality gate | `.\app\environment\scripts\check.ps1` |
+| Release/audit quality gate | `.\app\environment\scripts\check-release.ps1` |
 | Lint only | `python -m ruff check .` |
 | Format check only | `python -m ruff format --check .` |
 | Coverage report | `python app/environment/scripts/test_handler.py --coverage` |
+| Repo-state mutation audit | `python app/environment/scripts/test_handler.py --repo-state-audit tests/test_web_smoke.py` |
 
-The default pytest options in `pyproject.toml` run `tests/` quietly and exclude `exploratory` tests. Product tests use temp roots and block external network/API calls.
+The default pytest options in `pyproject.toml` run `tests/` quietly and exclude `exploratory` tests. Product tests use temp roots and block external network/API calls through `requests` entry points.
 
-Route broad runs through `python app/environment/scripts/test_handler.py`. Pytest prints `[pytest-progress]` lines as each test file starts and finishes. It also writes `.pytest-progress/latest.txt` and `.pytest-progress/latest.json`; after a timeout, inspect those files to see passed files, failed files, the current file/test, and the remaining files before rerunning work.
+Route broad runs through `python app/environment/scripts/test_handler.py`. The handler enables `[pytest-progress]` lines as each test file starts and finishes. It also writes `.pytest-progress/latest.txt` and `.pytest-progress/latest.json`; after a timeout, inspect those files to see passed files, failed files, the current file/test, and the remaining files before rerunning work. Raw `python -m pytest` avoids that progress-file overhead unless `--job-agent-progress` or `JOB_AGENT_PYTEST_PROGRESS=1` is set.
+
+Repo-state mutation auditing is opt-in through `--repo-state-audit`, `JOB_AGENT_REPO_STATE_AUDIT=1`, or the `mutation_audit` marker. Use it for release/audit checks and for tests that might accidentally touch ignored `user/` or `runtime/` state. Normal product tests should still write through temp project roots.
 
 ## Touched Files To Tests
 
@@ -75,14 +82,14 @@ Route broad runs through `python app/environment/scripts/test_handler.py`. Pytes
 | `app/code/job_agent/web/runtime.py`, background launch/status code | `python -m pytest tests/test_web_runtime.py tests/test_web_smoke.py` |
 | `app/code/job_agent/web/static/app.css`, templates only | `python -m pytest tests/test_web.py tests/test_web_smoke.py` |
 | `app/code/job_agent/cli.py` | Run the service tests for the command plus CLI-covered tests: `python -m pytest tests/test_job_board_recipe_service.py tests/test_source_test_service.py tests/test_recipe_candidate_service.py tests/test_recipe_candidate_approval_service.py tests/test_approved_recipe_adoption_service.py` |
-| `app/environment/scripts/check.ps1`, `pyproject.toml`, dependency files | `python -m pytest` and `python -m ruff check .` |
+| `app/environment/scripts/check.ps1`, `app/environment/scripts/check-release.ps1`, `pyproject.toml`, dependency files | `python app/environment/scripts/test_handler.py --fast` and `python -m ruff check .` |
 | Docs only | No automated tests required unless docs changed commands or schemas. For command docs, run the documented command against fixtures when practical. |
 
 ## Cross-Cutting Escalation
 
-Run `python -m pytest` when a change touches more than one layer, for example service plus route plus template, or source recipe plus execution readiness.
+Run `python app/environment/scripts/test_handler.py --full` when a change touches more than one layer, for example service plus route plus template, or source recipe plus execution readiness.
 
-Run `.\app\environment\scripts\check.ps1` before handing off broad refactors, release-ready changes, or edits that affect formatting/linting rules.
+Run `.\app\environment\scripts\check.ps1` before normal handoff. Run `.\app\environment\scripts\check-release.ps1` before release-ready handoff or when coverage and repo-state mutation protection need to be exercised together.
 
 Run optional Playwright checks only for rendered browser diagnostics:
 

@@ -12,4 +12,4 @@ if (Test-Path $Activate) {
 
 python -m ruff check .
 python -m ruff format --check .
-python app\environment\scripts\test_handler.py --fast
+python app\environment\scripts\test_handler.py --full --coverage --repo-state-audit

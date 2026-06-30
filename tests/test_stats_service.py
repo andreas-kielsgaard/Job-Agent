@@ -24,7 +24,15 @@ def test_dashboard_stats_handles_no_runs(project_root: Path) -> None:
 def test_dashboard_stats_counts_today_active_and_recent_applied(project_root: Path) -> None:
     store = RunStore(project_root)
     active = store.create_run(RunOptions())
-    store.update(active.run_id, status="running", total_loaded=5, new_roles=2, changed_roles=1, source_warnings=1)
+    store.update(
+        active.run_id,
+        started_at=f"{date.today().isoformat()}T00:00:00+00:00",
+        status="running",
+        total_loaded=5,
+        new_roles=2,
+        changed_roles=1,
+        source_warnings=1,
+    )
     old = store.create_run(RunOptions())
     store.update(old.run_id, started_at="2026-01-01T00:00:00+00:00", status="completed", total_loaded=5)
 

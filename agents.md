@@ -14,7 +14,7 @@ Use this file as the fast startup path. Use the companion docs for deeper routin
 2. Skim `README.md` for the current product surface and `docs/how-it-works.md` for the core data flow.
 3. Pick the relevant area in `docs/agent-info-map.md`.
 4. Before editing, search with `rg` and prefer existing service, workflow, and view-model patterns.
-5. After editing, run tests through `python app/environment/scripts/test_handler.py`, passing the targeted test files from `docs/agent-test-map.md`; use `.\app\environment\scripts\check.ps1` for full lint, format, and coverage.
+5. After editing, run tests through `python app/environment/scripts/test_handler.py`, passing the targeted test files from `docs/agent-test-map.md`; use `.\app\environment\scripts\check.ps1` for the normal lint, format, and fast-test gate.
 
 ## Operating Boundaries
 
@@ -59,18 +59,30 @@ python app/environment/scripts/test_handler.py tests/test_scoring.py
 python app/environment/scripts/test_handler.py tests/test_web_smoke.py
 ```
 
-Run the default product suite before finishing broad or cross-layer work:
+Run the fast product suite before a normal handoff:
 
 ```powershell
-python app/environment/scripts/test_handler.py
+python app/environment/scripts/test_handler.py --fast
 ```
 
-The test handler invokes pytest, prints per-file progress, and writes `.pytest-progress/latest.txt` plus `.pytest-progress/latest.json`. If a run times out or an agent resets, run `python app/environment/scripts/test_handler.py --show-progress` or inspect that progress file before rerunning so already-passed files do not need to be repeated.
+Run all non-exploratory tests before finishing broad or cross-layer work:
 
-Run lint, format check, and coverage when the change is ready for full verification:
+```powershell
+python app/environment/scripts/test_handler.py --full
+```
+
+The test handler invokes pytest with progress breadcrumbs enabled, prints per-file progress, and writes `.pytest-progress/latest.txt` plus `.pytest-progress/latest.json`. Raw `python -m pytest` does not write those files unless `--job-agent-progress` or `JOB_AGENT_PYTEST_PROGRESS=1` is set. If a handler run times out or an agent resets, run `python app/environment/scripts/test_handler.py --show-progress` or inspect that progress file before rerunning so already-passed files do not need to be repeated.
+
+Run lint, format check, and fast tests when the change is ready for normal verification:
 
 ```powershell
 .\app\environment\scripts\check.ps1
+```
+
+Run coverage plus repo-state mutation auditing for release/audit verification:
+
+```powershell
+.\app\environment\scripts\check-release.ps1
 ```
 
 Exploratory tests under `tests/exploratory/` are excluded by default and may depend on saved/live source evidence. Run them only when the task explicitly concerns those probes.

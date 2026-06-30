@@ -21,6 +21,13 @@ addopts = "-q -m 'not exploratory'"
 pythonpath = ["app/code"]
 markers = [
   "exploratory: development-only probes for source recipes and feature exploration; excluded from the product verification suite.",
+  "slow: broad or intentionally long-running tests excluded from the fast product suite.",
+  "browser: tests that require real browser behavior.",
+  "integration: tests that exercise multiple app layers or external-style boundaries with fakes.",
+  "web: web route, template, and FastAPI TestClient coverage.",
+  "service: domain service coverage.",
+  "unit: small isolated unit coverage.",
+  "mutation_audit: opt an individual test into repo user/runtime mutation auditing.",
 ]
 
 [tool.coverage.run]

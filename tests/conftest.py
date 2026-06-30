@@ -23,6 +23,12 @@ APP_STATE_PATHS = ("runtime", "user")
 PYTEST_PROGRESS_DIR = REPO_ROOT / ".pytest-progress"
 PYTEST_PROGRESS_JSON = PYTEST_PROGRESS_DIR / "latest.json"
 PYTEST_PROGRESS_TEXT = PYTEST_PROGRESS_DIR / "latest.txt"
+SLOW_TEST_FILES = {
+    "tests/test_job_board_recipe_service.py",
+    "tests/test_run_service.py",
+    "tests/test_web_recipe_generation.py",
+    "tests/test_web_smoke.py",
+}
 
 
 @dataclass
@@ -161,8 +167,36 @@ class _PytestProgressReporter:
             _atomic_write_text(PYTEST_PROGRESS_TEXT, "\n".join(text_lines) + "\n")
 
 
+def pytest_addoption(parser: pytest.Parser) -> None:
+    parser.addoption(
+        "--job-agent-progress",
+        action="store_true",
+        help="Write Job Agent pytest progress breadcrumbs under .pytest-progress/.",
+    )
+    parser.addoption(
+        "--repo-state-audit",
+        action="store_true",
+        help="Audit product tests for accidental mutation of repo user/ and runtime/ state.",
+    )
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+    for item in items:
+        file_path = _display_test_path(item.path)
+        if file_path.startswith("tests/test_web"):
+            item.add_marker(pytest.mark.web)
+        if file_path.endswith("_service.py"):
+            item.add_marker(pytest.mark.service)
+        if file_path in SLOW_TEST_FILES:
+            item.add_marker(pytest.mark.slow)
+
+
 def pytest_collection_finish(session: pytest.Session) -> None:
     global _PYTEST_PROGRESS_REPORTER
+    if not _progress_enabled(session.config):
+        _PYTEST_PROGRESS_REPORTER = None
+        return
     _PYTEST_PROGRESS_REPORTER = _PytestProgressReporter(session.config, session.items)
 
 
@@ -185,6 +219,23 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int | pytest.ExitC
 
 def _get_progress_reporter() -> _PytestProgressReporter | None:
     return _PYTEST_PROGRESS_REPORTER
+
+
+def _progress_enabled(config: pytest.Config) -> bool:
+    return bool(config.getoption("--job-agent-progress") or _truthy_env("JOB_AGENT_PYTEST_PROGRESS"))
+
+
+def _repo_state_audit_enabled(request: pytest.FixtureRequest) -> bool:
+    return bool(
+        request.config.getoption("--repo-state-audit")
+        or request.node.get_closest_marker("mutation_audit")
+        or _truthy_env("JOB_AGENT_REPO_STATE_AUDIT")
+    )
+
+
+def _truthy_env(name: str) -> bool:
+    value = os.environ.get(name, "")
+    return value.lower() in {"1", "true", "yes", "on"}
 
 
 def _display_test_path(path: str | Path) -> str:
@@ -218,6 +269,14 @@ def no_external_network(monkeypatch: pytest.MonkeyPatch) -> None:
         raise AssertionError("External network/API call attempted during test")
 
     monkeypatch.setattr("requests.get", blocked, raising=False)
+    monkeypatch.setattr("requests.post", blocked, raising=False)
+    monkeypatch.setattr("requests.put", blocked, raising=False)
+    monkeypatch.setattr("requests.patch", blocked, raising=False)
+    monkeypatch.setattr("requests.delete", blocked, raising=False)
+    monkeypatch.setattr("requests.head", blocked, raising=False)
+    monkeypatch.setattr("requests.options", blocked, raising=False)
+    monkeypatch.setattr("requests.request", blocked, raising=False)
+    monkeypatch.setattr("requests.sessions.Session.request", blocked, raising=False)
 
 
 @pytest.fixture(autouse=True)
@@ -227,7 +286,7 @@ def no_claude_api(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.fixture(autouse=True)
 def product_tests_do_not_mutate_repo_state(request: pytest.FixtureRequest):
-    if request.node.get_closest_marker("exploratory"):
+    if request.node.get_closest_marker("exploratory") or not _repo_state_audit_enabled(request):
         yield
         return
     before = _snapshot_app_state()
@@ -235,7 +294,7 @@ def product_tests_do_not_mutate_repo_state(request: pytest.FixtureRequest):
     after = _snapshot_app_state()
     changed = _changed_paths(before, after)
     assert not changed, (
-        "Product tests must use project_root/tmp_path and leave repo app state untouched. "
+        "Repo state audit failed. Product tests must use project_root/tmp_path and leave repo app state untouched. "
         f"Mutated paths: {', '.join(changed[:12])}"
     )
 

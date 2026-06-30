@@ -142,10 +142,23 @@ app/environment/.venv/
 
 ## Development
 
-Run tests from the repo root:
+Run targeted tests while iterating:
 
 ```powershell
-python -m pytest
+python app/environment/scripts/test_handler.py tests/test_scoring.py
+python app/environment/scripts/test_handler.py --profile tests/test_scoring.py
+```
+
+Run the fast product suite before a normal handoff:
+
+```powershell
+python app/environment/scripts/test_handler.py --fast
+```
+
+Run all non-exploratory tests for broader changes:
+
+```powershell
+python app/environment/scripts/test_handler.py --full
 ```
 
 Run lint/format checks:
@@ -153,6 +166,18 @@ Run lint/format checks:
 ```powershell
 python -m ruff check .
 python -m ruff format --check .
+```
+
+Run the normal local quality gate:
+
+```powershell
+.\app\environment\scripts\check.ps1
+```
+
+Run the heavier release/audit gate with coverage and repo-state mutation auditing:
+
+```powershell
+.\app\environment\scripts\check-release.ps1
 ```
 
 The default test suite excludes exploratory live-source probes.
