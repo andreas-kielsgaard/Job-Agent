@@ -27,7 +27,37 @@ SLOW_TEST_FILES = {
     "tests/test_job_board_recipe_service.py",
     "tests/test_run_service.py",
     "tests/test_web_recipe_generation.py",
-    "tests/test_web_smoke.py",
+}
+SLOW_TESTS = {
+    "tests/test_web_smoke.py::test_cv_upload_can_auto_configure_selected_profile_sections",
+    "tests/test_web_smoke.py::test_cv_upload_preview_does_not_apply_profile_sections",
+    "tests/test_web_smoke.py::test_cv_profile_draft_apply_clears_unreviewed_state",
+    "tests/test_web_smoke.py::test_persisted_profile_draft_task_survives_work_status_refresh",
+    "tests/test_web_smoke.py::test_batch_generate_route_redirects_with_counts",
+    "tests/test_web_smoke.py::test_manual_posting_route_creates_package_and_redirects",
+    "tests/test_web_smoke.py::test_source_test_route_replaces_configured_recipe_review",
+    "tests/test_web_smoke.py::test_source_detail_shows_latest_source_test_evidence_without_preview_route",
+    "tests/test_web_smoke.py::test_source_session_route_records_storage_state",
+    "tests/test_web_smoke.py::test_source_session_capture_route_starts_guided_browser_capture",
+    "tests/test_web_smoke.py::test_add_source_workflow_creates_review_source",
+    "tests/test_web_smoke.py::test_source_suggestions_copy_paste_flow_renders_save_forms",
+    "tests/test_web_smoke.py::test_source_suggestions_generate_and_external_agent_flows",
+    "tests/test_web_smoke.py::test_source_detail_updates_selected_recipe",
+    "tests/test_web_smoke.py::test_source_detail_updates_registry_fields",
+    "tests/test_web_smoke.py::test_source_archive_hides_source_from_default_overview_and_disables_execution",
+    "tests/test_web_smoke.py::test_source_detail_capture_calibration_action_is_bounded",
+    "tests/test_web_smoke.py::test_source_routes_render_saved_health",
+    "tests/test_web_smoke.py::test_source_detail_safe_test_panel_uses_session_cta_when_access_blocked",
+    "tests/test_web_smoke.py::test_source_routes_render_value_metrics",
+    "tests/test_web_smoke.py::test_viewing_source_pages_does_not_mutate_execution_config",
+    "tests/test_web_smoke.py::test_source_execution_routes_create_guard_enable_and_disable",
+    "tests/test_web_smoke.py::test_source_test_run_view_and_api_save_readiness",
+    "tests/test_web_smoke.py::test_source_test_insight_can_rebuild_reading_plan_with_clues",
+    "tests/test_web_smoke.py::test_source_test_insight_prioritizes_failed_source_access",
+    "tests/test_web_smoke.py::test_rebuild_from_test_redirects_to_retest_when_plan_changed",
+    "tests/test_web_smoke.py::test_source_detail_run_now_redirects_to_run_detail",
+    "tests/test_web_smoke.py::test_source_detail_index_and_investigate_actions_redirect",
+    "tests/test_web_smoke.py::test_source_detail_index_and_investigate_actions_require_ready_source",
 }
 
 
@@ -188,7 +218,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             item.add_marker(pytest.mark.web)
         if file_path.endswith("_service.py"):
             item.add_marker(pytest.mark.service)
-        if file_path in SLOW_TEST_FILES:
+        if file_path in SLOW_TEST_FILES or item.nodeid in SLOW_TESTS:
             item.add_marker(pytest.mark.slow)
 
 

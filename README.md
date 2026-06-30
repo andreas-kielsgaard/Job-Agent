@@ -155,6 +155,8 @@ Run the fast product suite before a normal handoff:
 python app/environment/scripts/test_handler.py --fast
 ```
 
+The fast suite skips slow/browser-marked workflow tests, but still includes core web smoke coverage for app creation, health routes, main local UI route rendering, setup/dashboard/jobs/runs smoke, and static icons.
+
 Run all non-exploratory tests for broader changes:
 
 ```powershell

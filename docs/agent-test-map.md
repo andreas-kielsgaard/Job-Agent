@@ -19,6 +19,8 @@ Use this file to choose focused verification from the files you touched. Prefer 
 
 The default pytest options in `pyproject.toml` run `tests/` quietly and exclude `exploratory` tests. Product tests use temp roots and block external network/API calls through `requests` entry points.
 
+The fast suite is the normal handoff gate. It excludes tests marked `slow` or `browser`, but still includes core web smoke coverage for app creation, health/work-status routes, basic local UI route rendering, static icons, setup/dashboard/jobs/runs route smoke, and cheap guard routes. Broad source workflows, recipe-generation flows, source-test lifecycle checks, CV/LLM-style setup flows, and deeper form-posting scenarios stay in `--full`.
+
 Route broad runs through `python app/environment/scripts/test_handler.py`. The handler enables `[pytest-progress]` lines as each test file starts and finishes. It also writes `.pytest-progress/latest.txt` and `.pytest-progress/latest.json`; after a timeout, inspect those files to see passed files, failed files, the current file/test, and the remaining files before rerunning work. Raw `python -m pytest` avoids that progress-file overhead unless `--job-agent-progress` or `JOB_AGENT_PYTEST_PROGRESS=1` is set.
 
 Repo-state mutation auditing is opt-in through `--repo-state-audit`, `JOB_AGENT_REPO_STATE_AUDIT=1`, or the `mutation_audit` marker. Use it for release/audit checks and for tests that might accidentally touch ignored `user/` or `runtime/` state. Normal product tests should still write through temp project roots.
