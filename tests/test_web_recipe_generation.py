@@ -17,6 +17,7 @@ from job_agent.services.recipe_suggestion_service import (
     RecipeSuggestionResult,
 )
 from job_agent.services.source_registry_service import SourceRegistryService
+from job_agent.services.source_session_service import SourceSessionService
 
 VALID_RECIPE_YAML = """source_name: Eursap Jobs
 start_url: https://eursap.eu/jobs
@@ -311,6 +312,75 @@ def test_generation_service_passes_auto_rendered_mode_to_calibration(
     assert captured["rendered"] is None
 
 
+def test_generation_service_blocks_required_missing_source_session(
+    monkeypatch: pytest.MonkeyPatch, project_root: Path
+) -> None:
+    source = SourceRegistryService(project_root).get_source("eursap-jobs")
+    _write_required_session_recipe(project_root, source.recipe_path)
+    captured = {"called": False}
+
+    def fake_capture(*args, **kwargs):
+        captured["called"] = True
+        raise AssertionError("Missing source session should block before calibration capture")
+
+    monkeypatch.setattr("job_agent.services.recipe_generation_run_service.capture_recipe_calibration", fake_capture)
+
+    run = RecipeGenerationRunService(project_root).start_from_source_capture(
+        source.id,
+        rendered=None,
+        run_async=False,
+    )
+
+    assert run["status"] == "failed"
+    assert "requires a connected session" in run["error"]
+    assert captured["called"] is False
+
+
+def test_generation_service_passes_connected_source_session_to_calibration(
+    monkeypatch: pytest.MonkeyPatch, project_root: Path
+) -> None:
+    source = SourceRegistryService(project_root).get_source("eursap-jobs")
+    _write_required_session_recipe(project_root, source.recipe_path)
+    state_path = project_root / "sources" / "sessions" / "eursap-jobs.storage-state.json"
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state_path.write_text('{"cookies": [], "origins": []}', encoding="utf-8")
+    SourceSessionService(project_root).record_storage_state(
+        source.id,
+        session_scope="eursap.eu",
+        storage_state_path=state_path.relative_to(project_root).as_posix(),
+    )
+    artifact = _write_artifact(project_root)
+    captured: dict[str, object] = {}
+
+    def fake_capture(url, recipe_path, rendered, root, max_candidates, capture_detail, **kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(
+            artifact_dir=artifact,
+            warnings=[],
+            candidate_count=1,
+            recipe_extracted_count=0,
+            detail_sample_url="",
+        )
+
+    monkeypatch.setattr("job_agent.services.recipe_generation_run_service.capture_recipe_calibration", fake_capture)
+    monkeypatch.setattr(
+        "job_agent.services.recipe_generation_run_service.suggest_recipe_with_refinement",
+        lambda artifact_path, **kwargs: _refinement(artifact_path),
+    )
+
+    run = RecipeGenerationRunService(project_root).start_from_source_capture(
+        source.id,
+        rendered=None,
+        run_async=False,
+    )
+
+    assert run["status"] == "completed"
+    assert "eursap-jobs.storage-state.json" in str(captured["session_state_path"])
+    assert captured["source_session_scope"] == "eursap.eu"
+    assert run["source_session_used"] is True
+    assert run["source_session_scope"] == "eursap.eu"
+
+
 def test_generation_service_uses_rendered_capture_for_duplicate_pagination_insight(
     monkeypatch: pytest.MonkeyPatch, project_root: Path
 ) -> None:
@@ -575,6 +645,24 @@ def _write_artifact(project_root: Path) -> Path:
         encoding="utf-8",
     )
     return artifact
+
+
+def _write_required_session_recipe(project_root: Path, recipe_path: str) -> None:
+    path = project_root / recipe_path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "source_name: Eursap Jobs\n"
+        "start_url: https://eursap.eu/jobs\n"
+        "mode: static_html\n"
+        "access:\n"
+        "  requires_session: true\n"
+        "  session_scope: eursap.eu\n"
+        "listing:\n"
+        "  card_selector: article.job-card\n"
+        "  title_selector: a\n"
+        "  link_selector: a\n",
+        encoding="utf-8",
+    )
 
 
 def _wait_for_generation_run(client: TestClient, location: str) -> dict:

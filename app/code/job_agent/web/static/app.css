@@ -42,6 +42,54 @@ a:hover {
   max-width: min(1540px, calc(100vw - 32px));
 }
 
+.app-version-alert {
+  position: fixed;
+  top: 12px;
+  left: 50%;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  width: min(620px, calc(100vw - 28px));
+  padding: 12px 14px;
+  border: 1px solid #f2b56b;
+  border-radius: 8px;
+  background: #fff8ed;
+  color: #3f2c13;
+  box-shadow: 0 16px 40px rgba(15, 23, 42, 0.2);
+  transform: translateX(-50%);
+}
+
+.app-version-alert[hidden] {
+  display: none;
+}
+
+.app-version-alert > div:first-child {
+  display: grid;
+  gap: 2px;
+}
+
+.app-version-alert strong {
+  font-size: 14px;
+}
+
+.app-version-alert span {
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.app-version-alert-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 8px;
+}
+
+.app-version-alert-actions button {
+  min-height: 34px;
+  padding: 7px 10px;
+}
+
 .topbar {
   background: var(--panel);
   border-bottom: 1px solid var(--line);
@@ -258,6 +306,81 @@ a:hover {
 
 .form-actions {
   margin-top: 18px;
+}
+
+.match-settings-block {
+  border-top: 1px solid var(--line);
+  margin-top: 16px;
+  padding-top: 16px;
+}
+
+.match-settings-block:first-child {
+  border-top: 0;
+  margin-top: 0;
+  padding-top: 0;
+}
+
+.condition-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 14px;
+}
+
+.condition-card {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  background: #fbfcfd;
+}
+
+.condition-card h4 {
+  margin: 0 0 10px;
+}
+
+.condition-select {
+  display: grid;
+  grid-template-columns: minmax(80px, 1fr) minmax(150px, 1.4fr);
+  gap: 10px;
+  align-items: center;
+  margin: 8px 0;
+}
+
+.condition-select.lowlight {
+  opacity: 0.55;
+}
+
+.condition-tag-list {
+  display: grid;
+  gap: 8px;
+  margin: 10px 0;
+}
+
+.condition-tag {
+  display: grid;
+  grid-template-columns: minmax(160px, 1fr) repeat(2, minmax(120px, auto)) auto;
+  gap: 8px;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-left-width: 5px;
+  border-radius: 8px;
+  padding: 8px;
+  background: #ffffff;
+}
+
+.condition-tag.preference-required {
+  border-left-color: #075985;
+}
+
+.condition-tag.preference-preferred {
+  border-left-color: #0f766e;
+}
+
+.condition-tag.preference-not_preferred {
+  border-left-color: #b45309;
+}
+
+.condition-tag.preference-excluded {
+  border-left-color: #991b1b;
 }
 
 .action-row {
@@ -1289,6 +1412,10 @@ form.cv-action-card {
   color: var(--muted);
 }
 
+.source-ingestion-actions {
+  grid-column: 1 / -1;
+}
+
 .status-tooltip {
   position: relative;
   width: fit-content;
@@ -1943,6 +2070,13 @@ table {
   font-size: 13px;
 }
 
+.job-triage-actions button:disabled:not(.active),
+.job-row-actions button:disabled:not(.active),
+.quick-status-buttons button:disabled:not(.active) {
+  cursor: not-allowed;
+  opacity: 0.52;
+}
+
 .job-triage-message {
   color: var(--muted);
   font-size: 12px;
@@ -2179,6 +2313,30 @@ tr.selectable-job-row:focus-within .job-status-display {
 .job-row-actions button:hover {
   background: var(--accent-soft);
   color: #115e59;
+}
+
+.job-triage-actions button.active,
+.job-triage-actions button[aria-pressed="true"],
+.job-row-actions button.active,
+.job-row-actions button[aria-pressed="true"],
+.quick-status-buttons button.active,
+.quick-status-buttons button[aria-pressed="true"] {
+  background: #115e59;
+  color: #fff;
+  cursor: default;
+  opacity: 1;
+}
+
+.job-row-actions button.active,
+.job-row-actions button[aria-pressed="true"] {
+  box-shadow: inset 4px 0 0 #2dd4bf;
+}
+
+.quick-status-buttons button.active,
+.quick-status-buttons button[aria-pressed="true"],
+.job-triage-actions button.active,
+.job-triage-actions button[aria-pressed="true"] {
+  box-shadow: 0 0 0 2px rgba(17, 94, 89, 0.18);
 }
 
 .job-detail-preview-row td {
@@ -2619,6 +2777,14 @@ td {
   border-left: 6px solid var(--accent);
 }
 
+.source-card.field-health-needs {
+  border-left: 6px solid var(--bad);
+}
+
+.source-card.field-health-warning {
+  border-left: 6px solid #d97706;
+}
+
 .source-card.archived {
   background: #fafafa;
   opacity: 0.82;
@@ -2662,6 +2828,43 @@ td {
 .source-url {
   display: block;
   overflow-wrap: anywhere;
+}
+
+.source-overview-attention p {
+  margin: 0;
+}
+
+.source-card-health-alert {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 14px;
+  padding: 12px;
+  border: 1px solid #fed7aa;
+  border-radius: 8px;
+  background: #fff7ed;
+  color: #9a3412;
+}
+
+.source-card-health-alert.critical {
+  border-color: #fecaca;
+  background: #fef2f2;
+  color: var(--bad);
+}
+
+.source-card-health-alert div {
+  min-width: 0;
+}
+
+.source-card-health-alert strong,
+.source-card-health-alert span {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.source-card-health-alert > .badge {
+  flex: 0 0 auto;
 }
 
 .source-note {
@@ -4005,6 +4208,17 @@ td {
 }
 
 @media (max-width: 680px) {
+  .app-version-alert {
+    top: 8px;
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .app-version-alert-actions,
+  .app-version-alert-actions button {
+    width: 100%;
+  }
+
   .shell:has(.job-detail-page) {
     max-width: none;
     padding: 14px;
@@ -4384,6 +4598,265 @@ td {
   background: #fff;
 }
 
+.shell:has(.applications-page),
+.shell:has(.application-detail-page) {
+  max-width: min(1380px, calc(100vw - 32px));
+}
+
+.applications-page,
+.application-detail-page {
+  display: grid;
+  gap: 18px;
+}
+
+.application-overview-header {
+  display: grid;
+  gap: 14px;
+  border-left: 6px solid var(--accent);
+}
+
+.application-overview-header h1 {
+  margin: 0;
+}
+
+.application-header-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(240px, 360px);
+  gap: 16px;
+  align-items: center;
+}
+
+.gmail-sync-panel {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  justify-content: flex-end;
+  text-align: right;
+}
+
+.gmail-sync-panel > div {
+  display: grid;
+  gap: 4px;
+}
+
+.application-filter-form {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(150px, 190px) minmax(180px, 220px) auto;
+  gap: 12px;
+  align-items: end;
+}
+
+.application-filter-actions,
+.application-inline-form,
+.application-row-actions,
+.application-outcome-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: end;
+}
+
+.application-table {
+  min-width: min(1180px, 100%);
+}
+
+.application-role-cell {
+  min-width: 210px;
+}
+
+.application-preview-text {
+  max-width: 680px;
+  margin: 0 0 8px;
+  color: #344054;
+}
+
+.application-preview-lines {
+  display: grid;
+  gap: 4px;
+  max-width: 680px;
+}
+
+.application-preview-lines p {
+  margin: 0;
+  color: #475467;
+  font-size: 13px;
+}
+
+.application-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(180px, 260px);
+  gap: 18px;
+  align-items: center;
+  border-left: 6px solid var(--accent);
+}
+
+.application-hero-company {
+  min-width: 0;
+  border: 1px solid #c7d2fe;
+  border-radius: 8px;
+  padding: 12px;
+  background: #f8fafc;
+}
+
+.application-hero-company span,
+.application-hero-company small {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.application-hero-company strong {
+  display: block;
+  color: #1f2937;
+  font-size: 20px;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
+.status-warning-alert {
+  border: 1px solid #fed7aa;
+  border-radius: 8px;
+  padding: 11px 13px;
+  background: #fff7ed;
+  color: #9a3412;
+  font-weight: 800;
+}
+
+.application-tab-shell {
+  display: grid;
+  gap: 14px;
+}
+
+.application-communication-grid,
+.application-overview-grid,
+.application-materials-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+  align-items: start;
+}
+
+.application-pane {
+  min-width: 0;
+  display: grid;
+  gap: 14px;
+}
+
+.application-inline-form {
+  align-items: end;
+}
+
+.application-inline-form > div {
+  min-width: min(220px, 100%);
+  flex: 1 1 220px;
+}
+
+.application-thread-list,
+.application-event-list {
+  display: grid;
+  gap: 12px;
+}
+
+.application-thread-row,
+.application-event-row {
+  display: grid;
+  gap: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  background: #fbfcfd;
+}
+
+.application-thread-row strong,
+.application-event-row strong {
+  overflow-wrap: anywhere;
+}
+
+.application-gmail-message-list {
+  display: grid;
+  gap: 8px;
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+}
+
+.application-gmail-message-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) max-content;
+  gap: 6px 10px;
+  color: #344054;
+  font-size: 13px;
+}
+
+.application-gmail-message-row p {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: #475467;
+}
+
+.application-reject-form,
+.application-reassign-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.application-reject-form input,
+.application-reassign-form select {
+  width: auto;
+  min-width: 160px;
+}
+
+.application-event-form {
+  display: grid;
+  gap: 10px;
+}
+
+.application-event-row {
+  grid-template-columns: minmax(0, 1fr) max-content;
+}
+
+.application-event-row p {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: #344054;
+}
+
+.application-materials-grid {
+  grid-template-columns: 1fr;
+}
+
+.badge.open,
+.badge.linked,
+.badge.outbound {
+  background: #e7f5f2;
+  color: #115e59;
+}
+
+.badge.offered,
+.badge.manual-events,
+.badge.inbound {
+  background: #eef2ff;
+  color: #3730a3;
+}
+
+.badge.rejected,
+.badge.unlinked {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.badge.closed,
+.badge.archived,
+.badge.no-thread-linked,
+.badge.note {
+  background: #f2f4f7;
+  color: #344054;
+}
+
 @media (max-width: 980px) {
   .source-detail-header,
   .section-heading-row,
@@ -4445,5 +4918,17 @@ td {
 
   .recipe-snapshot-frame {
     height: 68vh;
+  }
+
+  .application-filter-form,
+  .application-header-row,
+  .application-hero,
+  .application-communication-grid,
+  .application-overview-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .application-event-row {
+    grid-template-columns: 1fr;
   }
 }

@@ -160,6 +160,39 @@ def test_source_listing_index_does_not_mark_jobs_stale_when_readiness_is_blocked
     assert SourceListingIndexStore(project_root).summary_for_source("detail-source").indexed_count == 0
 
 
+def test_source_listing_index_blocks_required_missing_session_before_fetch(
+    monkeypatch: pytest.MonkeyPatch, project_root: Path
+) -> None:
+    _write_recipe_source(project_root)
+    recipe_path = project_root / "sources" / "recipes" / "detail-source.yaml"
+    recipe_path.write_text(
+        "source_name: Detail Source\n"
+        "mode: static_html\n"
+        "access:\n"
+        "  requires_session: true\n"
+        "  session_scope: example.com\n"
+        "listing:\n"
+        "  card_selector: article.job-card\n"
+        "  title_selector: a.job-link\n"
+        "  link_selector: a.job-link\n",
+        encoding="utf-8",
+    )
+    fetch_calls = []
+
+    def fake_fetch_static(url: str, timeout_seconds: int):
+        fetch_calls.append(url)
+        return _listing_html(), url, []
+
+    monkeypatch.setattr("job_agent.services.job_board_recipe_service._fetch_static_html", fake_fetch_static)
+
+    result = SourceListingIndexService(project_root).index("detail-source")
+
+    assert result.status == "failed"
+    assert "requires a connected session" in result.summary
+    assert fetch_calls == []
+    assert SourceListingIndexStore(project_root).summary_for_source("detail-source").indexed_count == 0
+
+
 def _write_recipe_source(root: Path) -> None:
     recipe_path = root / "sources" / "recipes" / "detail-source.yaml"
     recipe_path.parent.mkdir(parents=True, exist_ok=True)

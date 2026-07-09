@@ -10,11 +10,37 @@
 </div>
 {% endif %}
 
+{% if source_access_attention_count %}
+<div class="panel">
+  <p>
+    <span class="badge warning">{{ source_access_attention_count }} source access check{% if source_access_attention_count != 1 %}s{% endif %}</span>
+    One or more sources need a refreshed login/session check before the executor will run them. You can refresh those sessions while other source work continues.
+  </p>
+</div>
+{% endif %}
+
+{% if field_health_attention_count %}
+<div class="panel source-overview-attention">
+  <p>
+    {% if field_health_needs_relearn_count %}
+    <span class="badge low">{{ field_health_needs_relearn_count }} source{% if field_health_needs_relearn_count != 1 %}s{% endif %} {% if field_health_needs_relearn_count == 1 %}needs{% else %}need{% endif %} relearning</span>
+    {% endif %}
+    {% if field_health_warning_count %}
+    <span class="badge warning">{{ field_health_warning_count }} field warning{% if field_health_warning_count != 1 %}s{% endif %}</span>
+    {% endif %}
+    Latest-run field health found sources whose saved reading plans are not producing the expected posting details.
+  </p>
+</div>
+{% endif %}
+
 <div class="panel">
   <div class="grid">
     <div class="stat"><span>Daily-run configured</span><strong>{{ daily_run_enabled_count }}</strong></div>
     <div class="stat"><span>Will run now</span><strong>{{ daily_run_eligible_count }}</strong></div>
     <div class="stat"><span>Configured but skipped</span><strong>{{ daily_run_skipped_count }}</strong></div>
+    <div class="stat"><span>Needs access</span><strong>{{ source_access_attention_count }}</strong></div>
+    <div class="stat"><span>Needs relearning</span><strong>{{ field_health_needs_relearn_count }}</strong></div>
+    <div class="stat"><span>Field warnings</span><strong>{{ field_health_warning_count }}</strong></div>
     <div class="stat"><span>Stale source tests</span><strong>{{ stale_recipe_source_count }}</strong></div>
     <div class="stat"><span>Saved sources</span><strong>{{ sources|length }}</strong></div>
     <div class="stat"><span>Indexed</span><strong>{{ indexed_source_count }}</strong></div>
@@ -43,7 +69,9 @@
   {% set lifecycle = card.lifecycle %}
   {% set auto_setup = card.auto_setup %}
   {% set run_eligibility = card.run_eligibility %}
-  <article class="source-card {{ lifecycle.state }}{% if source.status == 'archived' %} archived{% endif %}">
+  {% set source_access = card.access %}
+  {% set field_health = card.run_field_health %}
+  <article class="source-card {{ lifecycle.state }}{% if source.status == 'archived' %} archived{% endif %}{% if field_health.status == 'needs_relearn' %} field-health-needs{% elif field_health.status == 'warning' %} field-health-warning{% endif %}">
     <div class="source-card-main">
       <div class="source-title-row">
         <div>
@@ -58,6 +86,14 @@
           {% endif %}
           {% if execution %}
           <span class="badge {% if execution.enabled %}medium{% else %}waiting{% endif %}">daily-run config</span>
+          {% endif %}
+          {% if source_access.show %}
+          <span class="badge {{ source_access.badge_class }}">{{ source_access.label }}</span>
+          {% endif %}
+          {% if field_health.status in ["needs_relearn", "warning"] %}
+          <span class="badge {% if field_health.status == 'needs_relearn' %}low{% else %}warning{% endif %}">
+            {% if field_health.status == 'needs_relearn' %}Needs relearning{% else %}Field warning{% endif %}
+          </span>
           {% endif %}
           <span class="badge {{ run_eligibility.badge_class }}">{{ run_eligibility.label }}</span>
         </div>
@@ -79,6 +115,13 @@
             <strong>{{ detail.reviewed_count }}/{{ detail.total_count or index.indexed_count or detail.reviewed_count }}</strong>
             <span>{{ detail.summary }}</span>
           </div>
+          {% if source_access.show %}
+          <div>
+            <span class="fact-label">Source access</span>
+            <strong>{{ source_access.title }}</strong>
+            <span>{{ source_access.summary }}</span>
+          </div>
+          {% endif %}
           <div>
             <span class="fact-label">High matches</span>
             <strong>{{ source.stats.strong_matches }}</strong>
@@ -112,6 +155,13 @@
             <strong>{{ detail.status_label }}</strong>
             <span>{{ detail.summary }}</span>
           </div>
+          {% if source_access.show %}
+          <div>
+            <span class="fact-label">Source access</span>
+            <strong>{{ source_access.title }}</strong>
+            <span>{{ source_access.summary }}</span>
+          </div>
+          {% endif %}
           <div>
             <span class="fact-label">Reading plan</span>
             <strong>{{ status.preview_label }}</strong>
@@ -124,6 +174,19 @@
           </div>
         </div>
       {% endif %}
+      {% if field_health.status in ["needs_relearn", "warning"] %}
+      <div class="source-card-health-alert {% if field_health.status == 'needs_relearn' %}critical{% else %}warning{% endif %}">
+        <div>
+          <strong>{% if field_health.status == 'needs_relearn' %}Needs relearning{% else %}Latest-run field warning{% endif %}</strong>
+          <span>{{ field_health.summary }}</span>
+        </div>
+        {% if field_health.job_count %}
+        <span class="badge {% if field_health.status == 'needs_relearn' %}low{% else %}warning{% endif %}">
+          Descriptions {{ field_health.description_strong_count }}/{{ field_health.job_count }}
+        </span>
+        {% endif %}
+      </div>
+      {% endif %}
       {% if source.url %}
       <a class="source-url" href="{{ source.url }}" target="_blank" rel="noreferrer">{{ source.url }}</a>
       {% endif %}
@@ -133,6 +196,9 @@
     </div>
     <div class="source-card-actions">
       <a class="button light" href="/sources/{{ source.id }}">Open</a>
+      {% if source_access.needs_action and source_access.action %}
+      <a class="button" href="{{ source_access.action.href }}">{{ source_access.action.label }}</a>
+      {% endif %}
       {% if auto_setup and auto_setup.show %}
       <form method="post" action="{{ auto_setup.action }}" class="inline-form" data-llm-model-picker data-llm-model-title="Choose AI power for automatic setup">
         <button type="submit" class="button" {% if not auto_setup.can_start %}disabled{% endif %}>{{ auto_setup.label }}</button>
@@ -143,6 +209,11 @@
       {% if auto_setup.disabled_reason %}
       <p class="muted source-action-note">{{ auto_setup.disabled_reason }}</p>
       {% endif %}
+      {% endif %}
+      {% if field_health.status in ["needs_relearn", "warning"] %}
+      <form method="post" action="/sources/{{ source.id }}/learned-state/reset" class="inline-form">
+        <button type="submit" class="button{% if field_health.status == 'warning' %} light{% endif %}">Reset learned state</button>
+      </form>
       {% endif %}
       {% if source.status != "archived" and status.primary_action %}
         {% if status.primary_action.type == "post" %}

@@ -1,0 +1,125 @@
+{% extends "base.html" %}
+
+{% block shell_class %}applications-shell{% endblock %}
+
+{% block content %}
+<div class="applications-page">
+  <section class="panel application-overview-header">
+    <div class="application-header-row">
+      <div>
+      <p class="eyebrow">Post-application</p>
+      <h1>Applications</h1>
+      </div>
+      <div class="gmail-sync-panel">
+        <div>
+          <span class="badge {{ 'linked' if gmail.connected else 'missing' }}">{{ "Gmail connected" if gmail.connected else "Gmail not connected" }}</span>
+          {% if gmail.account_email %}<span class="muted">{{ gmail.account_email }}</span>{% endif %}
+          {% if gmail.last_sync_at %}<span class="muted">Last sync {{ gmail.last_sync_at[:16] | replace("T", " ") }}</span>{% endif %}
+        </div>
+        {% if gmail.connected %}
+        <form method="post" action="/api/applications/gmail-sync" class="application-filter-actions">
+          <input type="hidden" name="max_messages" value="100">
+          <button type="submit">Sync Gmail</button>
+        </form>
+        <form method="post" action="/api/applications/gmail-match" class="application-filter-actions">
+          <button class="light" type="submit">Match cached threads</button>
+        </form>
+        {% else %}
+        <a class="button light" href="/connectors">Connect Gmail</a>
+        {% endif %}
+      </div>
+    </div>
+    {% if message %}
+    <div class="status-saved-alert" role="status">{{ message }}</div>
+    {% endif %}
+    {% if warning %}
+    <div class="status-warning-alert" role="status">{{ warning }}</div>
+    {% endif %}
+    <form method="get" class="application-filter-form">
+      <div>
+        <label>Search</label>
+        <input name="q" value="{{ filters.q }}" placeholder="Role, company, source">
+      </div>
+      <div>
+        <label>Outcome</label>
+        <select name="outcome">
+          <option value="">Any</option>
+          {% for outcome in outcome_options %}
+          <option value="{{ outcome }}" {% if filters.outcome == outcome %}selected{% endif %}>{{ outcome | replace("_", " ") | title }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div>
+        <label>Communication</label>
+        <select name="communication">
+          <option value="">Any</option>
+          {% for option in communication_options %}
+          <option value="{{ option }}" {% if filters.communication == option %}selected{% endif %}>{{ option | title }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="application-filter-actions">
+        <button type="submit">Filter</button>
+        <a class="button light" href="/applications">Clear</a>
+      </div>
+    </form>
+    <p class="muted">{{ result_count }} application{% if result_count != 1 %}s{% endif %} shown.</p>
+  </section>
+
+  <section class="panel applications-list-panel">
+    <div class="job-table-shell application-table-shell">
+      <table class="job-table application-table">
+        <thead>
+          <tr>
+            <th>Role</th>
+            <th>Preview</th>
+            <th>Applied</th>
+            <th>Last activity</th>
+            <th>Communication</th>
+            <th>Outcome</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for application in applications %}
+          <tr>
+            <td class="application-role-cell">
+              <a class="job-title-link" href="{{ application.detail_url }}"><strong>{{ application.title }}</strong></a>
+              <br><span class="muted">{{ application.company }}</span>
+              {% if application.recruiter %}<br><span class="muted">{{ application.recruiter }}</span>{% endif %}
+            </td>
+            <td>
+              {% if application.description_preview %}
+              <p class="application-preview-text">{{ application.description_preview }}</p>
+              {% endif %}
+              {% if application.preview_events %}
+              <div class="application-preview-lines">
+                {% for event in application.preview_events %}
+                <p><strong>{{ event.direction_label }}</strong>{% if event.occurred_at %}, {{ event.occurred_at }}{% endif %}: {{ event.summary }}{% if event.source == "gmail" and event.note and event.note != event.summary %}<span class="muted"> - {{ event.note }}</span>{% endif %}</p>
+                {% endfor %}
+              </div>
+              {% else %}
+              <span class="muted">No communication recorded.</span>
+              {% endif %}
+            </td>
+            <td>{{ application.applied_at or "Not listed" }}</td>
+            <td>
+              {{ application.last_activity_at or "None" }}
+              {% if application.last_activity_age %}<br><span class="muted">{{ application.last_activity_age }}</span>{% endif %}
+            </td>
+            <td>
+              <span class="badge {{ application.communication_state | replace(' ', '-') }}">{{ application.communication_state }}</span>
+              {% if application.linked_thread_count %}
+              <br><span class="muted">{{ application.linked_thread_count }} linked thread{% if application.linked_thread_count != 1 %}s{% endif %}</span>
+              {% endif %}
+            </td>
+            <td><span class="badge {{ application.outcome }}">{{ application.outcome }}</span></td>
+          </tr>
+          {% else %}
+          <tr><td colspan="6">No applications match the current filters.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+</div>
+{% endblock %}

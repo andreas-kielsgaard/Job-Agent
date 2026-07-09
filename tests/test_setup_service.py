@@ -7,7 +7,10 @@ from unittest.mock import patch
 
 import yaml
 
+from job_agent.email_models import GMAIL_READONLY_SCOPE
+from job_agent.email_store import GmailCredentialStore, GmailSyncStateStore
 from job_agent.services.connector_settings_service import ConnectorSettingsService
+from job_agent.services.gmail_email_provider import GmailOAuthResult
 from job_agent.services.setup_service import SetupService
 
 
@@ -45,6 +48,20 @@ class SetupServiceTests(unittest.TestCase):
             self.assertIn("CLAUDE_USE_BY_DEFAULT=true", env)
             with self.assertRaises(ValueError):
                 SetupService(root).save_env_settings("bad\nkey", "model", True)
+
+    def test_gmail_oauth_app_credentials_are_saved_to_env(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / ".env").write_text("ANTHROPIC_API_KEY=secret\n", encoding="utf-8")
+
+            SetupService(root).save_gmail_oauth_app_credentials(" gmail-client ", " gmail-secret ")
+
+            env = (root / ".env").read_text(encoding="utf-8")
+            self.assertIn("ANTHROPIC_API_KEY=secret", env)
+            self.assertIn("GMAIL_CLIENT_ID=gmail-client", env)
+            self.assertIn("GMAIL_CLIENT_SECRET=gmail-secret", env)
+            with self.assertRaises(ValueError):
+                SetupService(root).save_gmail_oauth_app_credentials("", "secret")
 
     def test_connector_settings_save_canva_and_draft_only_email(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -137,6 +154,53 @@ class SetupServiceTests(unittest.TestCase):
 
             with self.assertRaises(ValueError):
                 service.complete_canva_oauth("returned-code", "wrong-state")
+
+    def test_gmail_readonly_oauth_flow_stores_token_under_runtime_email(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / ".env").write_text(
+                "GMAIL_CLIENT_ID=gmail-client\nGMAIL_CLIENT_SECRET=gmail-secret\n",
+                encoding="utf-8",
+            )
+            service = ConnectorSettingsService(root)
+            test_case = self
+
+            class FakeGmailOAuthClient:
+                def __init__(self, config):
+                    self.config = config
+                    self.code_verifier = ""
+
+                def authorization_url(self, state):
+                    test_case.assertEqual(self.config["scopes"], (GMAIL_READONLY_SCOPE,))
+                    self.code_verifier = "gmail-code-verifier"
+                    return f"https://accounts.example/auth?state={state}"
+
+                def complete_oauth(self, code, state, *, code_verifier):
+                    test_case.assertEqual(code, "returned-code")
+                    test_case.assertEqual(code_verifier, "gmail-code-verifier")
+                    return GmailOAuthResult(
+                        credentials_json='{"token": "gmail-token"}',
+                        account_email="me@example.com",
+                        history_id="123",
+                    )
+
+            with patch("job_agent.services.connector_settings_service.GmailOAuthClient", FakeGmailOAuthClient):
+                authorization_url = service.gmail_authorization_url()
+                stored = yaml.safe_load((root / "connectors.yaml").read_text(encoding="utf-8"))
+                state = stored["email"]["pending_oauth"]["state"]
+                self.assertEqual(stored["email"]["pending_oauth"]["code_verifier"], "gmail-code-verifier")
+                self.assertIn(f"state={state}", authorization_url)
+                settings = service.complete_gmail_oauth("returned-code", state)
+
+            self.assertEqual(settings["email"]["oauth_status"], "connected")
+            self.assertEqual(settings["email"]["connected_email"], "me@example.com")
+            self.assertFalse(settings["email"]["sending_enabled"])
+            self.assertNotIn("token", settings["email"])
+            self.assertEqual(GmailCredentialStore(root).read_text(), '{"token": "gmail-token"}')
+            self.assertEqual(GmailSyncStateStore(root).get().last_history_id, "123")
+
+            service.disconnect_gmail()
+            self.assertFalse(GmailCredentialStore(root).exists())
 
     def test_saves_contact_and_preferences(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -447,6 +511,72 @@ class SetupServiceTests(unittest.TestCase):
             self.assertEqual(settings["technical_keyword_groups"][0]["mode"], "required")
             self.assertEqual(result["category"], "exploratory")
             self.assertIn("ABAP variants", result["matched_keywords"])
+
+    def test_sandbox_form_scores_unsaved_employment_condition_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            service = SetupService(root)
+            form = FakeForm(
+                {
+                    "keyword_rules_present": "1",
+                    "title": "SAP ABAP Consultant",
+                    "location": "Not listed",
+                    "remote": "Hybrid remote",
+                    "description": "ABAP role.",
+                    "remote_hybrid": "required",
+                    "remote_remote": "excluded",
+                },
+                {
+                    "keyword_rule_label": ["ABAP variants"],
+                    "keyword_rule_terms": ["abap, sap abap"],
+                    "keyword_rule_proficiency": ["100"],
+                    "keyword_rule_mode": ["main"],
+                    "keyword_rule_years": ["6"],
+                },
+            )
+
+            result = service.score_sandbox_form(form)
+            model = service.match_engine_form_model(service.matchmaking_settings_from_form(form))
+
+            self.assertEqual(result["condition_values"]["remote"], "hybrid")
+            self.assertEqual(result["condition_exclusions"], [])
+            self.assertEqual(model["employment_conditions"]["remote"]["hybrid"], "required")
+
+    def test_match_engine_form_migrates_legacy_rows_and_can_save_empty_unified_rules(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            profile = root / "profile"
+            profile.mkdir()
+            (profile / "preferences.yaml").write_text(
+                "match_engine:\n"
+                "  technical_keyword_groups:\n"
+                "    - label: ABAP variants\n"
+                "      terms: [abap, sap abap]\n"
+                "      score: 40\n"
+                "      mode: required\n"
+                "  module_keyword_groups:\n"
+                "    - label: QM\n"
+                "      terms: [qm]\n"
+                "      score: 7\n"
+                "      mode: bonus\n"
+                "employment_conditions:\n"
+                "  remote:\n"
+                "    remote: preferred\n",
+                encoding="utf-8",
+            )
+            service = SetupService(root)
+
+            model = service.match_engine_form_model()
+            self.assertEqual([row["label"] for row in model["keyword_rows"]], ["ABAP variants", "QM"])
+            self.assertEqual(model["keyword_rows"][0]["mode"], "main")
+
+            settings = service.save_match_engine_settings_from_form(FakeForm({"keyword_rules_present": "1"}))
+
+            self.assertEqual(settings["keyword_groups"], [])
+            preferences = yaml.safe_load((profile / "preferences.yaml").read_text(encoding="utf-8"))
+            self.assertEqual(preferences["match_engine"]["keyword_groups"], [])
+            self.assertEqual(preferences["match_engine"]["technical_keyword_groups"], [])
+            self.assertEqual(preferences["employment_conditions"]["remote"]["remote"], "preferred")
 
     def test_auto_configure_profile_from_cv_applies_selected_ai_sections(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

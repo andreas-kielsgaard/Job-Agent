@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -17,6 +18,9 @@ from job_agent.run_service import run_daily_agent
 from job_agent.run_store import RunOptions, RunRecord, RunStore
 from job_agent.services.source_listing_index_service import SourceListingIndexService
 from job_agent.web.work_widgets import WorkStatusWidgetHandler
+
+SOURCE_ACCESS_WAIT_TIMEOUT_SECONDS = 300.0
+SOURCE_ACCESS_WAIT_POLL_SECONDS = 2.0
 
 
 @dataclass
@@ -107,6 +111,10 @@ class WebRuntime:
         self.last_request_at = time.time()
         self.idle_monitor_started = False
         self.app_version = ""
+        self.restart_requested_at = ""
+        self._change_revision = 0
+        self._change_events: list[dict[str, Any]] = []
+        self._change_condition = threading.Condition()
 
     def mark_activity(self) -> None:
         self.last_request_at = time.time()
@@ -138,10 +146,101 @@ class WebRuntime:
             "active_run_status": active_run.status if active_run else "",
         }
 
+    def app_version_payload(self) -> dict[str, Any]:
+        disk_version = compute_app_version(self.root)
+        running_version = self.app_version or disk_version
+        active_run = self.active_run()
+        restart_blocker = (
+            f"Run {active_run.run_id} is still {active_run.status}; finish it before restarting." if active_run else ""
+        )
+        return {
+            "status": "ok",
+            "running_version": running_version,
+            "disk_version": disk_version,
+            "outdated": bool(running_version and disk_version and running_version != disk_version),
+            "restart_supported": _app_restart_supported() and active_run is None,
+            "restart_blocker": restart_blocker,
+            "restart_requested_at": self.restart_requested_at,
+            "check_interval_seconds": 60,
+        }
+
+    def request_restart(self) -> dict[str, Any]:
+        active_run = self.active_run()
+        if active_run is not None:
+            return {
+                "ok": False,
+                "message": f"Run {active_run.run_id} is still {active_run.status}; finish it before restarting.",
+                "restart_requested_at": self.restart_requested_at,
+            }
+        if not _app_restart_supported():
+            return {
+                "ok": False,
+                "message": "Restart is disabled for this app process.",
+                "restart_requested_at": self.restart_requested_at,
+            }
+        if not self.restart_requested_at:
+            self.restart_requested_at = utc_now()
+            _schedule_restart(_restart_delay_seconds())
+        return {
+            "ok": True,
+            "message": "Restarting the local server.",
+            "restart_requested_at": self.restart_requested_at,
+        }
+
+    def notify_change(
+        self,
+        kind: str,
+        *,
+        scope: str = "",
+        source_id: str = "",
+        task_id: str = "",
+        message: str = "",
+    ) -> dict[str, Any]:
+        with self._change_condition:
+            self._change_revision += 1
+            event = {
+                "revision": self._change_revision,
+                "kind": kind,
+                "scope": scope,
+                "source_id": source_id,
+                "task_id": task_id,
+                "message": message,
+                "timestamp": utc_now(),
+            }
+            self._change_events.append(event)
+            self._change_events = self._change_events[-200:]
+            self._change_condition.notify_all()
+            return dict(event)
+
+    def change_revision(self) -> int:
+        with self._change_condition:
+            return self._change_revision
+
+    def wait_for_changes(self, after_revision: int, *, timeout_seconds: float = 20.0) -> list[dict[str, Any]]:
+        with self._change_condition:
+            if self._change_revision <= after_revision:
+                self._change_condition.wait(timeout=max(0.1, timeout_seconds))
+            events = [event for event in self._change_events if int(event.get("revision") or 0) > after_revision]
+            if events:
+                return [dict(event) for event in events]
+            return [
+                {
+                    "revision": self._change_revision,
+                    "kind": "heartbeat",
+                    "scope": "",
+                    "source_id": "",
+                    "task_id": "",
+                    "message": "",
+                    "timestamp": utc_now(),
+                }
+            ]
+
     def launch_daily_run(self, options: RunOptions) -> RunRecord:
+        options = _with_source_access_wait(options)
         store = RunStore(self.root)
         record = store.create_run(options)
-        self.executor.submit(run_daily_agent, options, None, self.root, record.run_id)
+        self.notify_change("work_status", scope="run", task_id=f"run-{record.run_id}", message="Daily run queued.")
+        self.executor.submit(run_daily_agent, options, self._run_progress_callback, self.root, record.run_id)
         return record
 
     def launch_full_source_ingestion(self) -> RunRecord:
@@ -166,11 +265,12 @@ class WebRuntime:
         *,
         include_disabled_source: bool = False,
         append_to_today: bool = True,
+        include_seen: bool = False,
     ) -> RunRecord:
         store = RunStore(self.root)
         record = self._latest_daily_run_today(store) if append_to_today else None
         options = RunOptions(
-            include_seen=False,
+            include_seen=include_seen,
             include_weak=False,
             mark_seen=True,
             generate_materials=False,
@@ -179,13 +279,21 @@ class WebRuntime:
             detail_extraction_limit=None,
             append_to_daily_run=bool(record),
         )
+        options = _with_source_access_wait(options)
         append_to_existing = record is not None
         if record is None:
             record = store.create_run(options)
+            self.notify_change(
+                "work_status",
+                scope="run",
+                source_id=source_id,
+                task_id=f"run-{record.run_id}",
+                message="Source detail run queued.",
+            )
         self.executor.submit(
             run_daily_agent,
             options,
-            None,
+            self._run_progress_callback,
             self.root,
             record.run_id,
             source_id,
@@ -205,6 +313,13 @@ class WebRuntime:
         )
         with self._index_lock:
             self._index_tasks[task.task_id] = task
+        self.notify_change(
+            "work_status",
+            scope="source_index",
+            source_id=source_id,
+            task_id=task.task_id,
+            message=task.message,
+        )
         self.index_executor.submit(self._run_source_listing_index, task.task_id)
         return task
 
@@ -263,6 +378,13 @@ class WebRuntime:
                     existing.error_message = "Superseded by a newer session capture."
                     existing.finished_at = superseded_at
             self._session_tasks[task.task_id] = task
+        self.notify_change(
+            "work_status",
+            scope="source_session",
+            source_id=source_id,
+            task_id=task.task_id,
+            message=task.message,
+        )
         self.session_executor.submit(self._run_source_session_capture, task.task_id)
         return task
 
@@ -299,6 +421,13 @@ class WebRuntime:
                 href=f"/sources/auto-setup?source_id={source_id}",
             )
             self._auto_setup_tasks[task.task_id] = task
+            self.notify_change(
+                "work_status",
+                scope="source_auto_setup",
+                source_id=source_id,
+                task_id=task.task_id,
+                message=task.message,
+            )
         if str(run.get("status") or "") != "completed":
             self.auto_setup_executor.submit(self._run_source_auto_setup, task.task_id)
         return task
@@ -341,6 +470,7 @@ class WebRuntime:
         with self._profile_lock:
             self._profile_tasks[task.task_id] = task
         self._persist_profile_task(task)
+        self.notify_change("work_status", scope="profile", task_id=task.task_id, message=task.message)
         return task
 
     def update_profile_draft_task(self, task_id: str, **updates: Any) -> None:
@@ -351,6 +481,7 @@ class WebRuntime:
             for key, value in updates.items():
                 setattr(task, key, value)
             self._persist_profile_task(task)
+            self.notify_change("work_status", scope="profile", task_id=task.task_id, message=task.message)
 
     def finish_profile_draft_task(
         self,
@@ -382,6 +513,30 @@ class WebRuntime:
             store.recover_corrupt_registry()
             runs = []
         return next((run for run in runs if run.status in {"pending", "running"}), None)
+
+    def _run_progress_callback(self, event) -> None:
+        source_id = ""
+        counts = getattr(event, "counts", {}) or {}
+        if isinstance(counts, dict):
+            source_id = str(counts.get("source_id") or "")
+        self.notify_change(
+            "work_status",
+            scope="run",
+            source_id=source_id,
+            task_id=f"run-{getattr(event, 'run_id', '')}",
+            message=str(getattr(event, "message", "") or ""),
+        )
+        event_type = str(getattr(event, "event_type", "") or "")
+        if event_type in {
+            "source_completed",
+            "source_failed",
+            "source_skipped",
+            "source_setup_skipped",
+            "source_field_health_checked",
+            "run_completed",
+            "run_failed",
+        }:
+            self.notify_change("source_overview", scope="run", source_id=source_id, message=str(event.message or ""))
 
     def _run_source_listing_index(self, task_id: str) -> None:
         self._update_index_task(task_id, status="running", message="Starting listing index.")
@@ -431,12 +586,32 @@ class WebRuntime:
             )
 
     def _update_index_task(self, task_id: str, **updates: Any) -> None:
+        notify_source_id = ""
+        notify_message = ""
+        notify_overview = "finished_at" in updates
         with self._index_lock:
             task = self._index_tasks.get(task_id)
             if not task:
                 return
             for key, value in updates.items():
                 setattr(task, key, value)
+            notify_source_id = task.source_id
+            notify_message = task.message
+        self.notify_change(
+            "work_status",
+            scope="source_index",
+            source_id=notify_source_id,
+            task_id=task_id,
+            message=notify_message,
+        )
+        if notify_overview:
+            self.notify_change(
+                "source_overview",
+                scope="source_index",
+                source_id=notify_source_id,
+                task_id=task_id,
+                message=notify_message,
+            )
 
     def _active_index_sources(self) -> list[dict[str, Any]]:
         now = time.time()
@@ -623,12 +798,32 @@ class WebRuntime:
             return task.status in {"pending", "running"}
 
     def _update_session_task(self, task_id: str, **updates: Any) -> None:
+        notify_source_id = ""
+        notify_message = ""
+        notify_overview = "finished_at" in updates
         with self._session_lock:
             task = self._session_tasks.get(task_id)
             if not task:
                 return
             for key, value in updates.items():
                 setattr(task, key, value)
+            notify_source_id = task.source_id
+            notify_message = task.message
+        self.notify_change(
+            "work_status",
+            scope="source_session",
+            source_id=notify_source_id,
+            task_id=task_id,
+            message=notify_message,
+        )
+        if notify_overview:
+            self.notify_change(
+                "source_overview",
+                scope="source_session",
+                source_id=notify_source_id,
+                task_id=task_id,
+                message=notify_message,
+            )
 
     def _active_session_sources(self) -> list[dict[str, Any]]:
         now = time.time()
@@ -700,12 +895,32 @@ class WebRuntime:
             )
 
     def _update_auto_setup_task(self, task_id: str, **updates: Any) -> None:
+        notify_source_id = ""
+        notify_message = ""
+        notify_overview = "finished_at" in updates
         with self._auto_setup_lock:
             task = self._auto_setup_tasks.get(task_id)
             if not task:
                 return
             for key, value in updates.items():
                 setattr(task, key, value)
+            notify_source_id = task.source_id
+            notify_message = task.message
+        self.notify_change(
+            "work_status",
+            scope="source_auto_setup",
+            source_id=notify_source_id,
+            task_id=task_id,
+            message=notify_message,
+        )
+        if notify_overview:
+            self.notify_change(
+                "source_overview",
+                scope="source_auto_setup",
+                source_id=notify_source_id,
+                task_id=task_id,
+                message=notify_message,
+            )
 
     def _active_auto_setup_tasks(self) -> list[dict[str, Any]]:
         now = time.time()
@@ -871,6 +1086,36 @@ def _auto_setup_worker_limit(root: Path) -> int:
     except (TypeError, ValueError):
         configured = 10
     return max(1, min(50, configured))
+
+
+def _app_restart_supported() -> bool:
+    return os.getenv("JOB_AGENT_DISABLE_APP_RESTART", "").strip().lower() not in {"1", "true", "yes"}
+
+
+def _restart_delay_seconds() -> float:
+    try:
+        return max(0.0, float(os.getenv("JOB_AGENT_APP_RESTART_DELAY_SECONDS", "0.5") or "0.5"))
+    except ValueError:
+        return 0.5
+
+
+def _schedule_restart(delay_seconds: float) -> None:
+    timer = threading.Timer(delay_seconds, _restart_process)
+    timer.daemon = True
+    timer.start()
+
+
+def _restart_process() -> None:
+    os.execv(sys.executable, [sys.executable, *sys.argv])
+
+
+def _with_source_access_wait(options: RunOptions) -> RunOptions:
+    options.wait_for_source_access = True
+    if options.source_access_wait_timeout_seconds <= 0:
+        options.source_access_wait_timeout_seconds = SOURCE_ACCESS_WAIT_TIMEOUT_SECONDS
+    if options.source_access_wait_poll_seconds <= 0:
+        options.source_access_wait_poll_seconds = SOURCE_ACCESS_WAIT_POLL_SECONDS
+    return options
 
 
 def _int(value) -> int:

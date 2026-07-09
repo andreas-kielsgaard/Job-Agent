@@ -19,6 +19,7 @@ from job_agent.services.recipes.models import (
     SelectorValue,
 )
 from job_agent.services.recipes.soup import parse_markup, selector_mentions_unstable_css_class
+from job_agent.services.source_quality_rules import link_text_is_noise
 
 
 def extract_jobs_with_recipe_with_stats(
@@ -36,7 +37,7 @@ def extract_jobs_with_recipe_with_stats(
     stats = ListingExtractionStats(page_url=base_url, observed_cards=len(cards), limit=card_limit)
 
     for index, card in enumerate(cards):
-        title = select_text(card, recipe.listing.title_selector)
+        title = select_title_text(card, recipe.listing.title_selector)
         link = select_href(card, recipe.listing.link_selector)
         fallback_link = first_accepted_job_link(card, base_url, recipe)
         if not link and fallback_link:
@@ -533,7 +534,27 @@ def first_accepted_job_link(root: Tag, base_url: str, recipe: JobBoardRecipe) ->
     if root.name == "a" and root.get("href") and _accepted_job_url(urljoin(base_url, str(root.get("href"))), recipe):
         return root
     links = fallback_job_links(root, base_url, recipe)
-    return links[0] if links else None
+    return best_title_link(links) or (links[0] if links else None)
+
+
+def best_title_link(links: list[Tag]) -> Tag | None:
+    useful_link = next((link for link in links if link_title_quality(link) == "useful"), None)
+    if useful_link:
+        return useful_link
+    non_noise_link = next((link for link in links if link_text(link) and link_title_quality(link) != "generic"), None)
+    return non_noise_link
+
+
+def link_title_quality(link: Tag) -> str:
+    text = link_text(link)
+    href = str(link.get("href") or "")
+    if not text or link_text_is_noise(text, href):
+        return "generic"
+    return title_quality(text)
+
+
+def link_text(link: Tag) -> str:
+    return re.sub(r"\s+", " ", link.get_text(" ", strip=True)).strip()
 
 
 def compact_title(title: str, source: Tag | None) -> str:
@@ -591,30 +612,56 @@ def select_detail_text(detail_root: Tag, soup: BeautifulSoup, selector: Selector
     return select_text(detail_root, selector) or select_text(soup, selector)
 
 
+def select_title_text(root: Tag, selector: SelectorValue) -> str:
+    fallback = ""
+    for css_selector in _selectors(selector):
+        for match in selected_elements(root, css_selector):
+            text = re.sub(r"\s+", " ", match.get_text(" ", strip=True)).strip()
+            if not text:
+                continue
+            if not fallback:
+                fallback = text
+            href = str(match.get("href") or "")
+            if title_quality(text) == "useful" and not link_text_is_noise(text, href):
+                return text
+            if title_quality(fallback) == "generic" and title_quality(text) != "generic":
+                fallback = text
+    return fallback
+
+
 def select_text(root: Tag, selector: SelectorValue) -> str:
     for css_selector in _selectors(selector):
-        match = root if matches_selector(root, css_selector) else root.select_one(css_selector)
-        text = match.get_text(" ", strip=True) if match else ""
-        if text:
-            return text
+        for match in selected_elements(root, css_selector):
+            text = match.get_text(" ", strip=True) if match else ""
+            if text:
+                return text
     return ""
 
 
 def select_href(root: Tag, selector: SelectorValue) -> str:
     for css_selector in _selectors(selector):
-        match = root if matches_selector(root, css_selector) else root.select_one(css_selector)
-        if not match:
-            continue
-        href = match.get("href")
-        if href:
-            return str(href).strip()
-        nested = match.select_one("[href]")
-        if nested and nested.get("href"):
-            return str(nested.get("href", "")).strip()
-        text = match.get_text(" ", strip=True)
-        if _looks_like_url_text(text):
-            return text
+        for match in selected_elements(root, css_selector):
+            href = match.get("href")
+            if href:
+                return str(href).strip()
+            nested = match.select_one("[href]")
+            if nested and nested.get("href"):
+                return str(nested.get("href", "")).strip()
+            text = match.get_text(" ", strip=True)
+            if _looks_like_url_text(text):
+                return text
     return ""
+
+
+def selected_elements(root: Tag, css_selector: str) -> list[Tag]:
+    elements: list[Tag] = []
+    if matches_selector(root, css_selector):
+        elements.append(root)
+    try:
+        elements.extend(match for match in root.select(css_selector) if isinstance(match, Tag) and match is not root)
+    except Exception:
+        return elements
+    return elements
 
 
 def _looks_like_url_text(value: str) -> bool:

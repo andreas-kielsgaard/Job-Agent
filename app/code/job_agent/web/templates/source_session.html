@@ -26,6 +26,9 @@
     <div class="stat"><span>Expires</span><strong>{{ source_session.expires_at or "Not set" }}</strong></div>
   </div>
   <p class="muted">{{ source_session.summary }}</p>
+  {% if source_access.show %}
+  <p><span class="badge {{ source_access.badge_class }}">{{ source_access.label }}</span> {{ source_access.summary }}</p>
+  {% endif %}
   {% if source_session.usable %}
   <form method="post" action="/sources/{{ source.id }}/session/verify" class="inline-form">
     <button type="submit">Verify session</button>

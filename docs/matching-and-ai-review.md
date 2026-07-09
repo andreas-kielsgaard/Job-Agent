@@ -1,18 +1,20 @@
 # Matching and AI review notes
 
-Deterministic scoring is the source of truth. AI review can summarize, flag risks, and suggest prioritization, but it does not silently replace the score.
+Deterministic scoring remains stored separately. When LLM-enhanced matching is enabled, the AI match score is also stored separately and job views sort/display the average of deterministic and AI scores.
 
 ## Deterministic matching
 
-- Technical keyword groups add points or exclude postings when marked required.
-- Module keyword groups work the same way, but are kept separate because some profiles use domain or platform modules heavily.
-- Contract and location policies handle remote preference, permanent-role handling, and visible contract terms.
-- Target roles, role aliases, and role interests add a smaller role-interest signal.
+- Keyword groups are unified. A row has alternatives, a mode, a proficiency value, and optional years of evidence.
+- `main` rows represent proficiency. If several main rows match, their proficiency values are averaged.
+- `bonus` rows boost the proficiency score. If several bonus rows match, only the highest boost is used. The resulting score can exceed 100.
+- `detractor` rows reduce the proficiency score. If several detractors match, only the largest detractor is used.
+- Employment type, remote setup, location, contract length, compensation, and language requirements are employment conditions. They filter or flag jobs but do not change the deterministic match score.
+- Target roles, role aliases, and role interests remain profile context and can feed highlights or AI review.
 - Caveat review triggers add concerns and optional AI review triggers without directly reducing score.
 
 ## AI relevance review
 
-AI review can run when configured categories, score thresholds, highlights, caveat triggers, or low source confidence indicate that a posting needs interpretation. Excluded jobs stay skipped unless the profile explicitly allows excluded postings with review triggers.
+LLM-enhanced matching runs after deterministic scoring for promising postings that have description text. It asks for an advisory match score, employment-condition values, summary, risks, and profile evidence. Excluded jobs stay skipped unless the profile explicitly allows excluded postings with review triggers.
 
 ## Language policy
 

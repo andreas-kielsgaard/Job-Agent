@@ -289,6 +289,38 @@ def test_enabled_source_with_current_readiness_and_index_is_eligible() -> None:
     assert eligibility["title"] == "Eligible now"
 
 
+def test_enabled_source_with_current_readiness_index_and_blocked_access_is_not_eligible() -> None:
+    source = SimpleNamespace(
+        id="sample-source",
+        kind="job_board",
+        status="active",
+        url="https://example.com/jobs",
+        recipe_path="sources/recipes/experimental/sample.yaml",
+    )
+    readiness = SimpleNamespace(
+        readiness_status="ready",
+        readiness_summary="Ready.",
+        blockers=[],
+    )
+
+    eligibility = build_source_run_eligibility(
+        source,
+        {"enabled": True},
+        readiness,
+        index_status={"complete": True},
+        source_access={
+            "show": True,
+            "can_execute": False,
+            "blockers": ["example.com requires a connected session."],
+        },
+    )
+
+    assert eligibility["eligible"] is False
+    assert eligibility["access_ready"] is False
+    assert eligibility["label"] == "Will be skipped"
+    assert "requires a connected session" in eligibility["blockers"][0]
+
+
 def test_stale_pagination_failure_prompts_retest_not_regeneration() -> None:
     source = SimpleNamespace(
         id="sample-source",

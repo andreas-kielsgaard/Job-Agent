@@ -17,10 +17,10 @@ def build_match_sandbox_view(
 ) -> dict[str, Any]:
     service = SetupService(root)
     if form is not None:
-        settings = service.match_engine_settings_from_form(form)
+        settings = service.matchmaking_settings_from_form(form)
         sandbox_input = service.sandbox_input_from_form(form)
     else:
-        settings = service.load_match_engine_settings()
+        settings = service.load_matchmaking_settings()
         sandbox_input = service.sandbox_input_from_package(job_id, run_id) if job_id else None
         sandbox_input = sandbox_input or service.default_sandbox_input()
     return {

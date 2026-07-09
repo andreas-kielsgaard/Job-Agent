@@ -22,6 +22,9 @@
     <div class="job-hero-score">
       <span>Match</span>
       <strong>{{ package.match_score }}%</strong>
+      {% if match_summary.ai_score is not none and match_summary.ai_score != "" %}
+      <small>det {{ match_summary.deterministic_score }} / AI {{ match_summary.ai_score }}</small>
+      {% endif %}
       {% if match_summary.confidence %}<small>{{ match_summary.confidence }} confidence</small>{% endif %}
     </div>
   </section>
@@ -47,11 +50,29 @@
         <strong>{{ package.application_status | replace("_", " ") }}</strong>
       </div>
       <div class="quick-status-buttons">
-        <button class="light" type="button" data-status-choice="interesting" data-status-label="Interesting">Interesting</button>
-        <button class="light" type="button" data-status-choice="not_interesting" data-status-label="Not interesting">Not interesting</button>
-        <button class="light" type="button" data-status-choice="applied" data-status-label="Applied">Applied</button>
+        {% for option in [
+          {"value": "interesting", "label": "Interesting"},
+          {"value": "not_interesting", "label": "Not interesting"},
+          {"value": "applied", "label": "Applied"}
+        ] %}
+        {% set is_current_status = package.application_status == option.value %}
+        <button
+          class="light {{ 'active' if is_current_status else '' }}"
+          type="button"
+          data-status-choice="{{ option.value }}"
+          data-status-label="{{ option.label }}"
+          aria-pressed="{{ 'true' if is_current_status else 'false' }}"
+          {% if is_current_status %}disabled aria-disabled="true"{% endif %}
+        >{{ option.label }}</button>
+        {% endfor %}
       </div>
     </div>
+    {% if application_detail_url %}
+    <div class="job-primary-link">
+      <p class="eyebrow">Application Tracker</p>
+      <a class="button light" href="{{ application_detail_url }}">Open application record</a>
+    </div>
+    {% endif %}
   </section>
 
   <section class="panel material-generation-panel">
@@ -352,6 +373,18 @@
           {% if match_summary.review_triggers %}
           <p class="muted">Review trigger: {{ match_summary.review_triggers | join(", ") }}</p>
           {% endif %}
+          {% if match_summary.condition_exclusions %}
+          <div class="job-signal-list warning">
+            <strong>Employment condition exclusions</strong>
+            {% for item in match_summary.condition_exclusions %}<p>{{ item }}</p>{% endfor %}
+          </div>
+          {% endif %}
+          {% if match_summary.condition_preferences %}
+          <div class="job-signal-list">
+            <strong>Employment preference misses</strong>
+            {% for item in match_summary.condition_preferences %}<p>{{ item }}</p>{% endfor %}
+          </div>
+          {% endif %}
         </section>
 
         <section>
@@ -373,6 +406,7 @@
             {% if package.ai_evaluation_status == "evaluated" %}
               <p>
                 <span class="badge {{ package.ai_fit_confidence }}">{{ package.ai_fit_confidence }} confidence</span>
+                {% if package.ai_match_score is not none and package.ai_match_score != "" %}<span class="badge exploratory">AI {{ package.ai_match_score }}%</span>{% endif %}
                 {% if package.ai_should_prioritize %}<span class="badge strong">Prioritize</span>{% endif %}
               </p>
               <p>{{ package.ai_summary }}</p>
@@ -557,7 +591,10 @@
   }
 
   document.querySelectorAll("[data-status-choice]").forEach((button) => {
-    button.addEventListener("click", () => openStatusModal(button.dataset.statusChoice, button.dataset.statusLabel));
+    button.addEventListener("click", () => {
+      if (button.disabled || button.getAttribute("aria-pressed") === "true") return;
+      openStatusModal(button.dataset.statusChoice, button.dataset.statusLabel);
+    });
   });
 
   (() => {

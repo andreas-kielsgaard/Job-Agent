@@ -20,8 +20,11 @@ from job_agent.llm import LlmService
 from job_agent.models import Job
 from job_agent.paths import env_file, profile_defaults_dir, profile_dir, resolve_project_path
 from job_agent.scoring import (
-    match_engine_config_from_profile,
+    MatchmakingSettings,
+    matchmaking_settings_from_parts,
+    matchmaking_settings_from_profile,
     normalize_ai_review_policy,
+    normalize_employment_conditions_config,
     normalize_language_policy,
     normalize_match_engine_config,
     score_job,
@@ -179,10 +182,36 @@ class SetupService:
         data = self.load_yaml_file("profile/preferences.yaml")
         return normalize_match_engine_config(data.get("match_engine", {}))
 
-    def match_engine_form_model(self, settings: dict[str, Any] | None = None) -> dict[str, Any]:
-        settings = normalize_match_engine_config(settings or self.load_match_engine_settings())
+    def load_employment_conditions_settings(self) -> dict[str, Any]:
+        data = self.load_yaml_file("profile/preferences.yaml")
+        return normalize_employment_conditions_config(data.get("employment_conditions", {}))
+
+    def load_matchmaking_settings(self) -> MatchmakingSettings:
+        return matchmaking_settings_from_profile(load_profile(self.root))
+
+    def match_engine_form_model(
+        self,
+        settings: dict[str, Any] | MatchmakingSettings | None = None,
+        employment_conditions: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        if isinstance(settings, MatchmakingSettings):
+            match_settings = settings.match_engine
+            condition_settings = settings.employment_conditions
+        else:
+            match_settings = normalize_match_engine_config(settings or self.load_match_engine_settings())
+            condition_settings = normalize_employment_conditions_config(
+                employment_conditions
+                if employment_conditions is not None
+                else self.load_employment_conditions_settings()
+            )
+        keyword_rows = match_settings["keyword_groups"] or _legacy_rules_as_keyword_groups(
+            match_settings["technical_keyword_groups"],
+            match_settings["module_keyword_groups"],
+            match_settings["contract_keyword_groups"],
+        )
         return {
-            **settings,
+            **match_settings,
+            "employment_conditions": condition_settings,
             "remote_policy_options": [
                 {"value": "required", "label": "Require remote/hybrid"},
                 {"value": "strong_preference", "label": "Strong preference"},
@@ -195,15 +224,45 @@ class SetupService:
                 {"value": "ignore", "label": "Ignore"},
             ],
             "rule_mode_options": [
+                {"value": "main", "label": "Main"},
                 {"value": "bonus", "label": "Bonus"},
-                {"value": "required", "label": "Required"},
+                {"value": "detractor", "label": "Detractor"},
             ],
-            "technical_rows": settings["technical_keyword_groups"],
-            "module_rows": settings["module_keyword_groups"],
-            "contract_rows": settings["contract_keyword_groups"],
+            "condition_preference_options": [
+                {"value": "not_important", "label": "Not important"},
+                {"value": "preferred", "label": "Preferred"},
+                {"value": "required", "label": "Required"},
+                {"value": "not_preferred", "label": "Not preferred"},
+                {"value": "excluded", "label": "Excluded"},
+            ],
+            "remote_condition_options": [
+                {"value": "preferred", "label": "Preferred"},
+                {"value": "required", "label": "Required"},
+                {"value": "not_preferred", "label": "Not preferred"},
+                {"value": "excluded", "label": "Exclude"},
+                {"value": "not_important", "label": "Any"},
+            ],
+            "location_kind_options": [
+                {"value": "city", "label": "City"},
+                {"value": "country", "label": "Country"},
+                {"value": "region", "label": "Region"},
+            ],
+            "compensation_period_options": [
+                {"value": "hourly", "label": "Hourly"},
+                {"value": "daily", "label": "Daily"},
+                {"value": "monthly", "label": "Monthly"},
+                {"value": "yearly", "label": "Yearly"},
+            ],
+            "keyword_rows": keyword_rows,
+            "technical_rows": match_settings["technical_keyword_groups"],
+            "module_rows": match_settings["module_keyword_groups"],
+            "contract_rows": match_settings["contract_keyword_groups"],
         }
 
     def match_engine_settings_from_form(self, form: Any) -> dict[str, Any]:
+        keyword_groups = self._keyword_rules_from_form(form)
+        if keyword_groups or _form_has_key(form, "keyword_rules_present"):
+            return normalize_match_engine_config({"keyword_groups": keyword_groups})
         return normalize_match_engine_config(
             {
                 "remote_policy": str(form.get("remote_policy", "")),
@@ -217,11 +276,47 @@ class SetupService:
             }
         )
 
+    def employment_conditions_settings_from_form(self, form: Any) -> dict[str, Any]:
+        return normalize_employment_conditions_config(
+            {
+                "employment_type": {
+                    "contract": str(form.get("employment_type_contract", "")),
+                    "employed": str(form.get("employment_type_employed", "")),
+                    "unknown": str(form.get("employment_type_unknown", "")),
+                },
+                "remote": {
+                    "remote": str(form.get("remote_remote", "")),
+                    "hybrid": str(form.get("remote_hybrid", "")),
+                    "onsite": str(form.get("remote_onsite", "")),
+                    "unknown": str(form.get("remote_unknown", "")),
+                },
+                "locations": self._condition_rows_from_form(form, "location", with_kind=True),
+                "contract_length": self._condition_rows_from_form(form, "contract_length"),
+                "compensation": self._compensation_rows_from_form(form),
+                "languages": self._condition_rows_from_form(form, "language"),
+            }
+        )
+
+    def matchmaking_settings_from_form(self, form: Any) -> MatchmakingSettings:
+        profile = load_profile(self.root)
+        conditions = (
+            self.employment_conditions_settings_from_form(form)
+            if _form_has_employment_condition_keys(form)
+            else normalize_employment_conditions_config(profile.get("employment_conditions", {}))
+        )
+        return matchmaking_settings_from_parts(
+            profile,
+            match_engine=self.match_engine_settings_from_form(form),
+            employment_conditions=conditions,
+        )
+
     def save_match_engine_settings_from_form(self, form: Any) -> dict[str, Any]:
         settings = self.match_engine_settings_from_form(form)
         path = profile_dir(self.root) / "preferences.yaml"
         data = read_yaml(path, {})
         data["match_engine"] = settings
+        if _form_has_employment_condition_keys(form):
+            data["employment_conditions"] = self.employment_conditions_settings_from_form(form)
         write_yaml(path, data)
         return settings
 
@@ -463,6 +558,7 @@ class SetupService:
                         "match_review",
                         "ai_review_policy",
                         "language_policy",
+                        "employment_conditions",
                         "highlighting",
                     ]:
                         if key in patch:
@@ -540,31 +636,29 @@ Output schema:
       "evaluate_excluded_with_triggers": false
     }},
     "language_policy": {{"acceptable": ["..."], "fluent": ["..."], "exclude_if_mandatory_unmatched": true}},
+    "employment_conditions": {{
+      "employment_type": {{"contract": "required|preferred|not_preferred|not_important|excluded", "employed": "required|preferred|not_preferred|not_important|excluded", "unknown": "not_important"}},
+      "remote": {{"remote": "required|preferred|not_preferred|not_important|excluded", "hybrid": "required|preferred|not_preferred|not_important|excluded", "onsite": "required|preferred|not_preferred|not_important|excluded", "unknown": "not_important"}},
+      "locations": [{{"label": "Copenhagen", "kind": "city|country|region", "preference": "required|preferred|not_preferred|excluded"}}],
+      "contract_length": [{{"label": "6 months", "preference": "required|preferred|not_preferred|excluded"}}],
+      "compensation": [{{"period": "hourly|daily|monthly|yearly", "minimum": 700, "preference": "required|preferred"}}],
+      "languages": [{{"label": "English", "preference": "required|preferred|not_preferred|excluded"}}]
+    }},
     "highlighting": {{"core_match_groups": ["..."], "min_core_matches": 3, "high_rate_threshold": 700}}
   }},
   "match_engine": {{
-    "remote_policy": "required|strong_preference|slight_preference|neutral",
-    "permanent_policy": "exclude|penalize|ignore",
-    "permanent_penalty": -25,
-    "technical_cap": 55,
-    "module_cap": 25,
-    "technical_keyword_groups": [
-      {{"label": "Primary skill variants", "terms": ["primary skill", "alternate wording"], "score": 22, "mode": "bonus|required"}}
-    ],
-    "module_keyword_groups": [
-      {{"label": "Domain or specialization", "terms": ["domain term"], "score": 7, "mode": "bonus|required"}}
-    ],
-    "contract_keyword_groups": [
-      {{"label": "Contract / freelance", "terms": ["contract", "freelance"], "score": 8, "mode": "bonus|required"}}
+    "keyword_groups": [
+      {{"label": "Primary skill variants", "terms": ["primary skill", "alternate wording"], "proficiency": 100, "mode": "main|bonus|detractor", "years": 6}}
     ]
   }}
 }}
 
 Scoring guidance:
-- Points: how much a matched group contributes before the section cap is applied.
-- Mode bonus: add points when any alternative term matches.
-- Mode required: exclude postings that lack all alternatives for that group.
-- Caps are section maximums, not per-keyword points.
+- Main rules represent proficiency. If two main rules match, deterministic scoring averages their proficiency values.
+- Bonus rules boost the proficiency score. If multiple bonus rules match, only the highest boost is used.
+- Detractor rules reduce the proficiency score. If multiple detractors match, only the largest detractor is used.
+- Years are candidate evidence years for that keyword group. Do not penalize years deterministically.
+- Employment conditions are filters and preference flags, not match-score inputs.
 - Make match_engine conservative and explainable. Use grouped alternatives, not many duplicate one-term rows.
 
 Current profile JSON:
@@ -615,8 +709,9 @@ CV text:
         skills = skills_yaml.get("skills", {}) if isinstance(skills_yaml.get("skills"), dict) else {}
         modules = skills.get("modules", {}) if isinstance(skills.get("modules"), dict) else {}
         match_engine = normalize_match_engine_config(preferences.get("match_engine", {}))
-        technical_by_label = _rules_by_label(match_engine["technical_keyword_groups"])
-        module_by_label = _rules_by_label(match_engine["module_keyword_groups"])
+        keyword_by_label = _rules_by_label(match_engine["keyword_groups"])
+        technical_by_label = keyword_by_label or _rules_by_label(match_engine["technical_keyword_groups"])
+        module_by_label = keyword_by_label or _rules_by_label(match_engine["module_keyword_groups"])
         caveat_rules = _caveat_rules_by_key(preferences.get("match_review", {}))
         target_roles = skills_yaml.get("target_roles", {}) if isinstance(skills_yaml.get("target_roles"), dict) else {}
         role_aliases = (
@@ -709,15 +804,17 @@ CV text:
     def score_sandbox_input(
         self,
         sandbox_input: dict[str, str],
-        settings: dict[str, Any] | None = None,
+        settings: dict[str, Any] | MatchmakingSettings | None = None,
     ) -> dict[str, Any]:
         profile = load_profile(self.root)
-        if settings is not None:
-            profile["match_engine"] = normalize_match_engine_config(settings)
+        if isinstance(settings, MatchmakingSettings):
+            matchmaking_settings = settings
+        elif settings is not None:
+            matchmaking_settings = matchmaking_settings_from_parts(profile, match_engine=settings)
         else:
-            profile["match_engine"] = match_engine_config_from_profile(profile)
+            matchmaking_settings = matchmaking_settings_from_profile(profile)
         job = self.job_from_sandbox_input(sandbox_input)
-        match = score_job(job, profile)
+        match = score_job(job, profile, matchmaking_settings=matchmaking_settings)
         raw_score = sum(match.components.values())
         return {
             "score": match.total_score,
@@ -736,13 +833,16 @@ CV text:
             "review_triggers": match.review_triggers,
             "review_trigger_labels": match.review_trigger_labels,
             "deterministic_confidence": match.deterministic_confidence,
+            "condition_exclusions": match.condition_exclusions,
+            "condition_preferences": match.condition_preferences,
+            "condition_values": match.condition_values,
             "job": asdict(job),
         }
 
     def score_sandbox_form(self, form: Any) -> dict[str, Any]:
         return self.score_sandbox_input(
             self.sandbox_input_from_form(form),
-            settings=self.match_engine_settings_from_form(form),
+            settings=self.matchmaking_settings_from_form(form),
         )
 
     def job_from_sandbox_input(self, data: dict[str, str]) -> Job:
@@ -775,6 +875,16 @@ CV text:
             values["ANTHROPIC_API_KEY"] = anthropic_api_key
         values["CLAUDE_MODEL"] = claude_model
         values["CLAUDE_USE_BY_DEFAULT"] = "true" if claude_use_by_default else "false"
+        self.write_env(values)
+
+    def save_gmail_oauth_app_credentials(self, client_id: str, client_secret: str) -> None:
+        client_id = client_id.strip()
+        client_secret = client_secret.strip()
+        if not client_id or not client_secret:
+            raise ValueError("Gmail client ID and client secret are required.")
+        values = load_env(self.root)
+        values["GMAIL_CLIENT_ID"] = client_id
+        values["GMAIL_CLIENT_SECRET"] = client_secret
         self.write_env(values)
 
     def save_contact(self, contact_update: dict[str, Any]) -> None:
@@ -910,26 +1020,57 @@ CV text:
         preferences_changed = False
         if has_skill_match_fields or has_module_match_fields:
             match_engine = normalize_match_engine_config(preferences.get("match_engine", {}))
+            keyword_groups = match_engine["keyword_groups"] or _legacy_rules_as_keyword_groups(
+                match_engine["technical_keyword_groups"],
+                match_engine["module_keyword_groups"],
+                match_engine["contract_keyword_groups"],
+            )
             if has_skill_match_fields:
-                match_engine["technical_keyword_groups"] = _sync_labeled_rules(
+                legacy_technical = _sync_labeled_rules(
                     match_engine["technical_keyword_groups"],
                     old_skills,
                     [
-                        _rule_from_row(row["skill_name"], row["skill_terms"], row["skill_score"], row["skill_mode"], 20)
+                        _legacy_rule_from_row(
+                            row["skill_name"], row["skill_terms"], row["skill_score"], row["skill_mode"], 100
+                        )
                         for row in skill_rows
                     ],
                 )
+                keyword_groups = _sync_labeled_rules(
+                    keyword_groups,
+                    old_skills,
+                    [
+                        _rule_from_row(
+                            row["skill_name"], row["skill_terms"], row["skill_score"], row["skill_mode"], 100
+                        )
+                        for row in skill_rows
+                    ],
+                )
+                match_engine["technical_keyword_groups"] = legacy_technical
             if has_module_match_fields:
-                match_engine["module_keyword_groups"] = _sync_labeled_rules(
+                legacy_module = _sync_labeled_rules(
                     match_engine["module_keyword_groups"],
                     old_modules,
                     [
-                        _rule_from_row(
-                            row["module_name"], row["module_terms"], row["module_score"], row["module_mode"], 7
+                        _legacy_rule_from_row(
+                            row["module_name"], row["module_terms"], row["module_score"], row["module_mode"], 70
                         )
                         for row in module_rows
                     ],
                 )
+                keyword_groups = _sync_labeled_rules(
+                    keyword_groups,
+                    old_modules,
+                    [
+                        _rule_from_row(
+                            row["module_name"], row["module_terms"], row["module_score"], row["module_mode"], 70
+                        )
+                        for row in module_rows
+                    ],
+                )
+                match_engine["module_keyword_groups"] = legacy_module
+            match_engine["keyword_groups"] = keyword_groups
+            match_engine["contract_keyword_groups"] = []
             preferences["match_engine"] = match_engine
             preferences_changed = True
 
@@ -1092,6 +1233,62 @@ CV text:
             if label and term_list and score > 0:
                 rules.append({"label": label, "terms": term_list, "score": score, "mode": mode})
         return rules
+
+    def _keyword_rules_from_form(self, form: Any) -> list[dict[str, Any]]:
+        labels = form.getlist("keyword_rule_label")
+        terms = form.getlist("keyword_rule_terms")
+        proficiencies = form.getlist("keyword_rule_proficiency")
+        modes = form.getlist("keyword_rule_mode")
+        years = form.getlist("keyword_rule_years")
+        rules: list[dict[str, Any]] = []
+        for index in range(max(len(labels), len(terms), len(proficiencies), len(modes), len(years))):
+            label = _at(labels, index).strip()
+            term_list = terms_to_list(_at(terms, index))
+            mode = _at(modes, index).strip().lower() or "main"
+            proficiency = _int_or_default(_at(proficiencies, index), 100 if mode == "main" else 0)
+            year_value = max(0, _int_or_default(_at(years, index), 0))
+            if label and term_list:
+                rules.append(
+                    {
+                        "label": label,
+                        "terms": term_list,
+                        "proficiency": proficiency,
+                        "mode": mode,
+                        "years": year_value,
+                    }
+                )
+        return rules
+
+    def _condition_rows_from_form(self, form: Any, prefix: str, *, with_kind: bool = False) -> list[dict[str, Any]]:
+        labels = form.getlist(f"{prefix}_label")
+        preferences = form.getlist(f"{prefix}_preference")
+        kinds = form.getlist(f"{prefix}_kind")
+        rows: list[dict[str, Any]] = []
+        for index in range(max(len(labels), len(preferences), len(kinds))):
+            label = _at(labels, index).strip()
+            if not label:
+                continue
+            row = {
+                "label": label,
+                "preference": _at(preferences, index).strip() or "preferred",
+            }
+            if with_kind:
+                row["kind"] = _at(kinds, index).strip() or "region"
+            rows.append(row)
+        return rows
+
+    def _compensation_rows_from_form(self, form: Any) -> list[dict[str, Any]]:
+        periods = form.getlist("compensation_period")
+        minimums = form.getlist("compensation_minimum")
+        preferences = form.getlist("compensation_preference")
+        rows: list[dict[str, Any]] = []
+        for index in range(max(len(periods), len(minimums), len(preferences))):
+            period = _at(periods, index).strip()
+            minimum = _int_or_default(_at(minimums, index), 0)
+            preference = _at(preferences, index).strip() or "preferred"
+            if period and minimum > 0:
+                rows.append({"period": period, "minimum": minimum, "preference": preference})
+        return rows
 
 
 def _at(values: list[Any], index: int) -> str:
@@ -1280,8 +1477,8 @@ def _editable_match_item(label: Any, rule: dict[str, Any] | None, default_score:
     return {
         "name": str(label or "").strip(),
         "terms": _list(rule.get("terms", [])),
-        "score": _int_or_default(rule.get("score"), default_score),
-        "mode": str(rule.get("mode") or "bonus"),
+        "score": _int_or_default(rule.get("proficiency", rule.get("score")), default_score),
+        "mode": str(rule.get("mode") or "main"),
     }
 
 
@@ -1312,6 +1509,28 @@ def _form_has_key(form: Any, key: str) -> bool:
         return False
 
 
+def _form_has_employment_condition_keys(form: Any) -> bool:
+    keys = [
+        "employment_type_contract",
+        "employment_type_employed",
+        "employment_type_unknown",
+        "remote_remote",
+        "remote_hybrid",
+        "remote_onsite",
+        "remote_unknown",
+        "location_label",
+        "location_preference",
+        "contract_length_label",
+        "contract_length_preference",
+        "language_label",
+        "language_preference",
+        "compensation_period",
+        "compensation_minimum",
+        "compensation_preference",
+    ]
+    return any(_form_has_key(form, key) for key in keys)
+
+
 def _label_key(value: Any) -> str:
     return str(value or "").strip().lower()
 
@@ -1336,8 +1555,35 @@ def _rule_from_row(label: str, terms: str, score: str, mode: str, default_score:
     label = label.strip()
     term_list = terms_to_list(terms) or ([label] if label else [])
     score_value = _int_or_default(score, default_score)
+    mode_value = mode.strip() if mode.strip() in {"main", "bonus", "detractor", "required"} else "main"
+    if mode_value == "required":
+        mode_value = "main"
+    return {"label": label, "terms": term_list, "proficiency": score_value, "mode": mode_value}
+
+
+def _legacy_rule_from_row(label: str, terms: str, score: str, mode: str, default_score: int) -> dict[str, Any]:
+    label = label.strip()
+    term_list = terms_to_list(terms) or ([label] if label else [])
+    score_value = _int_or_default(score, default_score)
     mode_value = mode.strip() if mode.strip() in {"bonus", "required"} else "bonus"
     return {"label": label, "terms": term_list, "score": score_value, "mode": mode_value}
+
+
+def _legacy_rules_as_keyword_groups(*groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for rules in groups:
+        for rule in rules:
+            mode = str(rule.get("mode") or "bonus")
+            rows.append(
+                {
+                    "label": str(rule.get("label") or ""),
+                    "terms": _list(rule.get("terms", [])),
+                    "proficiency": _int_or_default(rule.get("score"), 100 if mode == "required" else 0),
+                    "mode": "main" if mode == "required" else "bonus",
+                    "years": 0,
+                }
+            )
+    return rows
 
 
 def _sync_caveat_rules(
@@ -1450,4 +1696,5 @@ def _profile_for_prompt(profile: dict[str, Any]) -> dict[str, Any]:
         "experience": profile.get("experience", []),
         "application_examples": profile.get("application_examples", []),
         "match_engine": profile.get("match_engine", {}),
+        "employment_conditions": profile.get("employment_conditions", {}),
     }

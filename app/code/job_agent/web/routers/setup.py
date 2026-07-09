@@ -21,6 +21,20 @@ def setup(request: Request) -> HTMLResponse:
     )
 
 
+@router.get("/connectors", response_class=HTMLResponse)
+def connectors(request: Request) -> HTMLResponse:
+    return templates.TemplateResponse(
+        request,
+        "connectors.html",
+        {
+            "request": request,
+            **workflow_handler().profile.connectors_view(),
+            "message": request.query_params.get("message", ""),
+            "warning": request.query_params.get("warning", ""),
+        },
+    )
+
+
 @router.post("/setup/env")
 def save_env(
     anthropic_api_key: str = Form(""),
@@ -134,12 +148,13 @@ async def save_ai_policy(request: Request) -> RedirectResponse:
 
 
 @router.post("/setup/connectors")
+@router.post("/connectors/settings")
 async def save_connectors(request: Request) -> RedirectResponse:
     try:
         workflow_handler().profile.save_connector_settings_from_form(await request.form())
     except ValueError as exc:
-        return _setup_redirect(warning=str(exc), anchor="advanced-profile-config")
-    return _setup_redirect(message="Connector settings saved.", anchor="advanced-profile-config")
+        return _connectors_redirect(warning=str(exc))
+    return _connectors_redirect(message="Connector settings saved.")
 
 
 @router.post("/connectors/canva/start")
@@ -147,7 +162,7 @@ def start_canva_connection() -> RedirectResponse:
     try:
         authorization_url = workflow_handler().profile.start_canva_connection()
     except ValueError as exc:
-        return _setup_redirect(warning=str(exc), anchor="advanced-profile-config")
+        return _connectors_redirect(warning=str(exc))
     return RedirectResponse(url=authorization_url, status_code=303)
 
 
@@ -160,18 +175,68 @@ def canva_oauth_callback(
 ) -> RedirectResponse:
     if error:
         message = error_description or error
-        return _setup_redirect(warning=f"Canva sign-in was not completed: {message}", anchor="advanced-profile-config")
+        return _connectors_redirect(warning=f"Canva sign-in was not completed: {message}")
     try:
         workflow_handler().profile.complete_canva_connection(code, state)
     except ValueError as exc:
-        return _setup_redirect(warning=str(exc), anchor="advanced-profile-config")
-    return _setup_redirect(message="Canva connected.", anchor="advanced-profile-config")
+        return _connectors_redirect(warning=str(exc))
+    return _connectors_redirect(message="Canva connected.")
 
 
 @router.post("/connectors/canva/disconnect")
 def disconnect_canva() -> RedirectResponse:
     workflow_handler().profile.disconnect_canva()
-    return _setup_redirect(message="Canva disconnected.", anchor="advanced-profile-config")
+    return _connectors_redirect(message="Canva disconnected.")
+
+
+@router.post("/connectors/email/gmail/start")
+def start_gmail_connection() -> RedirectResponse:
+    try:
+        authorization_url = workflow_handler().profile.start_gmail_connection()
+    except ValueError as exc:
+        return _connectors_redirect(warning=str(exc))
+    return RedirectResponse(url=authorization_url, status_code=303)
+
+
+@router.post("/connectors/email/gmail/configure")
+def configure_gmail_connection(
+    gmail_client_id: str = Form(""),
+    gmail_client_secret: str = Form(""),
+    connect_after_save: bool = Form(False),
+) -> RedirectResponse:
+    try:
+        workflow_handler().profile.save_gmail_oauth_app_credentials(gmail_client_id, gmail_client_secret)
+        if connect_after_save:
+            authorization_url = workflow_handler().profile.start_gmail_connection()
+            return RedirectResponse(url=authorization_url, status_code=303)
+    except ValueError as exc:
+        return _connectors_redirect(warning=str(exc))
+    return _connectors_redirect(message="Gmail OAuth credentials saved.")
+
+
+@router.get("/connectors/email/callback")
+def gmail_oauth_callback(
+    code: str = "",
+    state: str = "",
+    error: str = "",
+    error_description: str = "",
+) -> RedirectResponse:
+    if error:
+        message = error_description or error
+        return _connectors_redirect(warning=f"Gmail sign-in was not completed: {message}")
+    try:
+        workflow_handler().profile.complete_gmail_connection(code, state)
+    except ValueError as exc:
+        return _connectors_redirect(warning=str(exc))
+    except Exception as exc:
+        return _connectors_redirect(warning=f"Gmail sign-in failed: {exc}")
+    return _connectors_redirect(message="Gmail connected.")
+
+
+@router.post("/connectors/email/gmail/disconnect")
+def disconnect_gmail() -> RedirectResponse:
+    workflow_handler().profile.disconnect_gmail()
+    return _connectors_redirect(message="Gmail disconnected.")
 
 
 @router.post("/setup/cv-reference", response_model=None)
@@ -433,6 +498,14 @@ async def _preview_auto_configure_from_cv_text(
 
 
 def _setup_redirect(message: str = "", warning: str = "", anchor: str = "") -> RedirectResponse:
+    return _redirect_to("/setup", message=message, warning=warning, anchor=anchor)
+
+
+def _connectors_redirect(message: str = "", warning: str = "") -> RedirectResponse:
+    return _redirect_to("/connectors", message=message, warning=warning)
+
+
+def _redirect_to(path: str, *, message: str = "", warning: str = "", anchor: str = "") -> RedirectResponse:
     params = {}
     if message:
         params["message"] = message
@@ -440,7 +513,7 @@ def _setup_redirect(message: str = "", warning: str = "", anchor: str = "") -> R
         params["warning"] = warning
     query = f"?{urlencode(params)}" if params else ""
     fragment = f"#{anchor}" if anchor else ""
-    return RedirectResponse(url=f"/setup{query}{fragment}", status_code=303)
+    return RedirectResponse(url=f"{path}{query}{fragment}", status_code=303)
 
 
 def _truthy(value) -> bool:

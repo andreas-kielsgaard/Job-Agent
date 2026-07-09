@@ -72,6 +72,24 @@ class ExecutionSourceService:
     def disable(self, source_id: str) -> dict[str, Any]:
         return self._set_enabled(source_id, False)
 
+    def remove_source(self, source_id: str) -> bool:
+        source_id = source_id.strip()
+        config = self.load_config()
+        sources = config.setdefault("sources", [])
+        if not isinstance(sources, list):
+            sources = []
+            config["sources"] = sources
+        kept_sources = [
+            source
+            for source in sources
+            if not (isinstance(source, dict) and str(source.get("source_id") or "") == source_id)
+        ]
+        if len(kept_sources) == len(sources):
+            return False
+        config["sources"] = kept_sources
+        self._write(config)
+        return True
+
     def _set_enabled(self, source_id: str, enabled: bool) -> dict[str, Any]:
         registry = SourceRegistryService(self.root)
         registry_source = registry.get_source(source_id)

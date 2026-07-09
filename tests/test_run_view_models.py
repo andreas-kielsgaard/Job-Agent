@@ -135,7 +135,72 @@ def test_source_progress_keeps_skipped_setup_sources_visible() -> None:
     assert progress["summary"]["sources_skipped_setup"] == 1
     assert progress["items"][1]["source_name"] == "Blocked Jobs"
     assert progress["items"][1]["status"] == "deferred"
+    assert progress["items"][1]["source_id"] == "blocked-jobs"
+    assert progress["items"][1]["source_action_href"] == "/sources/blocked-jobs"
+    assert progress["items"][1]["source_action_label"] == "Open source"
     assert progress["items"][1]["skipped_reason"] == "readiness is blocked"
+
+
+def test_source_progress_exposes_skipped_source_access_action() -> None:
+    progress = build_source_progress(
+        [
+            {
+                "event_type": "source_setup_skipped",
+                "phase": "source_ingestion",
+                "current_source": "Daily-run setup",
+                "message": "Skipped sources still in setup: Dice (requires a connected session).",
+                "counts": {
+                    "source_index": 0,
+                    "source_count": 0,
+                    "warnings_count": 1,
+                    "skipped_sources": [
+                        {
+                            "source_name": "Dice",
+                            "source_id": "dice",
+                            "reason": "dice.com requires a connected session",
+                            "source_access_status": "needs_login",
+                            "source_action_href": "/sources/dice/session",
+                            "source_action_label": "Connect session",
+                        }
+                    ],
+                },
+                "timestamp": "2026-05-07T10:00:00+00:00",
+            }
+        ]
+    )
+
+    item = progress["items"][0]
+    assert item["status"] == "deferred"
+    assert item["source_access_status"] == "needs_login"
+    assert item["source_action_href"] == "/sources/dice/session"
+    assert item["source_action_label"] == "Connect session"
+
+
+def test_source_progress_exposes_active_source_access_wait_action() -> None:
+    progress = build_source_progress(
+        [
+            _event("source_started", source_index=1, source_count=1, source="Dice"),
+            _event(
+                "source_access_waiting",
+                source_index=1,
+                source_count=1,
+                source="Dice",
+                message="Waiting for source access for Dice: dice.com requires a connected session.",
+                source_id="dice",
+                source_access_status="needs_login",
+                source_action_href="/sources/dice/session",
+                source_action_label="Connect session",
+            ),
+        ]
+    )
+
+    item = progress["items"][0]
+    assert item["status"] == "waiting"
+    assert item["stage"] == "Waiting for source access"
+    assert item["source_action_href"] == "/sources/dice/session"
+    assert item["source_action_label"] == "Connect session"
+    assert item["highlight"]["kind"] == "warning"
+    assert progress["summary"]["sources_waiting"] == 1
 
 
 def test_source_progress_exposes_listing_and_detail_coverage() -> None:

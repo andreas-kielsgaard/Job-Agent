@@ -19,6 +19,7 @@ from job_agent.services.recipe_generation_run_service import RecipeGenerationRun
 from job_agent.services.recipe_generation_status_service import RecipeGenerationStatusService
 from job_agent.services.setup_guide_service import SetupGuideService
 from job_agent.services.setup_service import SetupService
+from job_agent.web.application_workflow import ApplicationWorkflowHandler
 from job_agent.web.source_auto_setup import SourceAutoSetupWorkflowHandler
 from job_agent.web.source_workflow import SourceWorkflowHandler
 from job_agent.web.view_models.dashboard import build_dashboard_view
@@ -46,6 +47,7 @@ class AppWorkflowHandler:
         self.recipe = RecipeWorkflowHandler(self.root, self.source)
         self.auto_setup = SourceAutoSetupWorkflowHandler(self.root, self.source)
         self.executor = ExecutorWorkflowHandler(self.root)
+        self.applications = ApplicationWorkflowHandler(self.root)
         self.profile = ProfileWorkflowHandler(self.root)
         self.guide = SetupGuideWorkflowHandler(self.root)
 
@@ -102,6 +104,19 @@ class AppWorkflowHandler:
                     "profile contract",
                 ),
                 handoffs=("source", "profile"),
+            ),
+            "applications": WorkflowArea(
+                key="applications",
+                label="Post-application tracking",
+                owner="ApplicationWorkflowHandler",
+                state_inputs=(
+                    "application status store",
+                    "application records",
+                    "manual thread links",
+                    "manual communication events",
+                    "package index",
+                ),
+                handoffs=("executor",),
             ),
         }
 
@@ -351,6 +366,12 @@ class ProfileWorkflowHandler:
     def setup_view(self) -> dict[str, Any]:
         return build_setup_view(self.root)
 
+    def connectors_view(self) -> dict[str, Any]:
+        return {
+            "title": "Connectors",
+            "connector_settings": self.connectors.load(),
+        }
+
     def active_draft(self) -> dict[str, Any]:
         return self.drafts.active_draft()
 
@@ -365,6 +386,9 @@ class ProfileWorkflowHandler:
 
     def save_env_settings(self, anthropic_api_key: str, claude_model: str, claude_use_by_default: bool) -> None:
         self.setup.save_env_settings(anthropic_api_key, claude_model, claude_use_by_default)
+
+    def save_gmail_oauth_app_credentials(self, client_id: str, client_secret: str) -> None:
+        self.setup.save_gmail_oauth_app_credentials(client_id, client_secret)
 
     def save_contact(self, data: dict[str, Any]) -> None:
         self.setup.save_contact(data)
@@ -401,6 +425,15 @@ class ProfileWorkflowHandler:
 
     def save_connector_settings_from_form(self, form) -> None:
         self.connectors.save_from_form(form)
+
+    def start_gmail_connection(self) -> str:
+        return self.connectors.gmail_authorization_url()
+
+    def complete_gmail_connection(self, code: str, state: str) -> None:
+        self.connectors.complete_gmail_oauth(code, state)
+
+    def disconnect_gmail(self) -> None:
+        self.connectors.disconnect_gmail()
 
     def start_canva_connection(self) -> str:
         return self.connectors.canva_authorization_url()

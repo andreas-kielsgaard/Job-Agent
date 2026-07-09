@@ -91,6 +91,10 @@ def expected_detail_fields(recipe: JobBoardRecipe) -> list[str]:
     return fields
 
 
+def expected_report_field_sources(recipe: JobBoardRecipe) -> dict[str, str]:
+    return _expected_report_field_sources(recipe)
+
+
 def capability_checks(result: RecipeExtractionResult, recipe: JobBoardRecipe) -> list[RecipeCapabilityCheck]:
     pagination_is_expected = pagination_expected(recipe)
     api_listing_expected = bool(recipe.listing_api.url)

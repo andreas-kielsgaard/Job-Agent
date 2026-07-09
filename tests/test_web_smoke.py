@@ -6,9 +6,15 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+import yaml
 from fastapi.testclient import TestClient
-from tests.helpers import seed_common_sources
+from tests.helpers import seed_common_sources, write_sample_package
 
+from job_agent.application_store import EmailThreadLinkStore
+from job_agent.email_models import GmailMessageRecord
+from job_agent.email_store import GmailMessageStore, GmailThreadStore
+from job_agent.io.json_store import write_json
+from job_agent.paths import runtime_dir
 from job_agent.run_store import RunEvent, RunOptions, RunStore
 from job_agent.services.cv_profile_draft_service import CvProfileDraftService
 
@@ -35,6 +41,8 @@ _SOURCE_FIXTURE_TESTS = {
     "test_source_detail_run_now_redirects_to_run_detail",
     "test_source_detail_index_and_investigate_actions_redirect",
     "test_source_detail_index_and_investigate_actions_require_ready_source",
+    "test_source_detail_ingestion_actions_require_connected_session",
+    "test_source_detail_warns_and_resets_when_latest_run_fields_are_missing",
 }
 
 
@@ -48,14 +56,38 @@ def test_app_creation_health_and_basic_routes_use_temp_root(client: TestClient, 
     response = client.get("/api/health")
     assert response.status_code == 200
     assert response.json()["status"] == "ok"
+    cors_response = client.get("/api/health", headers={"Origin": "null"})
+    assert cors_response.status_code == 200
+    assert cors_response.headers["access-control-allow-origin"] == "null"
+    version = client.get("/api/app-version")
+    assert version.status_code == 200
+    assert version.json()["outdated"] is False
+    assert version.json()["restart_supported"] is True
     work_status = client.get("/api/work-status")
     assert work_status.status_code == 200
     assert work_status.json()["sources"] == []
+    loading_page = client.get("/static/server-loading.html")
+    assert loading_page.status_code == 200
+    assert "Starting the local server" in loading_page.text
+    assert "launchReadyUrl" in loading_page.text
+    missing_launcher = client.get("/api/launcher-ready/missing-token", headers={"Origin": "null"})
+    assert missing_launcher.status_code == 200
+    assert missing_launcher.headers["access-control-allow-origin"] == "null"
+    assert missing_launcher.json()["ready"] is False
+    write_json(
+        runtime_dir(project_root) / "launcher" / "launch-test.json",
+        {"ready": True, "target": "http://127.0.0.1:8765/", "health": "health-url", "ready_at": "now"},
+    )
+    launcher_ready = client.get("/api/launcher-ready/launch-test")
+    assert launcher_ready.status_code == 200
+    assert launcher_ready.json()["ready"] is True
+    assert launcher_ready.json()["target"] == "http://127.0.0.1:8765/"
 
     for path in [
         "/",
         "/runs",
         "/jobs",
+        "/applications",
         "/stats",
         "/setup",
         "/match-sandbox",
@@ -68,6 +100,9 @@ def test_app_creation_health_and_basic_routes_use_temp_root(client: TestClient, 
     assert (project_root / "output" / "runs" / "runs.json").exists()
     dashboard = client.get("/").text
     assert 'id="work-status-dock"' in dashboard
+    assert 'id="app-version-alert"' in dashboard
+    assert "/api/events" in dashboard
+    assert "setInterval(refreshWorkStatus" not in dashboard
     assert "Claude not connected for material generation" in dashboard
     assert "Ingest all ready sources" in dashboard
     assert 'name="use_llm"' not in dashboard
@@ -79,12 +114,66 @@ def test_app_creation_health_and_basic_routes_use_temp_root(client: TestClient, 
     assert "Claude not connected for AI-enhanced evaluation" in posting
     assert "Claude not connected for material generation" in posting
 
+    sources = client.get("/sources").text
+    assert "setInterval(refreshSourceOverviewDynamic" not in sources
+
+
+def test_run_detail_keeps_source_access_action_after_timeout(client: TestClient, project_root: Path) -> None:
+    store = RunStore(project_root)
+    record = store.create_run(RunOptions(wait_for_source_access=True))
+    store.update(record.run_id, status="running")
+    store.append_event(
+        RunEvent(
+            record.run_id,
+            "source_started",
+            "Checking source 1/1: Dice",
+            phase="source_ingestion",
+            current_source="Dice",
+            counts={"source_index": 1, "source_count": 1},
+        )
+    )
+    store.append_event(
+        RunEvent(
+            record.run_id,
+            "source_access_timeout",
+            "Source access is still blocked for Dice after waiting 300s.",
+            phase="source_ingestion",
+            current_source="Dice",
+            counts={
+                "source_index": 1,
+                "source_count": 1,
+                "warnings_count": 1,
+                "source_id": "dice",
+                "source_access_status": "needs_login",
+                "source_action_href": "/sources/dice/session",
+                "source_action_label": "Connect session",
+            },
+        )
+    )
+    store.append_event(
+        RunEvent(
+            record.run_id,
+            "source_completed",
+            "Completed source 1/1: Dice - 0 jobs found, 1 warning",
+            phase="source_ingestion",
+            current_source="Dice",
+            counts={"source_index": 1, "source_count": 1, "jobs_found": 0, "warnings_count": 1},
+        )
+    )
+
+    response = client.get(f"/runs/{record.run_id}")
+
+    assert response.status_code == 200
+    assert 'href="/sources/dice/session"' in response.text
+    assert "Connect session" in response.text
+
 
 def test_browser_tab_titles_describe_current_page(client: TestClient, project_root: Path) -> None:
     seed_common_sources(project_root)
     cases = [
         ("/", "Dashboard"),
         ("/jobs", "Jobs"),
+        ("/applications", "Applications"),
         ("/runs?view=test", "Test Runs"),
         ("/setup", "Setup"),
         ("/sources", "Sources"),
@@ -281,8 +370,46 @@ def test_setup_routes_write_to_temp_root_and_validate_inputs(client: TestClient,
     assert "pending_oauth" in connectors_yaml
     assert "code_verifier" in connectors_yaml
 
+    gmail_start = client.post("/connectors/email/gmail/start", follow_redirects=False)
+    assert gmail_start.status_code == 303
+    assert gmail_start.headers["location"].startswith("/connectors?warning=")
+    assert "Gmail+connection+needs" in gmail_start.headers["location"]
+
+    gmail_config = client.post(
+        "/connectors/email/gmail/configure",
+        data={"gmail_client_id": "gmail-client", "gmail_client_secret": "gmail-secret"},
+        follow_redirects=False,
+    )
+    assert gmail_config.status_code == 303
+    assert gmail_config.headers["location"].startswith("/connectors?message=")
+    env_text = (project_root / ".env").read_text(encoding="utf-8")
+    assert "GMAIL_CLIENT_ID=gmail-client" in env_text
+    assert "GMAIL_CLIENT_SECRET=gmail-secret" in env_text
+
+    connectors_data = yaml.safe_load((project_root / "connectors.yaml").read_text(encoding="utf-8"))
+    connectors_data["email"] = {
+        "enabled": True,
+        "provider": "gmail",
+        "pending_oauth": {
+            "state": "missing-verifier",
+            "redirect_uri": "http://127.0.0.1:8765/connectors/email/callback",
+            "scopes": ["https://www.googleapis.com/auth/gmail.readonly"],
+        },
+    }
+    (project_root / "connectors.yaml").write_text(
+        yaml.safe_dump(connectors_data, sort_keys=False),
+        encoding="utf-8",
+    )
+    stale_callback = client.get(
+        "/connectors/email/callback?state=missing-verifier&code=returned-code",
+        follow_redirects=False,
+    )
+    assert stale_callback.status_code == 303
+    assert stale_callback.headers["location"].startswith("/connectors?warning=")
+    assert "Gmail+sign-in+must+be+restarted" in stale_callback.headers["location"]
+
     connector_response = client.post(
-        "/setup/connectors",
+        "/connectors/settings",
         data={
             "email_enabled": "on",
             "email_provider": "gmail",
@@ -583,6 +710,50 @@ def test_manual_posting_route_creates_package_and_redirects(client: TestClient, 
     assert sandbox.status_code == 200
     assert "SAP ABAP Consultant" in sandbox.text
     assert "Score Result" in sandbox.text
+
+
+def test_gmail_thread_posting_page_imports_and_links_cached_chain(client: TestClient, project_root: Path) -> None:
+    messages = [
+        GmailMessageRecord(
+            provider="gmail",
+            account_id="me@example.com",
+            message_id="m1",
+            thread_id="thread-1",
+            direction="inbound",
+            sent_at="2026-06-18T09:30:00+00:00",
+            from_text="recruiter@example.com",
+            to_text="me@example.com",
+            subject="SAP ABAP Consultant for client",
+            snippet="Hybrid ABAP role",
+            body_preview="Location: Copenhagen\nRate: DKK 900/hour\nABAP RAP CDS role.",
+        )
+    ]
+    GmailMessageStore(project_root).upsert_many(messages)
+    GmailThreadStore(project_root).upsert_from_messages(messages)
+
+    page = client.get("/postings/email-threads")
+    assert page.status_code == 200
+    assert "SAP ABAP Consultant for client" in page.text
+    assert "Create posting" in page.text
+    assert "Link chain to job" in page.text
+
+    import_response = client.post(
+        "/postings/email-threads/import",
+        data={"thread_id": "thread-1"},
+        follow_redirects=False,
+    )
+    assert import_response.status_code == 303
+    assert import_response.headers["location"].startswith("/jobs/")
+
+    write_sample_package(project_root, stable_id="stable-1", title="Existing Applied Role")
+    client.post("/api/jobs/status", json={"job_ids": ["stable-1"], "status": "applied"})
+    link_response = client.post(
+        "/postings/email-threads/link",
+        data={"thread_id": "thread-1", "application_id": "stable-1", "account_id": "me@example.com"},
+        follow_redirects=False,
+    )
+    assert link_response.status_code == 303
+    assert EmailThreadLinkStore(project_root).list_for_application("stable-1")[0].thread_id == "thread-1"
 
 
 def test_match_sandbox_scores_current_form_values(client: TestClient) -> None:
@@ -1890,25 +2061,36 @@ def test_source_detail_index_and_investigate_actions_redirect(
         source_name = "Eursap Jobs"
 
     launched_index = {}
-    launched_detail = {}
+    launched_detail = []
 
     def fake_index_launch(source_id, source_name=""):
         launched_index.update({"source_id": source_id, "source_name": source_name})
         return FakeIndexTask()
 
-    def fake_launch(source_id, *, include_disabled_source=False, append_to_today=True):
-        launched_detail.update(
+    def fake_launch(source_id, *, include_disabled_source=False, append_to_today=True, include_seen=False):
+        launched_detail.append(
             {
                 "source_id": source_id,
                 "include_disabled_source": include_disabled_source,
                 "append_to_today": append_to_today,
+                "include_seen": include_seen,
             }
         )
         return FakeRecord()
 
     class ReadyReadiness:
         readiness_status = "ready"
+        readiness_summary = "Ready."
         blockers = []
+        warnings = []
+        checks = {}
+        last_checked_at = "2026-06-21T10:00:00+00:00"
+        dry_run_job_count = 1
+        dry_run_warning_count = 0
+        dry_run_warnings = []
+        dry_run_capability_checks = []
+        dry_run_pagination_unique_jobs_from_fetched_pages = 1
+        sample_titles = []
 
     monkeypatch.setattr(
         "job_agent.web.source_workflow.SourceExecutionReadinessService",
@@ -1931,17 +2113,114 @@ def test_source_detail_index_and_investigate_actions_redirect(
         ],
     )
     investigate_response = client.post("/sources/eursap-jobs/investigate-all", follow_redirects=False)
+    detail_response = client.get("/sources/eursap-jobs")
+    reingest_response = client.post("/sources/eursap-jobs/reingest-all", follow_redirects=False)
 
     assert index_response.status_code == 303
     assert "Listing+index+refresh+started+for+Eursap+Jobs" in index_response.headers["location"]
     assert launched_index == {"source_id": "eursap-jobs", "source_name": "Eursap Jobs"}
     assert investigate_response.status_code == 303
     assert investigate_response.headers["location"] == "/runs/run-1"
-    assert launched_detail == {
-        "source_id": "eursap-jobs",
-        "include_disabled_source": True,
-        "append_to_today": True,
-    }
+    assert detail_response.status_code == 200
+    assert "Full ingestion" in detail_response.text
+    assert "Re-ingest details" in detail_response.text
+    assert reingest_response.status_code == 303
+    assert reingest_response.headers["location"] == "/runs/run-1"
+    assert launched_detail == [
+        {
+            "source_id": "eursap-jobs",
+            "include_disabled_source": True,
+            "append_to_today": True,
+            "include_seen": False,
+        },
+        {
+            "source_id": "eursap-jobs",
+            "include_disabled_source": True,
+            "append_to_today": True,
+            "include_seen": True,
+        },
+    ]
+
+
+def test_source_detail_warns_and_resets_when_latest_run_fields_are_missing(
+    client: TestClient,
+    project_root: Path,
+) -> None:
+    from job_agent.models import Job
+    from job_agent.services.execution_source_service import ExecutionSourceService
+    from job_agent.services.source_listing_index_store import SourceListingIndexStore
+    from job_agent.services.source_registry_service import SourceRegistryService
+    from job_agent.services.source_run_field_health_service import (
+        SourceRunFieldHealthRecord,
+        SourceRunFieldHealthService,
+    )
+
+    source = SourceRegistryService(project_root).get_source("eursap-jobs")
+    warning_source = SourceRegistryService(project_root).get_source("whitehall-sap-contract")
+    ExecutionSourceService(project_root).create_or_update_recipe_source(source, enabled=True)
+    SourceListingIndexStore(project_root).record_index(
+        source_id=source.id,
+        source_name=source.name,
+        jobs=[
+            Job(
+                title="SAP Basis Consultant",
+                source=source.name,
+                source_id=source.id,
+                url="https://eursap.eu/jobs/sap-basis",
+            )
+        ],
+    )
+    SourceRunFieldHealthService(project_root).save(
+        SourceRunFieldHealthRecord(
+            source_id=source.id,
+            source_name=source.name,
+            status="needs_relearn",
+            summary="Latest run checked 1 job(s), but required field coverage failed: description.",
+            job_count=1,
+            required_missing_fields=["description"],
+            description_present_count=0,
+            description_strong_count=0,
+            average_description_length=0,
+        )
+    )
+    SourceRunFieldHealthService(project_root).save(
+        SourceRunFieldHealthRecord(
+            source_id=warning_source.id,
+            source_name=warning_source.name,
+            status="warning",
+            summary="Latest run checked 2 job(s). Some configured fields were missing from every job: company.",
+            job_count=2,
+            advisory_missing_fields=["company"],
+            description_present_count=2,
+            description_strong_count=2,
+            average_description_length=220,
+        )
+    )
+
+    overview = client.get("/sources")
+    overview_fragment = client.get("/api/sources/overview").json()["overview_html"]
+    detail = client.get("/sources/eursap-jobs")
+    response = client.post("/sources/eursap-jobs/learned-state/reset", follow_redirects=False)
+
+    assert overview.status_code == 200
+    assert "1 source needs relearning" in overview.text
+    assert "1 field warning" in overview.text
+    assert "Needs relearning" in overview.text
+    assert "Latest-run field warning" in overview.text
+    assert "Latest run checked 1 job(s), but required field coverage failed: description." in overview.text
+    assert "Descriptions 0/1" in overview.text
+    assert "/sources/eursap-jobs/learned-state/reset" in overview.text
+    assert "Needs relearning" in overview_fragment
+    assert "Latest-run field warning" in overview_fragment
+    assert detail.status_code == 200
+    assert "Latest Run Field Health" in detail.text
+    assert "Reset learned state" in detail.text
+    assert response.status_code == 303
+    assert "Learned+source+state+reset" in response.headers["location"]
+    reset_source = SourceRegistryService(project_root).get_source("eursap-jobs")
+    assert reset_source.recipe_path == ""
+    assert reset_source.kind == "job_board"
+    assert ExecutionSourceService(project_root).find_by_source_id("eursap-jobs") is None
 
 
 def test_source_detail_index_and_investigate_actions_require_ready_source(
@@ -1969,11 +2248,70 @@ def test_source_detail_index_and_investigate_actions_require_ready_source(
 
     index_response = client.post("/sources/eursap-jobs/index-listings", follow_redirects=False)
     investigate_response = client.post("/sources/eursap-jobs/investigate-all", follow_redirects=False)
+    reingest_response = client.post("/sources/eursap-jobs/reingest-all", follow_redirects=False)
 
     assert index_response.status_code == 303
     assert "No+saved+source+test+readiness+result" in index_response.headers["location"]
     assert investigate_response.status_code == 303
     assert "No+saved+source+test+readiness+result" in investigate_response.headers["location"]
+    assert reingest_response.status_code == 303
+    assert "No+saved+source+test+readiness+result" in reingest_response.headers["location"]
+    assert launched == {"index": False, "detail": False}
+
+
+def test_source_detail_ingestion_actions_require_connected_session(
+    monkeypatch: pytest.MonkeyPatch,
+    client: TestClient,
+    project_root: Path,
+) -> None:
+    from job_agent.paths import resolve_project_path
+    from job_agent.services.source_registry_service import SourceRegistryService
+
+    source = SourceRegistryService(project_root).get_source("eursap-jobs")
+    recipe_path = resolve_project_path(project_root, source.recipe_path)
+    recipe_path.write_text(
+        "source_name: Eursap Jobs\n"
+        "mode: static_html\n"
+        "access:\n"
+        "  requires_session: true\n"
+        "  session_scope: eursap.eu\n"
+        "listing:\n"
+        "  card_selector: article.job-card\n"
+        "  title_selector: a\n"
+        "  link_selector: a\n",
+        encoding="utf-8",
+    )
+    launched = {"index": False, "detail": False}
+    monkeypatch.setattr(
+        "job_agent.web.routers.sources.runtime.launch_source_listing_index",
+        lambda *args, **kwargs: launched.update(index=True),
+    )
+    monkeypatch.setattr(
+        "job_agent.web.routers.sources.runtime.launch_source_detail_run",
+        lambda *args, **kwargs: launched.update(detail=True),
+    )
+
+    overview_response = client.get("/sources")
+    detail_response = client.get("/sources/eursap-jobs")
+    session_response = client.get("/sources/eursap-jobs/session")
+    index_response = client.post("/sources/eursap-jobs/index-listings", follow_redirects=False)
+    investigate_response = client.post("/sources/eursap-jobs/investigate-all", follow_redirects=False)
+    reingest_response = client.post("/sources/eursap-jobs/reingest-all", follow_redirects=False)
+
+    assert overview_response.status_code == 200
+    assert "Needs login" in overview_response.text
+    assert "/sources/eursap-jobs/session" in overview_response.text
+    assert detail_response.status_code == 200
+    assert "Refresh source session" in detail_response.text
+    assert "Connect session" in detail_response.text
+    assert session_response.status_code == 200
+    assert "Needs login" in session_response.text
+    assert index_response.status_code == 303
+    assert "requires+a+connected+session" in index_response.headers["location"]
+    assert investigate_response.status_code == 303
+    assert "requires+a+connected+session" in investigate_response.headers["location"]
+    assert reingest_response.status_code == 303
+    assert "requires+a+connected+session" in reingest_response.headers["location"]
     assert launched == {"index": False, "detail": False}
 
 

@@ -18,6 +18,8 @@ class AiSearchEvaluation:
     summary: str = ""
     recommended_angle: str = ""
     fit_confidence: str = ""
+    match_score: int | None = None
+    employment_conditions: dict[str, Any] = field(default_factory=dict)
     risk_flags: list[str] = field(default_factory=list)
     key_profile_evidence: list[str] = field(default_factory=list)
     should_prioritize: bool = False
@@ -30,6 +32,8 @@ class AiSearchEvaluation:
             "ai_summary": self.summary,
             "ai_recommended_angle": self.recommended_angle,
             "ai_fit_confidence": self.fit_confidence,
+            "ai_match_score": self.match_score,
+            "ai_employment_conditions": self.employment_conditions,
             "ai_risk_flags": self.risk_flags,
             "ai_key_profile_evidence": self.key_profile_evidence,
             "ai_should_prioritize": self.should_prioritize,
@@ -97,6 +101,9 @@ def should_ai_evaluate_job(
     highlight_reasons: list[str],
 ) -> bool:
     policy = normalize_ai_review_policy(profile)
+    has_description = bool(normalize_text(job.description) or normalize_text(job.raw_text))
+    if not has_description:
+        return False
     if match.category == "excluded":
         return bool(policy["evaluate_excluded_with_triggers"] and match.review_triggers)
     if match.total_score < int(policy["min_score"]) and not match.review_triggers:
@@ -127,6 +134,8 @@ def parse_ai_search_response(text: str) -> AiSearchEvaluation:
         summary=str(data.get("summary", "")).strip(),
         recommended_angle=str(data.get("recommended_angle", "")).strip(),
         fit_confidence=_normalized_confidence(data.get("fit_confidence", "")),
+        match_score=_score_value(data.get("match_score")),
+        employment_conditions=_dict_from_value(data.get("employment_conditions", {})),
         risk_flags=_list_from_value(data.get("risk_flags", []))[:6],
         key_profile_evidence=_list_from_value(data.get("key_profile_evidence", []))[:6],
         should_prioritize=bool(data.get("should_prioritize", False)),
@@ -151,6 +160,17 @@ def _normalized_confidence(value: Any) -> str:
     return text if text in {"high", "medium", "low"} else "medium"
 
 
+def _score_value(value: Any) -> int | None:
+    try:
+        return max(0, min(150, int(value)))
+    except (TypeError, ValueError):
+        return None
+
+
+def _dict_from_value(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
 def _list_from_value(value: Any) -> list[str]:
     if isinstance(value, list):
         return [str(item).strip() for item in value if str(item).strip()]
@@ -171,6 +191,7 @@ def _profile_context(profile: dict[str, Any]) -> dict[str, Any]:
         "match_review": profile.get("match_review", {}),
         "ai_review_policy": profile.get("ai_review_policy", {}),
         "language_policy": profile.get("language_policy", {}),
+        "employment_conditions": profile.get("employment_conditions", {}),
         "highlighting": profile.get("highlighting", {}),
     }
 
@@ -199,7 +220,9 @@ Highlight reasons:
 Return only valid JSON with:
 summary: 1-3 sentences for triage.
 recommended_angle: concise positioning advice.
+match_score: integer 0-150 for how well the supplied CV/profile evidence satisfies the posted requirements.
 fit_confidence: high, medium, or low.
+employment_conditions: object with best-effort values for employment_type, remote, location, contract_length, compensation, and languages.
 risk_flags: list of short risks.
 key_profile_evidence: list of 2-4 profile evidence bullets.
 should_prioritize: boolean.

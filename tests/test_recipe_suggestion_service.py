@@ -230,6 +230,22 @@ def test_refinement_retries_after_schema_valid_poor_extraction(project_root: Pat
     assert result.attempts[1].quality_status == "good"
 
 
+def test_refinement_rejects_detail_follow_without_detail_extraction_plan(project_root: Path) -> None:
+    artifact = _write_artifact(project_root, page_html=_job_card_page())
+    (artifact / "detail-sample.html").write_text(
+        "<html><body><main><h1>SAP ABAP Consultant</h1><p>Full detail text.</p></main></body></html>",
+        encoding="utf-8",
+    )
+    recipe_yaml = VALID_RECIPE_YAML + "\ndetail:\n  follow: true\n  max_detail_pages: 5\n"
+    client = FakeRecipeSuggestionClient(_llm_response(recipe_yaml))
+
+    result = suggest_recipe_with_refinement(artifact, llm_client=client, max_attempts=1)
+
+    assert result.accepted is False
+    assert result.attempts[0].quality_status == "poor"
+    assert any("no detail selectors" in warning for warning in result.attempts[0].quality_warnings)
+
+
 def test_refinement_retries_when_table_headers_contradict_fields(project_root: Path) -> None:
     artifact = _write_artifact(project_root, page_html=_accuro_like_table_page())
     client = FakeRecipeSuggestionClient(

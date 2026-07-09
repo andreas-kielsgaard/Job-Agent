@@ -10,10 +10,12 @@ from job_agent.application_status_store import APPLICATION_STATUSES
 from job_agent.llm import ExternalAgentService, LlmRequest
 from job_agent.paths import output_dir
 from job_agent.services.job_context_copy_service import JobContextCopyService
+from job_agent.services.match_update_service import MatchUpdateService
 from job_agent.services.material_service import MaterialUpdate
 from job_agent.services.review_bundle_service import ReviewBundleService
 from job_agent.web.dependencies import (
     application_status_store,
+    application_tracker_service,
     current_root,
     material_service,
     package_service,
@@ -43,6 +45,7 @@ def jobs_page(request: Request) -> HTMLResponse:
         "posting_status_includes": _filter_values(request, "posting_status_include"),
         "posting_status_excludes": _filter_values(request, "posting_status_exclude"),
         "ai_prioritized": bool(request.query_params.get("ai_prioritized")),
+        "show_condition_excluded": bool(request.query_params.get("show_condition_excluded")),
         "dedupe": request.query_params.get("dedupe", "1") != "0",
     }
     return_to = str(request.url.path)
@@ -109,6 +112,8 @@ def _set_job_application_status(
         )
         store.update_status(job_id, status, notes=notes, not_interesting_reason=not_interesting_reason)
     package_service().refresh_package_status(job_id, status)
+    if status == "applied":
+        application_tracker_service().ensure_from_job(job_id)
 
 
 @router.post("/api/jobs/bulk-status")
@@ -230,9 +235,9 @@ def update_job_status(
 
 def _url_with_query(url: str, **params: str) -> str:
     split = urlsplit(url)
-    query = dict(parse_qsl(split.query, keep_blank_values=True))
-    query.update({key: value for key, value in params.items() if value})
-    return urlunsplit((split.scheme, split.netloc, split.path, urlencode(query), split.fragment))
+    existing = [(key, value) for key, value in parse_qsl(split.query, keep_blank_values=True) if key not in params]
+    additions = [(key, value) for key, value in params.items() if value]
+    return urlunsplit((split.scheme, split.netloc, split.path, urlencode([*existing, *additions]), split.fragment))
 
 
 @router.post("/api/jobs/{job_id}/materials")
@@ -355,3 +360,91 @@ def batch_generate_job_materials(
     separator = "&" if "?" in return_to else "?"
     query = urlencode({"generated": result.succeeded, "failed": result.failed})
     return RedirectResponse(url=f"{return_to}{separator}{query}", status_code=303)
+
+
+@router.post("/api/jobs/recalculate-matches")
+def recalculate_filtered_matches(return_to: str = Form("/jobs")) -> RedirectResponse:
+    packages = _filtered_package_rows(return_to)
+    result = MatchUpdateService(current_root()).recalculate_deterministic(packages)
+    return RedirectResponse(
+        url=_url_with_query(
+            return_to,
+            recalculated=str(result.updated),
+            skipped=str(result.skipped),
+            failed=str(result.failed),
+        ),
+        status_code=303,
+    )
+
+
+@router.post("/api/jobs/apply-ai-matching")
+def apply_ai_matching_to_filtered_jobs(
+    return_to: str = Form("/jobs"),
+    llm_model: str = Form(""),
+) -> RedirectResponse:
+    packages = _filtered_package_rows(return_to)
+    try:
+        result = MatchUpdateService(current_root()).apply_ai_matching(packages, llm_model=llm_model)
+    except ValueError as exc:
+        return RedirectResponse(url=_url_with_query(return_to, warning=str(exc)), status_code=303)
+    return RedirectResponse(
+        url=_url_with_query(
+            return_to,
+            ai_matched=str(result.updated),
+            skipped=str(result.skipped),
+            failed=str(result.failed),
+        ),
+        status_code=303,
+    )
+
+
+def _filtered_package_rows(return_to: str) -> list[dict]:
+    filters = _filters_from_url(return_to)
+    view = build_jobs_view(filters, current_root())
+    rows = view.get("jobs", [])
+    return [row for row in rows if row.get("has_package")]
+
+
+def _filters_from_url(url: str) -> dict[str, object]:
+    query = dict_list(urlsplit(url).query)
+    return {
+        "app_status_includes": _query_values(query, "app_status_include", legacy="app_status"),
+        "app_status_excludes": _query_values(query, "app_status_exclude"),
+        "category_includes": _query_values(query, "category_include", legacy="category"),
+        "category_excludes": _query_values(query, "category_exclude"),
+        "source_id_includes": _query_values(query, "source_id_include", legacy="source_id"),
+        "source_id_excludes": _query_values(query, "source_id_exclude"),
+        "run_id_includes": _query_values(query, "run_id_include", legacy="run_id"),
+        "run_id_excludes": _query_values(query, "run_id_exclude"),
+        "date_from": (query.get("date_from") or [""])[0],
+        "date_to": (query.get("date_to") or [""])[0],
+        "source": (query.get("source") or [""])[0],
+        "material_status_includes": _query_values(query, "material_status_include", legacy="material_status"),
+        "material_status_excludes": _query_values(query, "material_status_exclude"),
+        "posting_status_includes": _query_values(query, "posting_status_include"),
+        "posting_status_excludes": _query_values(query, "posting_status_exclude"),
+        "ai_prioritized": bool(query.get("ai_prioritized")),
+        "show_condition_excluded": bool(query.get("show_condition_excluded")),
+        "dedupe": (query.get("dedupe") or ["1"])[0] != "0",
+    }
+
+
+def dict_list(query: str) -> dict[str, list[str]]:
+    result: dict[str, list[str]] = {}
+    for key, value in parse_qsl(query, keep_blank_values=True):
+        result.setdefault(key, []).append(value)
+    return result
+
+
+def _query_values(query: dict[str, list[str]], name: str, *, legacy: str = "") -> list[str]:
+    values = [value for value in query.get(name, []) if value]
+    if legacy:
+        values.extend(value for value in query.get(legacy, []) if value)
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        if value in seen:
+            continue
+        result.append(value)
+        seen.add(value)
+    return result

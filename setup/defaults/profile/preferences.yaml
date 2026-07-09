@@ -36,17 +36,25 @@ language_policy:
   fluent: []
   exclude_if_mandatory_unmatched: false
 
+employment_conditions:
+  employment_type:
+    contract: not_important
+    employed: not_important
+    unknown: not_important
+  remote:
+    remote: not_important
+    hybrid: not_important
+    onsite: not_important
+    unknown: not_important
+  locations: []
+  contract_length: []
+  compensation: []
+  languages: []
+
 highlighting:
   core_match_groups: []
   min_core_matches: 3
   high_rate_threshold: 700
 
 match_engine:
-  remote_policy: neutral
-  permanent_policy: ignore
-  permanent_penalty: -25
-  technical_cap: 55
-  module_cap: 25
-  technical_keyword_groups: []
-  module_keyword_groups: []
-  contract_keyword_groups: []
+  keyword_groups: []

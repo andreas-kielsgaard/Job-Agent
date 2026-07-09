@@ -101,6 +101,8 @@ KNOWN_DETAIL_URL_TOKENS = (
     "/opportunity/",
     "/openings/",
     "/opening/",
+    "/job-detail/",
+    "/jobs/view/",
     "/projects/",
     "/project/",
     "/roles/",
@@ -371,24 +373,87 @@ def build_recipe_blueprint(
         field_observations["detail_label_values"] = detail_field_observations
 
     validation_errors: list[str] = []
+    mapped_recipe: JobBoardRecipe | None = None
     try:
-        job_board_recipe_from_mapping(recipe, label="recipe_blueprint")
+        mapped_recipe = job_board_recipe_from_mapping(recipe, label="recipe_blueprint")
     except ValueError as exc:
         validation_errors.append(str(exc))
+    extraction_quality = (
+        check_recipe_against_html(html, base_url, mapped_recipe, follow_detail=False)
+        if mapped_recipe is not None and not validation_errors
+        else None
+    )
+    quality_warnings = _blueprint_quality_warnings(extraction_quality)
+    blocking_quality = _blueprint_quality_is_blocking(extraction_quality)
     observation_warnings = _field_observation_warnings(field_observations)
+    status = "draft" if not validation_errors and not blocking_quality else "not_recommended"
     result = {
-        "status": "draft",
-        "confidence": "high" if not validation_errors and int(card["match_count"] or 0) >= 3 else "medium",
-        "recipe": recipe,
+        "status": status,
+        "confidence": _blueprint_confidence(
+            validation_errors=validation_errors,
+            card_match_count=int(card["match_count"] or 0),
+            extraction_quality=extraction_quality,
+            blocking_quality=blocking_quality,
+        ),
+        "recipe": recipe if status == "draft" else {},
         "listing_selector_evidence": card,
         "detail_sample_url": detail_url,
         "detail_sample_captured": bool(detail_html),
         "validation_errors": validation_errors,
-        "warnings": validation_errors + observation_warnings,
+        "warnings": validation_errors + quality_warnings + observation_warnings,
     }
+    if extraction_quality is not None:
+        result["extraction_quality"] = quality_as_dict(extraction_quality)
     if field_observations:
         result["field_observations"] = field_observations
     return result
+
+
+def _blueprint_confidence(
+    *,
+    validation_errors: list[str],
+    card_match_count: int,
+    extraction_quality: Any,
+    blocking_quality: bool,
+) -> str:
+    if validation_errors or blocking_quality:
+        return "low"
+    if extraction_quality is None:
+        return "medium"
+    if extraction_quality.average_description_length < 40:
+        return "medium"
+    if card_match_count >= 3 and extraction_quality.candidate_count >= 3 and extraction_quality.useful_title_count >= 3:
+        return "high"
+    return "medium"
+
+
+def _blueprint_quality_is_blocking(extraction_quality: Any) -> bool:
+    if extraction_quality is None:
+        return False
+    if extraction_quality.candidate_count == 0:
+        return True
+    if extraction_quality.useful_title_count == 0:
+        return True
+    if extraction_quality.unique_url_count == 0:
+        return True
+    return extraction_quality.generic_title_count >= extraction_quality.candidate_count
+
+
+def _blueprint_quality_warnings(extraction_quality: Any) -> list[str]:
+    if extraction_quality is None:
+        return []
+    warnings = list(extraction_quality.warnings)
+    if extraction_quality.candidate_count == 0:
+        warnings.append("Generated recipe blueprint extracted 0 jobs from captured HTML.")
+    elif extraction_quality.useful_title_count == 0:
+        warnings.append("Generated recipe blueprint extracted no useful job titles.")
+    elif extraction_quality.unique_url_count == 0:
+        warnings.append("Generated recipe blueprint extracted no unique job URLs.")
+    elif extraction_quality.generic_title_count >= extraction_quality.candidate_count:
+        warnings.append("Generated recipe blueprint extracted only generic titles.")
+    elif extraction_quality.average_description_length < 40:
+        warnings.append("Generated recipe blueprint extracted very short descriptions; verify the card selector.")
+    return warnings
 
 
 def _feed_recipe_blueprint(
@@ -1009,10 +1074,24 @@ def audit_recipe_selectors(html: str, base_url: str, recipe: JobBoardRecipe | No
         selectors = _selectors(selector_value)
         if not selectors:
             continue
-        count = sum(1 for card in first_cards if any(card.select(selector) for selector in selectors))
+        count = sum(1 for card in first_cards if any(_selected_elements(card, selector) for selector in selectors))
         audit.field_match_counts[field_name] = count
         if field_name in {"title_selector", "link_selector"} and count == 0:
             audit.warnings.append(f"{field_name} matched 0 elements inside first cards.")
+        if field_name == "title_selector" and count:
+            useful_title_count = sum(
+                1 for card in first_cards if any(_selected_useful_title_text(card, selector) for selector in selectors)
+            )
+            if useful_title_count == 0:
+                audit.warnings.append(
+                    "title_selector matched elements inside first cards but produced no useful job title text."
+                )
+        if field_name == "link_selector" and count:
+            href_count = sum(
+                1 for card in first_cards if any(_selector_has_href(card, selector) for selector in selectors)
+            )
+            if href_count == 0:
+                audit.warnings.append("link_selector matched elements inside first cards but produced no href.")
     audit.card_text_previews = [_preview(card.get_text(" ", strip=True), 400) for card in first_cards]
     jobs = extract_jobs_with_recipe(html, base_url, recipe)
     if not jobs:
@@ -1075,7 +1154,24 @@ def _detail_sample_url(html: str, base_url: str, recipe: JobBoardRecipe | None) 
             return jobs[0].url
     soup = BeautifulSoup(html, "html.parser")
     links = _job_detail_links(soup, base_url)
-    return links[0][1] if links else ""
+    return _best_detail_sample_url(links, base_url)
+
+
+def _best_detail_sample_url(links: list[tuple[Tag, str, str]], base_url: str) -> str:
+    if not links:
+        return ""
+    base_host = urlparse(base_url).netloc.lower()
+
+    def score(item: tuple[Tag, str, str]) -> int:
+        link, absolute_url, token = item
+        parsed = urlparse(absolute_url)
+        text = link.get_text(" ", strip=True)
+        same_host_score = 20 if parsed.netloc.lower() == base_host else 0
+        token_score = 12 if token in {"/job-detail/", "/jobs/view/", "/job/", "/jobs/"} else 0
+        text_score = 2 if title_quality(text) == "useful" else 0
+        return same_host_score + token_score + text_score
+
+    return max(links, key=score)[1]
 
 
 def _best_listing_card(soup: BeautifulSoup, base_url: str) -> dict[str, Any] | None:
@@ -1153,7 +1249,7 @@ def _best_listing_card(soup: BeautifulSoup, base_url: str) -> dict[str, Any] | N
     best = max(scored.values(), key=lambda item: item["score"])
     best_cards = soup.select(best["selector"])[:5]
     best["link_selector"] = _link_selector_for_card(best_cards[0], best["url_token"])
-    best["title_selector"] = _title_selector_for_card(best_cards[0], best["link_selector"])
+    best["title_selector"] = _title_selector_for_card(best_cards[0], best["link_selector"], best["url_token"])
     if best_cards and best_cards[0].name == "tr":
         field_selectors, field_observations = _table_listing_field_selectors(best_cards[0], best_cards)
         best["field_selectors"] = field_selectors
@@ -1341,7 +1437,7 @@ def _job_detail_links(
     infer_families: bool = False,
 ) -> list[tuple[Tag, str, str]]:
     result: list[tuple[Tag, str, str]] = []
-    seen: set[str] = set()
+    seen: dict[str, int] = {}
     tokens = list(extra_tokens or [])
     if infer_families and isinstance(root, BeautifulSoup):
         tokens.extend(family.token for family in _inferred_detail_link_families(root, base_url))
@@ -1355,11 +1451,17 @@ def _job_detail_links(
         if _same_url_without_fragment(absolute_url, base_url):
             continue
         token = _detail_url_token(absolute_url, extra_tokens=tokens)
-        if not token or absolute_url in seen:
+        if not token:
             continue
         if _link_text_is_noise(link.get_text(" ", strip=True), href):
             continue
-        seen.add(absolute_url)
+        if absolute_url in seen:
+            existing_index = seen[absolute_url]
+            existing_link = result[existing_index][0]
+            if _job_link_title_score(link) > _job_link_title_score(existing_link):
+                result[existing_index] = (link, absolute_url, token)
+            continue
+        seen[absolute_url] = len(result)
         result.append((link, absolute_url, token))
     return result
 
@@ -1382,6 +1484,14 @@ def _link_text_is_noise(text: str, href: str) -> bool:
     return link_text_is_noise(text, href)
 
 
+def _job_link_title_score(link: Tag) -> int:
+    text = re.sub(r"\s+", " ", link.get_text(" ", strip=True)).strip()
+    href = str(link.get("href") or "")
+    if not text or _link_text_is_noise(text, href):
+        return 0
+    return 2 if title_quality(text) == "useful" else 1
+
+
 def _url_is_probable_detail_url(path: str) -> bool:
     return is_probable_detail_url(path)
 
@@ -1394,25 +1504,45 @@ def _link_selector_for_card(card: Tag, token: str) -> str:
     ]
     if not links:
         return f'a[href*="{token}"]' if token else "a"
-    link = links[0]
+    link = _best_job_title_link(links) or links[0]
+    return _selector_for_link(card, link, token)
+
+
+def _selector_for_link(card: Tag, link: Tag, token: str) -> str:
+    href_filter = f'[href*="{token}"]' if token else "[href]"
     if card.name == "tr":
         cell = link.find_parent("td")
         if cell and cell.parent:
             cells = [child for child in cell.parent.find_all("td", recursive=False)]
             if cell in cells:
-                return f'td:nth-of-type({cells.index(cell) + 1}) a[href*="{token}"]'
+                return f"td:nth-of-type({cells.index(cell) + 1}) a{href_filter}"
     parent = link.parent if isinstance(link.parent, Tag) else None
     if parent and parent.name in {"h2", "h3", "h4"}:
         return f"{parent.name} a"
     classes = [str(item) for item in link.get("class", []) if _class_is_stable(str(item))]
+    prioritized_classes = [item for item in classes if _class_suggests_title_link(item)]
+    for class_name in [*prioritized_classes, *classes]:
+        selector = f"a.{class_name}{href_filter}"
+        if _selector_has_useful_title(card, selector):
+            return selector
     if classes:
-        return f'a.{".".join(classes[:2])}[href*="{token}"]'
-    return f'a[href*="{token}"]' if token else "a"
+        return f"a.{'.'.join(classes[:2])}{href_filter}"
+    return f'a[href*="{token}"]' if token else "a[href]"
 
 
-def _title_selector_for_card(card: Tag, link_selector: str) -> str:
+def _title_selector_for_card(card: Tag, link_selector: str, token: str = "") -> str:
     if _selector_has_useful_title(card, link_selector):
         return link_selector
+    links = [
+        link
+        for link, _url, link_token in _job_detail_links(card, "https://example.com", extra_tokens=[token])
+        if not token or link_token == token
+    ]
+    title_link = _best_job_title_link(links)
+    if title_link:
+        selector = _selector_for_link(card, title_link, token)
+        if _selector_has_useful_title(card, selector):
+            return selector
     for heading in card.find_all(["h1", "h2", "h3", "h4"], recursive=True):
         selector = str(heading.name or "")
         if _selector_has_useful_title(card, selector):
@@ -1435,9 +1565,25 @@ def _title_selector_for_card(card: Tag, link_selector: str) -> str:
     return link_selector or "a"
 
 
+def _best_job_title_link(links: list[Tag]) -> Tag | None:
+    return next((link for link in links if _link_has_useful_title(link)), None)
+
+
+def _link_has_useful_title(link: Tag) -> bool:
+    text = _clean_selected_text(link)
+    href = str(link.get("href") or "")
+    return bool(text and title_quality(text) == "useful" and not _link_text_is_noise(text, href))
+
+
+def _class_suggests_title_link(value: str) -> bool:
+    normalized = value.lower()
+    return normalized in {"font-semibold", "line-clamp-1", "text-xl"} or any(
+        term in normalized for term in ["title", "job-title", "role-title", "position"]
+    )
+
+
 def _selector_has_useful_title(card: Tag, selector: str) -> bool:
-    text = _selected_text(card, selector)
-    return bool(text and title_quality(text) == "useful")
+    return bool(_selected_useful_title_text(card, selector))
 
 
 def _listing_recipe_from_card(card: dict[str, Any]) -> dict[str, Any]:
@@ -1920,6 +2066,8 @@ def _detail_recipe(detail_html: str) -> tuple[dict[str, Any], list[dict[str, Any
             if soup.select(selector):
                 detail[field_name] = selector
                 break
+    if not any(key for key in detail if key not in {"follow", "max_detail_pages", "request_delay_seconds"}):
+        return {}, label_observations
     return detail, label_observations
 
 
@@ -2181,10 +2329,46 @@ def _likely_noise(tag: Tag) -> bool:
 
 
 def _selected_text(root: Tag, selector: str) -> str:
+    for match in _selected_elements(root, selector):
+        text = _clean_selected_text(match)
+        if text:
+            return text
+    return ""
+
+
+def _selected_useful_title_text(root: Tag, selector: str) -> str:
+    fallback = ""
+    for match in _selected_elements(root, selector):
+        text = _clean_selected_text(match)
+        if not text:
+            continue
+        if not fallback:
+            fallback = text
+        href = str(match.get("href") or "")
+        if title_quality(text) == "useful" and not _link_text_is_noise(text, href):
+            return text
+        if title_quality(fallback) == "generic" and title_quality(text) != "generic":
+            fallback = text
+    return "" if title_quality(fallback) == "generic" else fallback
+
+
+def _selector_has_href(root: Tag, selector: str) -> bool:
+    return any(match.get("href") or match.select_one("[href]") for match in _selected_elements(root, selector))
+
+
+def _selected_elements(root: Tag, selector: str) -> list[Tag]:
+    elements: list[Tag] = []
     if _tag_matches_selector(root, selector):
-        return root.get_text(" ", strip=True)
-    match = root.select_one(selector)
-    return match.get_text(" ", strip=True) if match else ""
+        elements.append(root)
+    try:
+        elements.extend(match for match in root.select(selector) if isinstance(match, Tag) and match is not root)
+    except Exception:
+        return elements
+    return elements
+
+
+def _clean_selected_text(tag: Tag) -> str:
+    return re.sub(r"\s+", " ", tag.get_text(" ", strip=True)).strip()
 
 
 def _tag_matches_selector(tag: Tag, selector: str) -> bool:

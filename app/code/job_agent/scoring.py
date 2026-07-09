@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from copy import deepcopy
+from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any
 
@@ -11,8 +12,12 @@ LANGUAGE_NAMES = ("dutch", "french", "portuguese", "german")
 REMOTE_TERMS = ("remote", "hybrid", "work from home", "wfh")
 PERMANENT_TERMS = ("permanent", "permanent employee", "full-time employee", "perm role")
 RULE_MODES = {"bonus", "required"}
+KEYWORD_RULE_MODES = {"main", "bonus", "detractor"}
 REMOTE_POLICIES = {"required", "strong_preference", "slight_preference", "neutral"}
 PERMANENT_POLICIES = {"exclude", "penalize", "ignore"}
+CONDITION_PREFERENCES = {"required", "preferred", "not_preferred", "not_important", "excluded"}
+REMOTE_CONDITION_KEYS = ("remote", "hybrid", "onsite", "unknown")
+EMPLOYMENT_TYPE_KEYS = ("contract", "employed", "unknown")
 
 DEFAULT_MATCH_ENGINE_CONFIG: dict[str, Any] = {
     "remote_policy": "neutral",
@@ -20,9 +25,28 @@ DEFAULT_MATCH_ENGINE_CONFIG: dict[str, Any] = {
     "permanent_penalty": -25,
     "technical_cap": 55,
     "module_cap": 25,
+    "keyword_groups": [],
     "technical_keyword_groups": [],
     "module_keyword_groups": [],
     "contract_keyword_groups": [],
+}
+
+DEFAULT_EMPLOYMENT_CONDITIONS_CONFIG: dict[str, Any] = {
+    "employment_type": {
+        "contract": "not_important",
+        "employed": "not_important",
+        "unknown": "not_important",
+    },
+    "remote": {
+        "remote": "not_important",
+        "hybrid": "not_important",
+        "onsite": "not_important",
+        "unknown": "not_important",
+    },
+    "locations": [],
+    "contract_length": [],
+    "compensation": [],
+    "languages": [],
 }
 
 DEFAULT_AI_REVIEW_POLICY: dict[str, Any] = {
@@ -33,6 +57,41 @@ DEFAULT_AI_REVIEW_POLICY: dict[str, Any] = {
     "trigger_on_low_source_confidence": True,
     "evaluate_excluded_with_triggers": False,
 }
+
+
+@dataclass(frozen=True)
+class MatchmakingSettings:
+    match_engine: dict[str, Any]
+    employment_conditions: dict[str, Any]
+    language_policy: dict[str, Any]
+    match_review: dict[str, Any]
+
+
+def matchmaking_settings_from_profile(profile: dict[str, Any]) -> MatchmakingSettings:
+    return MatchmakingSettings(
+        match_engine=match_engine_config_from_profile(profile),
+        employment_conditions=employment_conditions_config_from_profile(profile),
+        language_policy=normalize_language_policy(profile),
+        match_review=normalize_match_review_config(profile),
+    )
+
+
+def matchmaking_settings_from_parts(
+    profile: dict[str, Any],
+    *,
+    match_engine: dict[str, Any] | None = None,
+    employment_conditions: dict[str, Any] | None = None,
+) -> MatchmakingSettings:
+    return MatchmakingSettings(
+        match_engine=normalize_match_engine_config(
+            match_engine if match_engine is not None else profile.get("match_engine", {})
+        ),
+        employment_conditions=normalize_employment_conditions_config(
+            employment_conditions if employment_conditions is not None else profile.get("employment_conditions", {})
+        ),
+        language_policy=normalize_language_policy(profile),
+        match_review=normalize_match_review_config(profile),
+    )
 
 
 def default_match_engine_config() -> dict[str, Any]:
@@ -49,6 +108,7 @@ def normalize_match_engine_config(config: dict[str, Any] | None = None) -> dict[
     settings["permanent_penalty"] = _int_value(config.get("permanent_penalty"), settings["permanent_penalty"])
     settings["technical_cap"] = max(0, _int_value(config.get("technical_cap"), settings["technical_cap"]))
     settings["module_cap"] = max(0, _int_value(config.get("module_cap"), settings["module_cap"]))
+    settings["keyword_groups"] = _normalize_keyword_groups(config.get("keyword_groups", []))
     for key in ["technical_keyword_groups", "module_keyword_groups", "contract_keyword_groups"]:
         if key in config:
             settings[key] = _normalize_rules(config.get(key), [])
@@ -57,6 +117,33 @@ def normalize_match_engine_config(config: dict[str, Any] | None = None) -> dict[
 
 def match_engine_config_from_profile(profile: dict[str, Any]) -> dict[str, Any]:
     return normalize_match_engine_config(profile.get("match_engine", {}))
+
+
+def default_employment_conditions_config() -> dict[str, Any]:
+    return deepcopy(DEFAULT_EMPLOYMENT_CONDITIONS_CONFIG)
+
+
+def normalize_employment_conditions_config(config: dict[str, Any] | None = None) -> dict[str, Any]:
+    config = config if isinstance(config, dict) else {}
+    settings = default_employment_conditions_config()
+    employment_type = config.get("employment_type") if isinstance(config.get("employment_type"), dict) else {}
+    remote = config.get("remote") if isinstance(config.get("remote"), dict) else {}
+    settings["employment_type"] = {
+        key: _condition_preference(employment_type.get(key), settings["employment_type"][key])
+        for key in EMPLOYMENT_TYPE_KEYS
+    }
+    settings["remote"] = {
+        key: _condition_preference(remote.get(key), settings["remote"][key]) for key in REMOTE_CONDITION_KEYS
+    }
+    settings["locations"] = _normalize_condition_rows(config.get("locations", []), with_kind=True)
+    settings["contract_length"] = _normalize_condition_rows(config.get("contract_length", []))
+    settings["compensation"] = _normalize_compensation_rows(config.get("compensation", []))
+    settings["languages"] = _normalize_condition_rows(config.get("languages", []))
+    return settings
+
+
+def employment_conditions_config_from_profile(profile: dict[str, Any]) -> dict[str, Any]:
+    return normalize_employment_conditions_config(profile.get("employment_conditions", {}))
 
 
 def normalize_match_review_config(profile: dict[str, Any]) -> dict[str, Any]:
@@ -106,32 +193,85 @@ def normalize_language_policy(profile: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def score_job(job: Job, profile: dict, today: date | None = None) -> MatchResult:
-    today = today or date.today()
-    settings = match_engine_config_from_profile(profile)
-    review_settings = normalize_match_review_config(profile)
-    language_policy = normalize_language_policy(profile)
+def evaluate_employment_conditions(job: Job, settings: dict[str, Any]) -> dict[str, Any]:
     text = _job_text(job)
-    technical_match, technical_matches, missing_technical = _score_rule_groups(
-        text, settings["technical_keyword_groups"], settings["technical_cap"]
-    )
-    module_match, module_matches, missing_modules = _score_rule_groups(
-        text, settings["module_keyword_groups"], settings["module_cap"]
-    )
-    missing_required_rules = missing_technical + missing_modules
-    language_risk = _language_risk(text, job, language_policy)
-    components = {
-        "technical_match": technical_match,
-        "module_match": module_match,
-        "contract_fit": _contract_fit(text, job, settings),
-        "location_fit": _location_fit(job, profile, settings),
-        "seniority_fit": _seniority_fit(text),
-        "role_interest_fit": _role_interest_fit(text, profile),
-        "language_risk": language_risk,
-        "freshness_risk": _freshness_risk(job, today),
-        "rate_visibility_or_rate_fit": _rate_fit(job),
+    location_text = _location_condition_text(job)
+    employment_type = _employment_type(job, text)
+    remote_type = _remote_condition(job)
+    values = {
+        "employment_type": employment_type,
+        "remote": remote_type,
+        "locations": _matching_location_labels(job, settings["locations"]),
+        "languages": _required_language_terms(text, job, []),
+        "compensation": _compensation_value(job.rate),
+        "contract_length": job.contract_duration if _has_listed_value(job.contract_duration) else "",
     }
-    matched_keywords = _dedupe(technical_matches + module_matches)
+    exclusions: list[str] = []
+    preferences: list[str] = []
+
+    _evaluate_choice_condition("Employment type", employment_type, settings["employment_type"], exclusions, preferences)
+    _evaluate_choice_condition("Remote setup", remote_type, settings["remote"], exclusions, preferences)
+    _evaluate_tag_conditions("Location", location_text, settings["locations"], exclusions, preferences)
+    _evaluate_tag_conditions(
+        "Contract length", job.contract_duration, settings["contract_length"], exclusions, preferences
+    )
+    _evaluate_language_conditions(text, job, settings["languages"], exclusions, preferences)
+    _evaluate_compensation_conditions(job.rate, settings["compensation"], exclusions, preferences)
+
+    return {"exclusions": exclusions, "preferences": preferences, "values": values}
+
+
+def score_job(
+    job: Job,
+    profile: dict,
+    today: date | None = None,
+    matchmaking_settings: MatchmakingSettings | None = None,
+) -> MatchResult:
+    today = today or date.today()
+    matchmaking_settings = matchmaking_settings or matchmaking_settings_from_profile(profile)
+    settings = matchmaking_settings.match_engine
+    review_settings = matchmaking_settings.match_review
+    language_policy = matchmaking_settings.language_policy
+    employment_conditions = matchmaking_settings.employment_conditions
+    text = _job_text(job)
+    condition_evaluation = evaluate_employment_conditions(job, employment_conditions)
+    if settings["keyword_groups"]:
+        (
+            components,
+            matched_keywords,
+            missing_required_rules,
+            proficiency_concerns,
+            technical_matches,
+            module_matches,
+        ) = _score_proficiency_rules(text, settings["keyword_groups"])
+    else:
+        technical_match, technical_matches, missing_technical = _score_rule_groups(
+            text, settings["technical_keyword_groups"], settings["technical_cap"]
+        )
+        module_match, module_matches, missing_modules = _score_rule_groups(
+            text, settings["module_keyword_groups"], settings["module_cap"]
+        )
+        missing_required_rules = missing_technical + missing_modules
+        language_risk = _language_risk(text, job, language_policy)
+        components = {
+            "technical_match": technical_match,
+            "module_match": module_match,
+            "contract_fit": _contract_fit(text, job, settings),
+            "location_fit": _location_fit(job, profile, settings),
+            "seniority_fit": _seniority_fit(text),
+            "role_interest_fit": _role_interest_fit(text, profile),
+            "language_risk": language_risk,
+            "freshness_risk": _freshness_risk(job, today),
+            "rate_visibility_or_rate_fit": _rate_fit(job),
+        }
+        matched_keywords = _dedupe(technical_matches + module_matches)
+        proficiency_concerns = []
+    if settings["keyword_groups"]:
+        language_risk = _language_risk(text, job, language_policy) if language_policy["mode"] == "configured" else 0
+        components["language_risk"] = language_risk
+        components["freshness_risk"] = _freshness_risk(job, today)
+    else:
+        language_risk = _language_risk(text, job, language_policy)
     review_matches = _matching_review_rules(text, review_settings["caveat_rules"])
     review_triggers = [rule["id"] for rule in review_matches if rule["ai_review"]]
     review_trigger_labels = [rule["label"] for rule in review_matches if rule["ai_review"]]
@@ -140,7 +280,10 @@ def score_job(job: Job, profile: dict, today: date | None = None) -> MatchResult
     missing_information: list[str] = []
 
     _add_positive_reasons(components, technical_matches, module_matches, reasons)
+    if settings["keyword_groups"]:
+        _add_proficiency_reasons(components, matched_keywords, reasons)
     concerns.extend(_review_concerns(profile, review_matches))
+    concerns.extend(proficiency_concerns)
     _add_concerns(job, components, text, concerns, missing_required_rules, settings)
     _add_missing(job, missing_information)
 
@@ -148,7 +291,9 @@ def score_job(job: Job, profile: dict, today: date | None = None) -> MatchResult
         job, today, text, settings, missing_required_rules, language_risk, language_policy
     )
     raw_score = sum(components.values())
-    total_score = max(0, min(100, raw_score))
+    total_score = max(0, raw_score)
+    if not settings["keyword_groups"]:
+        total_score = min(100, total_score)
 
     if exclusion_reason:
         category = "excluded"
@@ -179,6 +324,9 @@ def score_job(job: Job, profile: dict, today: date | None = None) -> MatchResult
         deterministic_confidence=_deterministic_confidence(
             category, total_score, concerns, review_triggers, job.source_confidence
         ),
+        condition_exclusions=_dedupe(condition_evaluation["exclusions"]),
+        condition_preferences=_dedupe(condition_evaluation["preferences"]),
+        condition_values=condition_evaluation["values"],
     )
 
 
@@ -220,6 +368,61 @@ def _score_rule_groups(text: str, rules: list[dict[str, Any]], cap: int) -> tupl
         elif rule.get("mode") == "required":
             missing_required.append(label)
     return min(score, cap), matched, missing_required
+
+
+def _score_proficiency_rules(
+    text: str, rules: list[dict[str, Any]]
+) -> tuple[dict[str, int], list[str], list[str], list[str], list[str], list[str]]:
+    main_scores: list[int] = []
+    bonus_scores: list[int] = []
+    detractor_scores: list[int] = []
+    matched: list[str] = []
+    main_matches: list[str] = []
+    bonus_matches: list[str] = []
+    detractor_matches: list[str] = []
+    concerns: list[str] = []
+    mentioned_years = _mentioned_years(text)
+
+    for rule in rules:
+        label = str(rule.get("label", "")).strip()
+        terms = [str(term).strip().lower() for term in rule.get("terms", []) if str(term).strip()]
+        if not label or not terms:
+            continue
+        if not any(_term_matches(text, term) for term in terms):
+            continue
+        mode = str(rule.get("mode") or "main")
+        value = _int_value(rule.get("proficiency"), _int_value(rule.get("score"), 0))
+        matched.append(label)
+        if mode == "main":
+            main_scores.append(value)
+            main_matches.append(label)
+            configured_years = _int_value(rule.get("years"), 0)
+            if configured_years and mentioned_years and mentioned_years > configured_years:
+                concerns.append(
+                    f"{label} is configured with {configured_years} years; posting mentions {mentioned_years}+ years."
+                )
+        elif mode == "bonus":
+            bonus_scores.append(max(0, value))
+            bonus_matches.append(label)
+        elif mode == "detractor":
+            detractor_scores.append(abs(value))
+            detractor_matches.append(label)
+
+    main_average = round(sum(main_scores) / len(main_scores)) if main_scores else 0
+    bonus_boost = max(bonus_scores) if bonus_scores else 0
+    detractor_penalty = max(detractor_scores) if detractor_scores else 0
+    components = {
+        "main_proficiency": main_average,
+        "bonus_boost": bonus_boost,
+        "detractor_penalty": -detractor_penalty,
+    }
+    if not main_matches and (bonus_matches or detractor_matches):
+        concerns.append("Only bonus or detractor keyword rules matched; no main proficiency rule matched.")
+    if detractor_matches:
+        concerns.append("Matched detractor signal: " + ", ".join(detractor_matches[:5]) + ".")
+    reasons_as_technical = main_matches + bonus_matches
+    reasons_as_modules: list[str] = []
+    return components, _dedupe(matched), [], concerns, reasons_as_technical, reasons_as_modules
 
 
 def _contract_fit(text: str, job: Job, settings: dict[str, Any]) -> int:
@@ -345,16 +548,25 @@ def _add_positive_reasons(
     module_matches: list[str],
     reasons: list[str],
 ) -> None:
-    if components["technical_match"] > 0:
+    if components.get("technical_match", 0) > 0:
         reasons.append("Technical overlap: " + ", ".join(technical_matches[:8]) + ".")
-    if components["module_match"] > 0:
+    if components.get("module_match", 0) > 0:
         reasons.append("Relevant domain/module exposure: " + ", ".join(module_matches[:8]) + ".")
-    if components["contract_fit"] > 0:
+    if components.get("contract_fit", 0) > 0:
         reasons.append("Employment or contract format appears aligned with preferences.")
-    if components["role_interest_fit"] > 0:
+    if components.get("role_interest_fit", 0) > 0:
         reasons.append("Role text overlaps with configured interests or target roles.")
-    if components["location_fit"] > 0:
+    if components.get("location_fit", 0) > 0:
         reasons.append("Location or remote setup appears potentially workable.")
+
+
+def _add_proficiency_reasons(components: dict[str, int], matched_keywords: list[str], reasons: list[str]) -> None:
+    if components.get("main_proficiency", 0) > 0:
+        reasons.append("Main proficiency match: " + ", ".join(matched_keywords[:8]) + ".")
+    if components.get("bonus_boost", 0) > 0:
+        reasons.append(f"Best matched bonus boost adds {components['bonus_boost']}%.")
+    if components.get("detractor_penalty", 0) < 0:
+        reasons.append(f"Highest matched detractor subtracts {abs(components['detractor_penalty'])}%.")
 
 
 def _add_concerns(
@@ -365,11 +577,11 @@ def _add_concerns(
     missing_required_rules: list[str],
     settings: dict[str, Any],
 ) -> None:
-    if components["language_risk"] < 0:
+    if components.get("language_risk", 0) < 0:
         concerns.append("Language requirement may need manual confirmation.")
-    if components["rate_visibility_or_rate_fit"] < 0:
+    if components.get("rate_visibility_or_rate_fit", 0) < 0:
         concerns.append("Rate or salary is not listed.")
-    if components["contract_fit"] < 0 and _is_permanent_role(text):
+    if components.get("contract_fit", 0) < 0 and _is_permanent_role(text):
         concerns.append("Permanent employment conflicts with the match settings.")
     if settings["remote_policy"] in {"required", "strong_preference"} and not _is_remote_or_hybrid(job):
         concerns.append("Remote or hybrid setup is not visible in the posting.")
@@ -494,6 +706,193 @@ def _required_language_terms(text: str, job: Job, allowed: list[str]) -> list[st
     return _dedupe(required)
 
 
+def _evaluate_choice_condition(
+    label: str,
+    actual: str,
+    preferences_by_value: dict[str, str],
+    exclusions: list[str],
+    preferences: list[str],
+) -> None:
+    required = [key for key, value in preferences_by_value.items() if value == "required"]
+    preferred = [key for key, value in preferences_by_value.items() if value == "preferred"]
+    not_preferred = [key for key, value in preferences_by_value.items() if value == "not_preferred"]
+    excluded = [key for key, value in preferences_by_value.items() if value == "excluded"]
+    if actual in excluded:
+        exclusions.append(f"{label} is {actual}, which is excluded.")
+    if required and actual not in required:
+        exclusions.append(f"{label} must be {', '.join(required)}, but posting appears to be {actual}.")
+    if preferred and actual not in preferred:
+        preferences.append(f"{label} preference is {', '.join(preferred)}; posting appears to be {actual}.")
+    if actual in not_preferred:
+        preferences.append(f"{label} is {actual}, which is marked not preferred.")
+
+
+def _evaluate_tag_conditions(
+    label: str,
+    value: str,
+    rows: list[dict[str, str]],
+    exclusions: list[str],
+    preferences: list[str],
+) -> None:
+    text = normalize_for_condition(value)
+    if not rows:
+        return
+    required_rows = [row for row in rows if row["preference"] == "required"]
+    if required_rows and not any(_condition_term_matches(text, row["label"]) for row in required_rows):
+        exclusions.append(f"{label} must include one of: {', '.join(row['label'] for row in required_rows[:5])}.")
+    preferred_rows = [row for row in rows if row["preference"] == "preferred"]
+    if preferred_rows and not any(_condition_term_matches(text, row["label"]) for row in preferred_rows):
+        preferences.append(
+            f"{label} preference is not visible: {', '.join(row['label'] for row in preferred_rows[:5])}."
+        )
+    for row in rows:
+        row_label = row["label"]
+        preference = row["preference"]
+        matches = _condition_term_matches(text, row_label)
+        if preference == "excluded" and matches:
+            exclusions.append(f"{label} matches excluded value {row_label}.")
+        elif preference == "not_preferred" and matches:
+            preferences.append(f"{label} matches not-preferred value {row_label}.")
+
+
+def _evaluate_language_conditions(
+    text: str,
+    job: Job,
+    rows: list[dict[str, str]],
+    exclusions: list[str],
+    preferences: list[str],
+) -> None:
+    if not rows:
+        return
+    row_labels = [row["label"] for row in rows]
+    required_languages = _required_language_terms(text, job, row_labels)
+    if not required_languages:
+        return
+    compatible = [
+        row["label"]
+        for row in rows
+        if row["preference"] in {"required", "preferred", "not_important", "not_preferred"}
+        and any(_language_allowed(language, [row["label"]]) for language in required_languages)
+    ]
+    excluded_matches = [
+        row["label"]
+        for row in rows
+        if row["preference"] == "excluded"
+        and any(_language_allowed(language, [row["label"]]) for language in required_languages)
+    ]
+    if excluded_matches:
+        exclusions.append("Required language matches excluded language: " + ", ".join(excluded_matches[:5]) + ".")
+    if not compatible and not excluded_matches:
+        exclusions.append("Mandatory language requirement is not covered by configured language options.")
+    not_preferred_matches = [
+        row["label"]
+        for row in rows
+        if row["preference"] == "not_preferred"
+        and any(_language_allowed(language, [row["label"]]) for language in required_languages)
+    ]
+    if not_preferred_matches:
+        preferences.append(
+            "Required language matches not-preferred language: " + ", ".join(not_preferred_matches[:5]) + "."
+        )
+
+
+def _evaluate_compensation_conditions(
+    rate: str,
+    rows: list[dict[str, Any]],
+    exclusions: list[str],
+    preferences: list[str],
+) -> None:
+    if not rows:
+        return
+    compensation = _compensation_value(rate)
+    if not compensation:
+        if any(row["preference"] == "required" for row in rows):
+            exclusions.append("Compensation is required by employment conditions but is not listed.")
+        elif any(row["preference"] == "preferred" for row in rows):
+            preferences.append("Preferred compensation information is not listed.")
+        return
+    for row in rows:
+        minimum = int(row.get("minimum") or 0)
+        if minimum <= 0:
+            continue
+        period = str(row.get("period") or "").lower()
+        if period and compensation.get("period") != period:
+            continue
+        amount = int(compensation.get("amount") or 0)
+        if amount >= minimum:
+            continue
+        if row["preference"] == "required":
+            exclusions.append(f"Compensation {amount} {period} is below required minimum {minimum}.")
+        elif row["preference"] == "preferred":
+            preferences.append(f"Compensation {amount} {period} is below preferred minimum {minimum}.")
+
+
+def _employment_type(job: Job, text: str) -> str:
+    workload = normalize_for_condition(job.workload)
+    if any(_term_matches(text, term) for term in ["contract", "contractor", "freelance", "freelancer", "temporary"]):
+        return "contract"
+    if any(_term_matches(workload, term) for term in ["contract", "contractor", "freelance"]):
+        return "contract"
+    if _is_permanent_role(text) or any(
+        _term_matches(workload, term) for term in ["employee", "employed", "full time", "full-time", "permanent"]
+    ):
+        return "employed"
+    return "unknown"
+
+
+def _remote_condition(job: Job) -> str:
+    text = normalize_for_condition(f"{job.remote} {job.location} {job.description} {job.raw_text}")
+    if _term_matches(text, "hybrid"):
+        return "hybrid"
+    if any(_term_matches(text, term) for term in ["remote", "fully remote", "100 remote", "work from home", "wfh"]):
+        return "remote"
+    if _is_explicitly_onsite(job):
+        return "onsite"
+    return "unknown"
+
+
+def _matching_location_labels(job: Job, rows: list[dict[str, str]]) -> list[str]:
+    text = _location_condition_text(job)
+    return [row["label"] for row in rows if _condition_term_matches(text, row["label"])]
+
+
+def _location_condition_text(job: Job) -> str:
+    return normalize_for_condition(f"{job.location} {job.remote} {job.description}")
+
+
+def _condition_term_matches(text: str, term: str) -> bool:
+    normalized_term = normalize_for_condition(term)
+    if not normalized_term:
+        return False
+    if normalized_term in {"eu", "europe", "european union"}:
+        return any(_term_matches(text, marker) for marker in ["eu", "europe", "european union", "emea"])
+    return normalized_term in text or _term_matches(text, normalized_term)
+
+
+def _compensation_value(rate: str) -> dict[str, Any]:
+    text = normalize_for_condition(rate)
+    if not text or "not listed" in text:
+        return {}
+    match = re.search(r"\b(\d+(?:[.,]\d+)?)\s*(k\b)?", text)
+    if not match:
+        return {}
+    amount = float(match.group(1).replace(",", "."))
+    if match.group(2):
+        amount *= 1000
+    period = "daily"
+    if any(marker in text for marker in ["hour", "/h", " per h"]):
+        period = "hourly"
+    elif any(marker in text for marker in ["month", "/mo", "monthly"]):
+        period = "monthly"
+    elif any(marker in text for marker in ["year", "annual", "annum", "/yr", " p.a", " pa"]):
+        period = "yearly"
+    return {"amount": round(amount), "period": period}
+
+
+def normalize_for_condition(value: Any) -> str:
+    return re.sub(r"\s+", " ", str(value or "").lower()).strip()
+
+
 def _has_mandatory_language(text: str, language: str) -> bool:
     language = re.escape(language.lower())
     return bool(
@@ -506,7 +905,10 @@ def _has_mandatory_language(text: str, language: str) -> bool:
 
 def _language_allowed(language: str, allowed: list[str]) -> bool:
     language_text = " ".join(str(language).lower().split())
-    return any(allowed_language in language_text or language_text in allowed_language for allowed_language in allowed)
+    allowed_languages = [" ".join(str(allowed_language).lower().split()) for allowed_language in allowed]
+    return any(
+        allowed_language in language_text or language_text in allowed_language for allowed_language in allowed_languages
+    )
 
 
 def _parse_date(value: object) -> date | None:
@@ -521,6 +923,43 @@ def _parse_date(value: object) -> date | None:
         except ValueError:
             continue
     return None
+
+
+def _mentioned_years(text: str) -> int:
+    values: list[int] = []
+    for match in re.finditer(r"\b(\d{1,2})\+?\s*(?:years?|yrs?)\b", text):
+        start = max(0, match.start() - 40)
+        end = min(len(text), match.end() + 40)
+        window = text[start:end]
+        if any(term in window for term in ["experience", "experienced", "hands-on", "senior", "consultant"]):
+            values.append(int(match.group(1)))
+    return max(values) if values else 0
+
+
+def _normalize_keyword_groups(value: Any) -> list[dict[str, Any]]:
+    source = value if isinstance(value, list) else []
+    rules: list[dict[str, Any]] = []
+    for item in source:
+        if not isinstance(item, dict):
+            continue
+        label = str(item.get("label", "")).strip()
+        terms = _terms_from_value(item.get("terms", []))
+        mode = _choice(str(item.get("mode", "")).lower(), KEYWORD_RULE_MODES, "main")
+        default_value = 100 if mode == "main" else 0
+        proficiency = _int_value(item.get("proficiency", item.get("score")), default_value)
+        proficiency = -abs(proficiency) if mode == "detractor" else max(0, proficiency)
+        years = max(0, _int_value(item.get("years"), 0))
+        if label and terms:
+            rules.append(
+                {
+                    "label": label,
+                    "terms": terms,
+                    "proficiency": proficiency,
+                    "mode": mode,
+                    "years": years,
+                }
+            )
+    return rules
 
 
 def _normalize_rules(value: Any, fallback: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -538,6 +977,44 @@ def _normalize_rules(value: Any, fallback: list[dict[str, Any]]) -> list[dict[st
     return rules
 
 
+def _normalize_condition_rows(value: Any, *, with_kind: bool = False) -> list[dict[str, str]]:
+    source = value if isinstance(value, list) else []
+    rows: list[dict[str, str]] = []
+    for item in source:
+        if isinstance(item, str):
+            label = item.strip()
+            preference = "preferred"
+            kind = "region"
+        elif isinstance(item, dict):
+            label = str(item.get("label") or item.get("value") or item.get("name") or "").strip()
+            preference = _condition_preference(item.get("preference"), "preferred")
+            kind = str(item.get("kind") or "region").strip().lower()
+        else:
+            continue
+        if not label:
+            continue
+        row = {"label": label, "preference": preference}
+        if with_kind:
+            row["kind"] = kind if kind in {"country", "city", "region"} else "region"
+        rows.append(row)
+    return rows
+
+
+def _normalize_compensation_rows(value: Any) -> list[dict[str, Any]]:
+    source = value if isinstance(value, list) else []
+    rows: list[dict[str, Any]] = []
+    for item in source:
+        if not isinstance(item, dict):
+            continue
+        period = str(item.get("period") or "").strip().lower()
+        if period not in {"hourly", "daily", "monthly", "yearly"}:
+            continue
+        minimum = max(0, _int_value(item.get("minimum") or item.get("amount"), 0))
+        preference = _condition_preference(item.get("preference"), "preferred")
+        rows.append({"period": period, "minimum": minimum, "preference": preference})
+    return rows
+
+
 def _terms_from_value(value: Any) -> list[str]:
     parts = value if isinstance(value, list) else re.split(r"[\n,]+", str(value or ""))
     return _dedupe([str(part).strip().lower() for part in parts if str(part).strip()])
@@ -546,6 +1023,13 @@ def _terms_from_value(value: Any) -> list[str]:
 def _choice(value: Any, allowed: set[str], default: str) -> str:
     text = str(value or "").strip()
     return text if text in allowed else default
+
+
+def _condition_preference(value: Any, default: str) -> str:
+    text = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+    aliases = {"not_preferred": "not_preferred", "notimportant": "not_important", "not_important": "not_important"}
+    text = aliases.get(text, text)
+    return text if text in CONDITION_PREFERENCES else default
 
 
 def _int_value(value: Any, default: int) -> int:

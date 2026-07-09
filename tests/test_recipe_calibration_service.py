@@ -211,6 +211,42 @@ def test_blueprint_uses_heading_title_when_job_link_is_empty_overlay() -> None:
     ]
 
 
+def test_blueprint_prefers_visible_title_link_over_overlay_and_apply_cta() -> None:
+    html = """
+    <!doctype html>
+    <html><body>
+      <main class="search-results">
+        <article class="job-card">
+          <a class="absolute left-0 top-0" href="/job-detail/sap-abap-1"></a>
+          <a class="outline-offset-2 outline-stroke-focus" href="/job-detail/sap-abap-1">Easy Apply</a>
+          <a class="outline-offset-2 outline-stroke-focus font-semibold" href="/job-detail/sap-abap-1">SAP ABAP</a>
+          <p>Contract SAP ABAP role with RAP, CDS, OData and Gateway delivery.</p>
+        </article>
+        <article class="job-card">
+          <a class="absolute left-0 top-0" href="/job-detail/sap-basis-2"></a>
+          <a class="outline-offset-2 outline-stroke-focus" href="/job-detail/sap-basis-2">Easy Apply</a>
+          <a class="outline-offset-2 outline-stroke-focus font-semibold" href="/job-detail/sap-basis-2">SAP Basis</a>
+          <p>Hybrid SAP Basis contract role with S/4HANA operations scope.</p>
+        </article>
+        <article class="job-card">
+          <a class="absolute left-0 top-0" href="/job-detail/sap-fiori-3"></a>
+          <a class="outline-offset-2 outline-stroke-focus" href="/job-detail/sap-fiori-3">Easy Apply</a>
+          <a class="outline-offset-2 outline-stroke-focus font-semibold" href="/job-detail/sap-fiori-3">SAP Fiori</a>
+          <p>Remote SAP Fiori project with UI5, RAP and OData integration.</p>
+        </article>
+      </main>
+    </body></html>
+    """
+
+    blueprint = build_recipe_blueprint(html, "https://www.dice.com/jobs?q=SAP")
+    recipe = blueprint["recipe"]
+
+    assert blueprint["status"] == "draft"
+    assert recipe["listing"]["title_selector"] == 'a.font-semibold[href*="/job-detail/"]'
+    jobs = extract_jobs_with_recipe(html, recipe["start_url"], job_board_recipe_from_mapping(recipe))
+    assert [job.title for job in jobs] == ["SAP ABAP", "SAP Basis", "SAP Fiori"]
+
+
 def test_blueprint_detects_job_role_listing_urls() -> None:
     html = """
     <!doctype html>
@@ -456,6 +492,8 @@ def test_calibration_detail_sample_skips_listing_page_self_links(
     <!doctype html>
     <html><body>
       <a href="#">Find Jobs</a>
+      <a href="/jobs/browse-jobs">Browse Jobs</a>
+      <a href="https://client.example.com/careers/default.aspx">Client careers</a>
       <section class="jobs">
         <li class="feature"><a href="/remote-jobs/acme-sap-product-manager">SAP Product Manager Remote Full-Time</a></li>
         <li class="feature"><a href="/remote-jobs/example-sap-architect">SAP Architect Remote Contract</a></li>
@@ -483,6 +521,75 @@ def test_calibration_detail_sample_skips_listing_page_self_links(
 
     assert result.detail_sample_url == "https://weworkremotely.com/remote-jobs/acme-sap-product-manager"
     assert calls[1] == "https://weworkremotely.com/remote-jobs/acme-sap-product-manager"
+
+
+def test_calibration_detail_sample_recognizes_job_detail_links_before_careers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    listing_html = """
+    <!doctype html>
+    <html><body>
+      <a href="https://client.example.com/careers/default.aspx">Client careers</a>
+      <article class="job-card"><a href="/job-detail/sap-abap-1">SAP ABAP Consultant</a></article>
+      <article class="job-card"><a href="/job-detail/sap-basis-2">SAP Basis Consultant</a></article>
+      <article class="job-card"><a href="/job-detail/sap-fiori-3">SAP Fiori Consultant</a></article>
+    </body></html>
+    """
+    detail_html = "<html><body><h1>SAP ABAP Consultant</h1><main>ABAP detail text.</main></body></html>"
+    calls = []
+
+    def fake_static(url: str, timeout_seconds: int):
+        calls.append(url)
+        if url == "https://www.dice.com/jobs?q=sap":
+            return listing_html, url, []
+        return detail_html, url, []
+
+    monkeypatch.setattr("job_agent.services.recipe_calibration_service._fetch_static_html", fake_static)
+
+    result = capture_recipe_calibration(
+        "https://www.dice.com/jobs?q=sap",
+        root=tmp_path,
+        rendered=False,
+        capture_detail=True,
+    )
+
+    assert result.detail_sample_url == "https://www.dice.com/job-detail/sap-abap-1"
+    assert calls[1] == "https://www.dice.com/job-detail/sap-abap-1"
+
+
+def test_blueprint_does_not_follow_detail_sample_without_extractable_fields() -> None:
+    html = """
+    <!doctype html>
+    <html><body>
+      <main>
+        <article class="job-card">
+          <a class="job-link" href="/job-detail/sap-abap-1">SAP ABAP Consultant</a>
+          <p>SAP ABAP contract role with RAP, CDS and OData delivery.</p>
+        </article>
+        <article class="job-card">
+          <a class="job-link" href="/job-detail/sap-basis-2">SAP Basis Consultant</a>
+          <p>SAP Basis contract role with S/4HANA operations scope.</p>
+        </article>
+      </main>
+    </body></html>
+    """
+    detail_html = """
+    <!doctype html>
+    <html><head>
+      <title>Dice.com</title>
+      <meta http-equiv="refresh" content="1;url=/jobs/browse-jobs">
+    </head><body>Dice.com</body></html>
+    """
+
+    blueprint = build_recipe_blueprint(
+        html,
+        "https://www.dice.com/jobs?q=SAP",
+        detail_html=detail_html,
+        detail_url="https://www.dice.com/job-detail/sap-abap-1",
+    )
+    recipe = blueprint["recipe"]
+
+    assert "detail" not in recipe
 
 
 def test_blueprint_infers_unknown_repeated_detail_url_family() -> None:
@@ -562,6 +669,35 @@ def test_selector_audit_reports_title_and_link_failures_inside_cards() -> None:
     assert audit.card_match_count == 1
     assert "title_selector matched 0 elements inside first cards." in audit.warnings
     assert "link_selector matched 0 elements inside first cards." in audit.warnings
+
+
+def test_selector_audit_reports_title_selector_that_matches_only_generic_text() -> None:
+    html = """
+    <!doctype html>
+    <html><body>
+      <article class="job-card">
+        <a class="apply" href="/jobs/sap-abap">Easy Apply</a>
+        <a class="title" href="/jobs/sap-abap">SAP ABAP Consultant</a>
+        <p>Contract SAP ABAP role with RAP and OData.</p>
+      </article>
+    </body></html>
+    """
+    recipe = job_board_recipe_from_mapping(
+        {
+            "source_name": "Bad",
+            "listing": {
+                "card_selector": ".job-card",
+                "title_selector": ".apply",
+                "link_selector": ".title",
+            },
+            "accept": {"url_contains": ["/jobs/"]},
+        }
+    )
+
+    audit = audit_recipe_selectors(html, "https://example.com/jobs", recipe)
+
+    assert "title_selector matched elements inside first cards but produced no useful job title text." in audit.warnings
+    assert "Recipe extracted 0 jobs from captured HTML." in audit.warnings
 
 
 def test_pattern_extraction_parses_eursap_style_text_blob() -> None:

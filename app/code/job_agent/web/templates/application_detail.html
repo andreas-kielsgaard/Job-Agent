@@ -1,0 +1,292 @@
+{% extends "base.html" %}
+
+{% block shell_class %}applications-shell{% endblock %}
+
+{% block content %}
+<div class="application-detail-page">
+  <section class="panel application-hero">
+    <div class="job-title-stack">
+      <p class="eyebrow">Application</p>
+      <h1>{{ application.title }}</h1>
+      <div class="job-hero-meta">
+        <span class="badge {{ application.outcome }}">{{ application.outcome }}</span>
+        <span class="badge {{ application.communication_state | replace(' ', '-') }}">{{ application.communication_state }}</span>
+        {% if application.applied_at %}<span class="badge neutral">Applied {{ application.applied_at }}</span>{% endif %}
+      </div>
+    </div>
+    <div class="application-hero-company">
+      <span>Company</span>
+      <strong>{{ application.company }}</strong>
+      {% if application.recruiter %}<small>{{ application.recruiter }}</small>{% endif %}
+    </div>
+  </section>
+
+  {% if message %}
+  <div class="status-saved-alert" role="status">{{ message }}</div>
+  {% endif %}
+  {% if warning %}
+  <div class="status-warning-alert" role="status">{{ warning }}</div>
+  {% endif %}
+
+  <div class="application-tab-shell" data-application-detail-tabs>
+    <nav class="tab-nav job-tab-nav" aria-label="Application detail sections">
+      <button class="tab-link active" type="button" data-tab-target="communication">Communication</button>
+      <button class="tab-link" type="button" data-tab-target="job">Job Description</button>
+      <button class="tab-link" type="button" data-tab-target="overview">Overview</button>
+      <button class="tab-link" type="button" data-tab-target="package">Application Package</button>
+    </nav>
+
+    <section class="panel job-tab-panel active" data-tab-panel="communication" id="communication">
+      <div class="application-communication-grid">
+        <section class="application-pane">
+          <div class="section-heading-row">
+            <div>
+              <p class="eyebrow">Gmail Threads</p>
+              <h2>Manual Links</h2>
+            </div>
+          </div>
+          <form method="post" action="/api/applications/{{ application.application_id }}/gmail-thread/manual-link" class="application-inline-form">
+            <div>
+              <label>Thread ID</label>
+              <input name="thread_id" placeholder="Gmail thread id" required>
+            </div>
+            <div>
+              <label>Account</label>
+              <input name="account_id" value="">
+            </div>
+            <button type="submit">Link thread</button>
+          </form>
+
+          <div class="application-thread-list">
+            {% for link in thread_links %}
+            <article class="application-thread-row">
+              <div>
+                <strong>{{ link.subject or link.thread_id }}</strong>
+                <span class="badge {{ link.status }}">{{ link.status }}</span>
+                {% if link.account_id %}<span class="muted">{{ link.account_id }}</span>{% endif %}
+                <p class="muted">{{ link.thread_id }}</p>
+                {% if link.synced %}
+                <p>{{ link.snippet or "No snippet cached." }}</p>
+                <p class="muted">{{ link.message_count }} cached message{% if link.message_count != 1 %}s{% endif %}{% if link.last_message_at %}, latest {{ link.last_message_at }}{% endif %}</p>
+                {% else %}
+                <p class="muted">No synced metadata for this thread yet. Run Gmail sync after linking the thread.</p>
+                {% endif %}
+                {% if link.rejected_reason %}<p class="muted">{{ link.rejected_reason }}</p>{% endif %}
+              </div>
+              {% if link.messages %}
+              <div class="application-gmail-message-list">
+                {% for message in link.messages %}
+                <div class="application-gmail-message-row">
+                  <div>
+                    <span class="badge {{ message.direction }}">{{ message.direction_label }}</span>
+                    <strong>{{ message.subject or "Gmail message" }}</strong>
+                    {% if message.contact %}<span class="muted">{{ message.contact }}</span>{% endif %}
+                  </div>
+                  {% if message.sent_at %}<time>{{ message.sent_at }}</time>{% endif %}
+                  {% if message.snippet %}<p>{{ message.snippet }}</p>{% endif %}
+                </div>
+                {% endfor %}
+              </div>
+              {% endif %}
+              <div class="application-row-actions">
+                {% if link.status == "linked" %}
+                <form method="post" action="/api/applications/{{ application.application_id }}/gmail-thread/{{ link.link_id }}/unlink">
+                  <button class="light" type="submit">Unlink</button>
+                </form>
+                {% endif %}
+                <form method="post" action="/api/applications/{{ application.application_id }}/gmail-thread/{{ link.link_id }}/reject" class="application-reject-form">
+                  <input name="rejected_reason" placeholder="Reason">
+                  <button class="light" type="submit">Reject</button>
+                </form>
+                {% if application_options %}
+                <form method="post" action="/api/applications/{{ application.application_id }}/gmail-thread/{{ link.link_id }}/reassign" class="application-reassign-form">
+                  <select name="target_application_id">
+                    {% for option in application_options %}
+                    <option value="{{ option.application_id }}">{{ option.label }}</option>
+                    {% endfor %}
+                  </select>
+                  <button class="light" type="submit">Reassign</button>
+                </form>
+                {% endif %}
+              </div>
+            </article>
+            {% else %}
+            <p class="muted">No Gmail threads linked.</p>
+            {% endfor %}
+          </div>
+        </section>
+
+        <section class="application-pane">
+          <div class="section-heading-row">
+            <div>
+              <p class="eyebrow">Manual Events</p>
+              <h2>Timeline</h2>
+            </div>
+          </div>
+          <form method="post" action="/api/applications/{{ application.application_id }}/manual-event" class="application-event-form">
+            <div class="grid">
+              <div>
+                <label>Channel</label>
+                <select name="channel">
+                  {% for channel in channels %}
+                  <option value="{{ channel }}">{{ channel | title }}</option>
+                  {% endfor %}
+                </select>
+              </div>
+              <div>
+                <label>Direction</label>
+                <select name="direction">
+                  {% for direction in directions %}
+                  <option value="{{ direction }}">{{ direction | title }}</option>
+                  {% endfor %}
+                </select>
+              </div>
+              <div>
+                <label>Time</label>
+                <input type="datetime-local" name="occurred_at">
+              </div>
+              <div>
+                <label>Contact</label>
+                <input name="contact">
+              </div>
+            </div>
+            <label>Subject</label>
+            <input name="subject">
+            <label>Note</label>
+            <textarea class="compact-textarea" name="note"></textarea>
+            <button type="submit">Add event</button>
+          </form>
+
+          <div class="application-event-list">
+            {% for event in manual_events %}
+            <article class="application-event-row">
+              <div>
+                <span class="badge {{ event.direction }}">{{ event.direction_label }}</span>
+                <strong>{{ event.subject or event.channel | title }}</strong>
+                {% if event.contact %}<span class="muted">{{ event.contact }}</span>{% endif %}
+              </div>
+              <time>{{ event.occurred_at }}</time>
+              {% if event.note %}<p>{{ event.note }}</p>{% endif %}
+            </article>
+            {% else %}
+            <p class="muted">No manual events recorded.</p>
+            {% endfor %}
+          </div>
+        </section>
+      </div>
+    </section>
+
+    <section class="panel job-tab-panel" data-tab-panel="job" id="job" hidden>
+      <div class="section-heading-row">
+        <div>
+          <p class="eyebrow">Posting</p>
+          <h2>Job Description</h2>
+        </div>
+        <div class="row">
+          {% if job_detail.job_detail_url %}<a class="button light" href="{{ job_detail.job_detail_url }}">Open job detail</a>{% endif %}
+          {% if job_detail.source_url %}<a class="button light" href="{{ job_detail.source_url }}" target="_blank" rel="noreferrer">Original posting</a>{% endif %}
+          {% if job_detail.application_url %}<a class="button light" href="{{ job_detail.application_url }}" target="_blank" rel="noreferrer">Application URL</a>{% endif %}
+        </div>
+      </div>
+      {% if job_detail.description %}
+      <div class="posting-description">
+        <section class="posting-description-block">
+          <p>{{ job_detail.description }}</p>
+        </section>
+      </div>
+      {% else %}
+      <p class="muted">No saved job description.</p>
+      {% endif %}
+      {% if job_detail.facts %}
+      <dl class="job-fact-grid">
+        {% for fact in job_detail.facts %}
+        <div>
+          <dt>{{ fact.label }}</dt>
+          <dd>{{ fact.value }}</dd>
+        </div>
+        {% endfor %}
+      </dl>
+      {% endif %}
+    </section>
+
+    <section class="panel job-tab-panel" data-tab-panel="overview" id="overview" hidden>
+      <div class="application-overview-grid">
+        <section class="application-pane">
+          <p class="eyebrow">Outcome</p>
+          <form method="post" action="/api/applications/{{ application.application_id }}/outcome" class="application-outcome-form">
+            <select name="outcome">
+              {% for outcome in outcomes %}
+              <option value="{{ outcome }}" {% if application.outcome == outcome %}selected{% endif %}>{{ outcome | replace("_", " ") | title }}</option>
+              {% endfor %}
+            </select>
+            <button type="submit">Save outcome</button>
+          </form>
+        </section>
+        <section class="application-pane">
+          <p class="eyebrow">Record</p>
+          <dl class="job-fact-grid compact">
+            <div><dt>Applied</dt><dd>{{ application.applied_at or "Not listed" }}</dd></div>
+            <div><dt>Source</dt><dd>{{ application.source or "Unknown" }}</dd></div>
+            <div><dt>Application ID</dt><dd>{{ application.application_id }}</dd></div>
+            <div><dt>Updated</dt><dd>{{ application.updated_at }}</dd></div>
+          </dl>
+        </section>
+      </div>
+    </section>
+
+    <section class="panel job-tab-panel" data-tab-panel="package" id="package" hidden>
+      <div class="section-heading-row">
+        <div>
+          <p class="eyebrow">Generated Materials</p>
+          <h2>Application Package</h2>
+        </div>
+      </div>
+      <div class="application-materials-grid">
+        {% for section in material_sections %}
+        <section class="application-pane">
+          <div class="section-heading-row">
+            <div>
+              <p class="eyebrow">{{ section.short_label }}</p>
+              <h3>{{ section.label }}</h3>
+            </div>
+            {% if section.url %}
+            <a class="button light" href="{{ section.url }}" target="_blank" rel="noreferrer">Open</a>
+            {% endif %}
+          </div>
+          {% if section.content %}
+          <div class="markdown material-preview">{{ render_md(section.content) | safe }}</div>
+          {% else %}
+          <p class="muted">No saved material.</p>
+          {% endif %}
+        </section>
+        {% endfor %}
+      </div>
+    </section>
+  </div>
+</div>
+
+<script>
+  (() => {
+    const shell = document.querySelector("[data-application-detail-tabs]");
+    if (!shell) return;
+    const buttons = [...shell.querySelectorAll("[data-tab-target]")];
+    const panels = [...shell.querySelectorAll("[data-tab-panel]")];
+    const activate = (name, updateHash = true) => {
+      buttons.forEach((button) => button.classList.toggle("active", button.dataset.tabTarget === name));
+      panels.forEach((panel) => {
+        const active = panel.dataset.tabPanel === name;
+        panel.classList.toggle("active", active);
+        panel.hidden = !active;
+      });
+      if (updateHash) history.replaceState(null, "", `#${name}`);
+    };
+    buttons.forEach((button) => {
+      button.addEventListener("click", () => activate(button.dataset.tabTarget || "communication"));
+    });
+    const initial = location.hash.replace("#", "");
+    if (initial && buttons.some((button) => button.dataset.tabTarget === initial)) {
+      activate(initial, false);
+    }
+  })();
+</script>
+{% endblock %}

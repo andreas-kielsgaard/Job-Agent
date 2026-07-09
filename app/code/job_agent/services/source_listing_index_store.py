@@ -136,6 +136,15 @@ class SourceListingIndexStore:
         write_json(self.path, data)
         return self.summary_for_source(source_id, source_name)
 
+    def clear(self, source_id: str) -> None:
+        data = self._data()
+        sources = data.get("sources")
+        if not isinstance(sources, dict) or source_id not in sources:
+            return
+        sources.pop(source_id, None)
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        write_json(self.path, data)
+
     def _data(self) -> dict[str, Any]:
         data = read_json(self.path, {"sources": {}}, strict=True)
         return data if isinstance(data, dict) else {"sources": {}}

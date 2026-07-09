@@ -14,14 +14,20 @@ from job_agent.services.recipe_generation_status_service import RecipeGeneration
 from job_agent.services.recipe_preview_service import explain_recipe
 from job_agent.services.recipes.mapping import load_project_job_board_recipe
 from job_agent.services.single_source_run_service import SingleSourceRunService
+from job_agent.services.source_access_gate_service import SourceAccessGateService
 from job_agent.services.source_disqualification_service import SourceDisqualificationService
 from job_agent.services.source_execution_readiness_service import (
     SourceExecutionReadiness,
     SourceExecutionReadinessService,
 )
+from job_agent.services.source_health_service import SourceHealthService
 from job_agent.services.source_listing_index_service import SourceListingIndexService
 from job_agent.services.source_listing_index_store import SourceListingIndexStore, SourceListingIndexSummary
 from job_agent.services.source_registry_service import SourceRegistryService
+from job_agent.services.source_run_field_health_service import (
+    SourceRunFieldHealthRecord,
+    SourceRunFieldHealthService,
+)
 from job_agent.services.source_session_service import SourceSessionService
 from job_agent.services.source_suggestion_service import SourceSuggestionService
 from job_agent.services.source_test_service import SourceTestService
@@ -45,6 +51,7 @@ class SourceWorkflowState:
     readiness: Any
     recipe_explanation: Any
     session_status: Any
+    access_status: dict[str, Any]
     index: dict[str, Any]
     detail: dict[str, Any]
     lifecycle: dict[str, str]
@@ -58,6 +65,7 @@ class SourceWorkflowState:
     recipe_capabilities: list[dict[str, str]]
     source_test_insight: dict[str, Any]
     safe_test_action: dict[str, str] | None
+    run_field_health: Any
 
     @property
     def card(self) -> dict[str, Any]:
@@ -68,8 +76,10 @@ class SourceWorkflowState:
             "index": self.index,
             "detail": self.detail,
             "session": self.session_status,
+            "access": self.access_status,
             "status": self.status,
             "run_eligibility": self.run_eligibility,
+            "run_field_health": self.run_field_health,
         }
 
     def template_context(self) -> dict[str, Any]:
@@ -88,8 +98,10 @@ class SourceWorkflowState:
             "source_card": self.card,
             "source_run_eligibility": self.run_eligibility,
             "source_session": self.session_status,
+            "source_access": self.access_status,
             "source_jobs_url": self.source_jobs_url,
             "source_safe_test_action": self.safe_test_action,
+            "source_run_field_health": self.run_field_health,
             "go_live_readiness": self.readiness,
             "compatibility_url": self.compatibility_url,
             "recipe_editor_url": self.recipe_editor_url,
@@ -118,7 +130,9 @@ class SourceWorkflowHandler:
         self.generation = RecipeGenerationStatusService(self.root)
         self.readiness = SourceExecutionReadinessService(self.root)
         self.sessions = SourceSessionService(self.root)
+        self.access_gate = SourceAccessGateService(self.root)
         self.index_store = SourceListingIndexStore(self.root)
+        self.run_field_health = SourceRunFieldHealthService(self.root)
         self.jobs = JobStore(self.root, create=False)
         self.source_tests = SourceTestService(self.root)
         self.suggestions = SourceSuggestionService(self.root)
@@ -131,6 +145,7 @@ class SourceWorkflowHandler:
         execution_by_source = self.saved_execution_by_source(all_sources)
         readiness_by_source = self.current_readiness_by_source(sources + archived_sources)
         index_by_source = self.index_store.summaries_by_source()
+        run_field_health_by_source = self.run_field_health.load_all()
         seen_records = self.jobs.list_seen_records()
         auto_setup_configured = self._auto_setup_configured()
         source_cards = [
@@ -140,6 +155,10 @@ class SourceWorkflowHandler:
                 readiness_by_source.get(source.id, SourceExecutionReadiness(source_id=source.id)),
                 index_by_source.get(source.id, SourceListingIndexSummary(source_id=source.id, source_name=source.name)),
                 seen_records,
+                run_field_health=run_field_health_by_source.get(
+                    source.id,
+                    SourceRunFieldHealthRecord(source_id=source.id, source_name=source.name),
+                ),
                 auto_setup_configured=auto_setup_configured,
             )
             for source in sources
@@ -151,6 +170,10 @@ class SourceWorkflowHandler:
                 readiness_by_source.get(source.id, SourceExecutionReadiness(source_id=source.id)),
                 index_by_source.get(source.id, SourceListingIndexSummary(source_id=source.id, source_name=source.name)),
                 seen_records,
+                run_field_health=run_field_health_by_source.get(
+                    source.id,
+                    SourceRunFieldHealthRecord(source_id=source.id, source_name=source.name),
+                ),
                 auto_setup_configured=auto_setup_configured,
             )
             for source in archived_sources
@@ -167,6 +190,11 @@ class SourceWorkflowHandler:
         stale_recipe_source_count = sum(
             1 for card in source_cards if card["run_eligibility"].get("stale_recipe_source_test")
         )
+        source_access_attention_count = sum(1 for card in source_cards if card["access"].get("needs_action"))
+        field_health_needs_relearn_count = sum(
+            1 for card in source_cards if card["run_field_health"].status == "needs_relearn"
+        )
+        field_health_warning_count = sum(1 for card in source_cards if card["run_field_health"].status == "warning")
         return {
             "title": "Sources",
             "sources": sources,
@@ -186,6 +214,10 @@ class SourceWorkflowHandler:
                 if card["run_eligibility"]["enabled"] and not card["run_eligibility"]["eligible"]
             ),
             "stale_recipe_source_count": stale_recipe_source_count,
+            "source_access_attention_count": source_access_attention_count,
+            "field_health_needs_relearn_count": field_health_needs_relearn_count,
+            "field_health_warning_count": field_health_warning_count,
+            "field_health_attention_count": field_health_needs_relearn_count + field_health_warning_count,
             "implemented_source_count": sum(1 for card in source_cards if card["lifecycle"]["state"] == "implemented"),
             "indexed_source_count": sum(1 for card in source_cards if card["index"]["complete"]),
             "detail_complete_source_count": sum(1 for card in source_cards if card["detail"]["complete"]),
@@ -283,21 +315,29 @@ class SourceWorkflowHandler:
         index_summary,
         seen_records,
         *,
+        run_field_health=None,
         auto_setup_configured: bool | None = None,
     ) -> dict[str, Any]:
         index = self.index_status(index_summary)
         detail = self.detail_status_from_seen_records(source, index_summary, seen_records)
+        access_status = self.source_access_status(source, purpose="daily_run", readiness=readiness)
+        run_field_health = run_field_health or SourceRunFieldHealthRecord(
+            source_id=source.id,
+            source_name=source.name,
+        )
         status = build_source_page_status(
             source,
             execution_entry,
             readiness,
             index_status=index,
+            source_access=access_status,
         )
         run_eligibility = build_source_run_eligibility(
             source,
             execution_entry,
             readiness,
             index_status=index,
+            source_access=access_status,
         )
         implemented = bool(run_eligibility["eligible"])
         lifecycle = {
@@ -312,8 +352,10 @@ class SourceWorkflowHandler:
             "index": index,
             "detail": detail,
             "session": None,
+            "access": access_status,
             "status": status,
             "run_eligibility": run_eligibility,
+            "run_field_health": run_field_health,
             "auto_setup": self._auto_setup_card(
                 source,
                 lifecycle,
@@ -493,6 +535,7 @@ class SourceWorkflowHandler:
         readiness = self.readiness.evaluate(source.id)
         recipe_explanation = explain_recipe(source.recipe_path, root=self.root) if source.recipe_path else None
         session_status = self.source_session_status(source)
+        access_status = self.source_access_status(source, purpose="daily_run", readiness=readiness)
         index_summary = self.index_store.summary_for_source(source.id, source.name)
         index = self.index_status(index_summary)
         detail = self.detail_status(source, index_summary)
@@ -503,6 +546,7 @@ class SourceWorkflowHandler:
             generation_status=generation_status,
             session_status=session_status,
             index_status=index,
+            source_access=access_status,
         )
         setup_steps = build_source_setup_steps(
             source,
@@ -512,6 +556,7 @@ class SourceWorkflowHandler:
             index_status=index,
             detail_status=detail,
             session_status=session_status,
+            source_access=access_status,
         )
         setup_complete = all(
             str(step.get("state") or "") == "complete" for step in setup_steps if not bool(step.get("optional"))
@@ -521,6 +566,7 @@ class SourceWorkflowHandler:
             execution_entry,
             readiness,
             index_status=index,
+            source_access=access_status,
         )
         implemented = bool(run_eligibility["eligible"])
         lifecycle = {
@@ -530,6 +576,7 @@ class SourceWorkflowHandler:
         }
         best_artifact_dir = generation_status.best_artifact.artifact_dir if generation_status.best_artifact else ""
         source_test_insight = self.source_test_insight(source, readiness=readiness)
+        run_field_health = self.run_field_health.refresh_from_latest_packages(source.id)
         return SourceWorkflowState(
             source=source,
             execution_entry=execution_entry,
@@ -539,6 +586,7 @@ class SourceWorkflowHandler:
             readiness=readiness,
             recipe_explanation=recipe_explanation,
             session_status=session_status,
+            access_status=access_status,
             index=index,
             detail=detail,
             lifecycle=lifecycle,
@@ -551,7 +599,8 @@ class SourceWorkflowHandler:
             recipe_editor_url=self.recipe_editor_url(source, best_artifact_dir),
             recipe_capabilities=self.recipe_capabilities(recipe_explanation),
             source_test_insight=source_test_insight,
-            safe_test_action=self.safe_test_action(source, status),
+            safe_test_action=self.safe_test_action(source, status, access_status=access_status),
+            run_field_health=run_field_health,
         )
 
     def card_for_source(self, source, execution_entry=None) -> dict[str, Any]:
@@ -570,12 +619,29 @@ class SourceWorkflowHandler:
                 session_scope = ""
         return self.sessions.status_for_source(source.id, session_scope=session_scope)
 
+    def source_access_status(
+        self, source, *, purpose: str = "daily_run", readiness: Any | None = None
+    ) -> dict[str, Any]:
+        source_id = str(getattr(source, "id", "") or "").strip()
+        if not source_id:
+            return _source_access_mapping(source_id, None, "blocked", "Source access could not identify the source.")
+        try:
+            decision = (
+                self.access_gate.project_source(source, purpose=purpose, source_id=source_id, readiness=readiness)
+                if readiness is not None
+                else self.access_gate.evaluate_source(source, purpose=purpose, source_id=source_id)
+            )
+        except Exception as exc:
+            return _source_access_mapping(source_id, None, "blocked", f"Source access could not be checked: {exc}")
+        return _source_access_mapping(source_id, decision, decision.status, decision.message)
+
     def source_session_context(self, source_id: str, *, message: str = "", warning: str = "") -> dict[str, Any]:
         source = self.require_source(source_id)
         return {
             "title": f"Source Session - {source.name}",
             "source": source,
             "source_session": self.source_session_status(source),
+            "source_access": self.source_access_status(source, purpose="daily_run"),
             "default_storage_state_path": f"sources/sessions/{source.id}.storage-state.json",
             "message": message,
             "warning": warning,
@@ -614,6 +680,15 @@ class SourceWorkflowHandler:
 
     def clear_source_session(self, source_id: str) -> None:
         self.sessions.clear(source_id)
+
+    def reset_learned_state(self, source_id: str):
+        source = self.require_source(source_id)
+        self.execution.remove_source(source.id)
+        self.readiness.clear(source.id)
+        SourceHealthService(self.root).clear(source.id)
+        self.index_store.clear(source.id)
+        self.run_field_health.clear(source.id)
+        return self.registry.reset_learned_state(source.id)
 
     def source_test_context(self, source_id: str) -> dict[str, Any]:
         source = self.require_source(source_id)
@@ -754,6 +829,12 @@ class SourceWorkflowHandler:
         self.require_recipe_source(source)
         self.require_not_archived(source)
         self.ensure_disabled_execution_entry(source)
+        access_decision = self.access_gate.evaluate_source(
+            source,
+            purpose="listing_index" if purpose == "index" else "detail_ingest",
+        )
+        if not access_decision.can_execute:
+            raise RuntimeError(access_decision.message)
         readiness = self.readiness.evaluate(source.id)
         if readiness.readiness_status != "ready":
             fallback = (
@@ -768,7 +849,7 @@ class SourceWorkflowHandler:
         source, _readiness = self.ensure_ready_for_listing_work(source_id, purpose="index")
         return runtime.launch_source_listing_index(source.id, source.name)
 
-    def launch_detail_review(self, runtime, source_id: str):
+    def launch_detail_review(self, runtime, source_id: str, *, include_seen: bool = False):
         source, _readiness = self.ensure_ready_for_listing_work(source_id, purpose="detail")
         index_summary = self.index_store.summary_for_source(source.id, source.name)
         if not index_summary.is_indexed:
@@ -777,6 +858,7 @@ class SourceWorkflowHandler:
             source.id,
             include_disabled_source=True,
             append_to_today=True,
+            include_seen=include_seen,
         )
 
     def run_source_now(self, source_id: str):
@@ -851,6 +933,11 @@ class SourceWorkflowHandler:
             "detail_enriched_count": result.detail_enriched_count,
             "detail_request_delay_seconds": result.detail_request_delay_seconds,
             "detail_attempts": result.detail_attempts,
+            "detail_description_present_count": result.detail_description_present_count,
+            "detail_description_distinct_count": result.detail_description_distinct_count,
+            "detail_average_description_length": result.detail_average_description_length,
+            "detail_quality_status": result.detail_quality_status,
+            "detail_quality_summary": result.detail_quality_summary,
             "field_checks": result.field_checks,
             "capability_checks": result.capability_checks,
             "log_dir": result.log_dir,
@@ -1273,19 +1360,30 @@ class SourceWorkflowHandler:
             "summary": summary,
         }
 
-    def safe_test_action(self, source, status: dict[str, Any]) -> dict[str, str] | None:
+    def safe_test_action(
+        self,
+        source,
+        status: dict[str, Any],
+        *,
+        access_status: dict[str, Any] | None = None,
+    ) -> dict[str, str] | None:
+        access_status = access_status or {}
+        access_action = access_status.get("action") if isinstance(access_status.get("action"), dict) else None
+        if access_status.get("status") == "needs_login" and access_action:
+            return {
+                "type": "link",
+                "label": str(access_action.get("label") or "Connect session"),
+                "href": str(access_action.get("href") or ""),
+            }
         primary_action = status.get("primary_action") if isinstance(status, dict) else None
         if (
             isinstance(primary_action, dict)
             and primary_action.get("type") == "link"
-            and (
-                "/session" in str(primary_action.get("href") or "")
-                or "/test-run" in str(primary_action.get("href") or "")
-            )
+            and "/test-run" in str(primary_action.get("href") or "")
         ):
             return {
                 "type": "link",
-                "label": str(primary_action.get("label") or "Continue"),
+                "label": "Test source safely",
                 "href": str(primary_action.get("href") or ""),
             }
         if source.recipe_path and source.status != "archived":
@@ -1376,6 +1474,84 @@ def _auto_setup_worker_limit(root: Path) -> int:
     except (TypeError, ValueError):
         configured = 10
     return max(1, min(50, configured))
+
+
+def _source_access_mapping(source_id: str, decision, status: str, message: str) -> dict[str, Any]:
+    metadata = dict(getattr(decision, "metadata", {}) or {}) if decision is not None else {}
+    session_status = str(metadata.get("source_access_session_status") or "").strip()
+    session_required = bool(getattr(decision, "session_required", False))
+    session_usable = bool(getattr(decision, "session_usable", False))
+    session_verified = bool(getattr(decision, "session_verified", False))
+    can_execute = bool(getattr(decision, "can_execute", False)) if decision is not None else False
+    action = _source_access_action(source_id, status, session_status, metadata)
+    title = {
+        "ready": "Source session ready",
+        "not_required": "Source access not required",
+        "needs_login": "Refresh source session",
+        "needs_verification": "Verify source session",
+        "blocked": "Source access blocked",
+    }.get(status, "Source access")
+    if status == "blocked" and str(metadata.get("readiness_status") or "").strip():
+        title = "Refresh source test"
+    label = {
+        "ready": "Login ready",
+        "not_required": "Login available" if session_usable else "No login needed",
+        "needs_login": "Needs login",
+        "needs_verification": "Verify login",
+        "blocked": "Blocked",
+    }.get(status, status.replace("_", " ").title())
+    if status == "blocked" and str(metadata.get("readiness_status") or "").strip():
+        label = "Needs retest"
+    badge_class = {
+        "ready": "high",
+        "not_required": "medium" if session_usable else "waiting",
+        "needs_login": "warning",
+        "needs_verification": "warning",
+        "blocked": "low",
+    }.get(status, "medium")
+    blockers = [str(item).strip() for item in getattr(decision, "blockers", []) or [] if str(item).strip()]
+    if not blockers and message:
+        blockers = [message]
+    show = bool(status in {"needs_login", "needs_verification", "blocked"} or session_required or session_usable)
+    return {
+        "show": show,
+        "can_execute": can_execute,
+        "needs_action": bool(show and not can_execute),
+        "status": status,
+        "label": label,
+        "badge_class": badge_class,
+        "title": title,
+        "summary": message or title,
+        "message": message or title,
+        "blockers": blockers,
+        "session_required": session_required,
+        "session_usable": session_usable,
+        "session_verified": session_verified,
+        "session_scope": str(getattr(decision, "session_scope", "") or ""),
+        "session_state_path": str(getattr(decision, "session_state_path", "") or ""),
+        "metadata": metadata,
+        "action": action,
+    }
+
+
+def _source_access_action(
+    source_id: str,
+    status: str,
+    session_status: str,
+    metadata: dict[str, Any],
+) -> dict[str, str] | None:
+    if not source_id:
+        return None
+    if status == "needs_verification":
+        return {"type": "link", "label": "Verify session", "href": f"/sources/{source_id}/session"}
+    if status == "needs_login":
+        label = "Refresh session" if session_status in {"expired", "missing_state", "unverified"} else "Connect session"
+        return {"type": "link", "label": label, "href": f"/sources/{source_id}/session"}
+    if status != "blocked":
+        return None
+    if str(metadata.get("readiness_status") or "").strip():
+        return {"type": "link", "label": "Run source test", "href": f"/sources/{source_id}/test-run?start=1"}
+    return {"type": "link", "label": "Review source", "href": f"/sources/{source_id}"}
 
 
 def explanation_detail(items, label: str) -> str:

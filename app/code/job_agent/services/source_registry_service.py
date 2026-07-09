@@ -348,6 +348,35 @@ class SourceRegistryService:
             notes=current.notes,
         )
 
+    def reset_learned_state(self, source_id: str) -> SourceRegistryEntry:
+        self.ensure_registry()
+        data = read_yaml(self.path, {"sources": []})
+        if not isinstance(data, dict):
+            data = {"sources": []}
+        sources = data.setdefault("sources", [])
+        if not isinstance(sources, list):
+            sources = []
+            data["sources"] = sources
+        normalized_source_id = _slug(source_id)
+        for item in sources:
+            if not isinstance(item, dict):
+                continue
+            if _mapping_source_id(item) != normalized_source_id:
+                continue
+            item["kind"] = "job_board"
+            item["status"] = "needs_review"
+            item["recipe_path"] = ""
+            item["enabled"] = False
+            tags = [tag for tag in _list_value(item.get("tags")) if tag not in {"recipe", "adopted"}]
+            item["tags"] = tags
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            write_yaml(self.path, data)
+            updated = self.get_source(normalized_source_id)
+            if not updated:
+                raise KeyError(f"Source not found after reset: {source_id}")
+            return updated
+        raise KeyError(f"Source not found: {source_id}")
+
     def set_enabled(self, source_id: str, enabled: bool) -> SourceRegistryEntry:
         self.ensure_registry()
         data = read_yaml(self.path, {"sources": []})

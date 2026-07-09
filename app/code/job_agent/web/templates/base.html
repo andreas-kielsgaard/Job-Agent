@@ -22,8 +22,46 @@
       let externalAgentState = {};
       let llmModelPickerState = {};
       let localWorkStatusItems = [];
+      let appEventSource = null;
+      let appEventRevision = 0;
+      let appEventHandlers = [];
       const WORK_STATUS_LOCAL_KEY = "job-agent:local-work-status";
       const WORK_STATUS_MINIMIZED_KEY = "job-agent:work-status-minimized";
+      const APP_VERSION_DISMISSED_KEY = "job-agent:app-version-dismissed";
+
+      function onAppChangeEvent(handler) {
+        if (typeof handler !== "function") return;
+        appEventHandlers.push(handler);
+        startAppEventStream();
+      }
+
+      function startAppEventStream() {
+        if (appEventSource || !window.EventSource) return;
+        appEventSource = new EventSource(`/api/events?after=${encodeURIComponent(appEventRevision)}`);
+        appEventSource.addEventListener("app-change", (event) => {
+          try {
+            const payload = JSON.parse(event.data || "{}");
+            const revision = Number(payload.revision || event.lastEventId || 0);
+            if (revision && revision <= appEventRevision) return;
+            appEventRevision = Math.max(appEventRevision, revision);
+            if (payload.kind === "heartbeat") return;
+            appEventHandlers.forEach((handler) => {
+              try {
+                handler(payload);
+              } catch {
+                // One subscriber should not break the page-level event stream.
+              }
+            });
+          } catch {
+            // Ignore malformed event payloads.
+          }
+        });
+        appEventSource.onerror = () => {
+          // EventSource reconnects automatically; keep the existing object so reconnect stays centralized.
+        };
+      }
+
+      window.onAppChangeEvent = onAppChangeEvent;
 
       async function copyValueToClipboard(value) {
         const text = value || "";
@@ -433,6 +471,7 @@
             renderWorkStatus(localWorkStatusItems);
           }
         }
+        window.refreshWorkStatusDock = refreshWorkStatus;
 
         function renderWorkStatus(items) {
           dock.hidden = !items.length;
@@ -593,7 +632,9 @@
         }
 
         refreshWorkStatus();
-        window.setInterval(refreshWorkStatus, 2000);
+        onAppChangeEvent((event) => {
+          if (event.kind === "work_status") refreshWorkStatus();
+        });
       }
 
       function attachAsyncWorkForms() {
@@ -926,6 +967,80 @@
         setMinimized(minimized, false);
       }
 
+      function dismissedAppVersion() {
+        try {
+          return localStorage.getItem(APP_VERSION_DISMISSED_KEY) || "";
+        } catch {
+          return "";
+        }
+      }
+
+      function dismissAppVersion(version) {
+        try {
+          localStorage.setItem(APP_VERSION_DISMISSED_KEY, version || "");
+        } catch {
+          // Ignore storage failures; the banner can still be dismissed for this page.
+        }
+      }
+
+      function showAppVersionAlert(payload) {
+        const alert = document.getElementById("app-version-alert");
+        if (!alert) return;
+        if (!payload?.outdated || dismissedAppVersion() === payload.disk_version) {
+          alert.hidden = true;
+          return;
+        }
+        alert.hidden = false;
+        alert.dataset.diskVersion = payload.disk_version || "";
+        const message = alert.querySelector("[data-app-version-message]");
+        if (message) {
+          message.textContent = payload.restart_blocker
+            ? `A newer app version is available. ${payload.restart_blocker}`
+            : payload.restart_supported
+              ? "A newer app version is available. Restart the local server to load it."
+              : "A newer app version is available. Restart the local server from the terminal to load it.";
+        }
+        const restart = alert.querySelector("[data-app-version-restart]");
+        if (restart) restart.hidden = !payload.restart_supported;
+      }
+
+      async function checkAppVersion() {
+        try {
+          const response = await fetch("/api/app-version", { cache: "no-store" });
+          if (!response.ok) return;
+          showAppVersionAlert(await response.json());
+        } catch {
+          // Server may be restarting or unavailable.
+        }
+      }
+
+      function attachAppVersionAlert() {
+        const alert = document.getElementById("app-version-alert");
+        if (!alert || alert.dataset.attached === "1") return;
+        alert.dataset.attached = "1";
+        alert.querySelector("[data-app-version-dismiss]")?.addEventListener("click", () => {
+          dismissAppVersion(alert.dataset.diskVersion || "");
+          alert.hidden = true;
+        });
+        alert.querySelector("[data-app-version-restart]")?.addEventListener("click", async (event) => {
+          const button = event.currentTarget;
+          if (!(button instanceof HTMLButtonElement)) return;
+          button.disabled = true;
+          button.textContent = "Restarting";
+          const message = alert.querySelector("[data-app-version-message]");
+          if (message) message.textContent = "Opening restart screen...";
+          const loadingUrl = new URL("/static/server-loading.html", window.location.origin);
+          loadingUrl.searchParams.set("restart", "1");
+          loadingUrl.searchParams.set("target", new URL("/", window.location.origin).href);
+          loadingUrl.searchParams.set("health", new URL("/api/health", window.location.origin).href);
+          const diskVersion = alert.dataset.diskVersion || "";
+          if (diskVersion) loadingUrl.searchParams.set("version", diskVersion);
+          window.location.href = loadingUrl.toString();
+        });
+        checkAppVersion();
+        window.setInterval(checkAppVersion, 60000);
+      }
+
       document.addEventListener("DOMContentLoaded", () => {
         refreshSourceForms();
         document.querySelectorAll('input[name="source_mode"]').forEach((input) => {
@@ -950,10 +1065,21 @@
         loadLocalWorkStatusItems();
         startWorkStatusDock();
         attachSetupGuideCompanion();
+        attachAppVersionAlert();
       });
     </script>
   </head>
   <body>
+    <div class="app-version-alert" id="app-version-alert" role="status" aria-live="polite" hidden>
+      <div>
+        <strong>Update ready</strong>
+        <span data-app-version-message>A newer app version is available.</span>
+      </div>
+      <div class="app-version-alert-actions">
+        <button type="button" data-app-version-restart>Restart</button>
+        <button class="light" type="button" data-app-version-dismiss>Later</button>
+      </div>
+    </div>
     <header class="topbar">
       <nav class="nav">
         <div class="brand">
@@ -964,6 +1090,7 @@
         <a class="nav-button" href="/postings/new">Add posting</a>
         <a class="nav-button" href="/sources">Sources</a>
         <a class="nav-button" href="/jobs">Jobs</a>
+        <a class="nav-button" href="/applications">Applications</a>
         <a class="nav-button" href="/runs">Runs</a>
         <a class="nav-button" href="/stats">Stats</a>
         {% if setup_guide and setup_guide.show_entry_panel %}
@@ -973,6 +1100,7 @@
         <details class="nav-advanced">
           <summary>Advanced</summary>
           <div>
+            <a href="/connectors">Connectors</a>
             <a href="/compatibility">Compatibility</a>
             <a href="/recipe-editor">Recipe editor</a>
           </div>

@@ -34,6 +34,9 @@ class RunOptions:
     include_disabled_sources: bool = False
     detail_pause_every_jobs: int = 0
     detail_pause_seconds: float = 0.0
+    wait_for_source_access: bool = False
+    source_access_wait_timeout_seconds: float = 0.0
+    source_access_wait_poll_seconds: float = 2.0
 
 
 @dataclass

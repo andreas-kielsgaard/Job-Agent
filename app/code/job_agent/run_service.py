@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
@@ -18,6 +19,7 @@ from .scoring import score_job
 from .services.ai_search_service import AiSearchEvaluation, AiSearchService, should_ai_evaluate_job
 from .services.job_board_recipe_service import enrich_jobs_with_detail_pages_with_trace
 from .services.recipes.mapping import load_project_job_board_recipe
+from .services.source_run_field_health_service import SourceRunFieldHealthService
 from .services.source_session_service import SourceSessionService
 from .sources import SourceFetchOptions, SourceFetchResult, SourceProgressEvent, iter_source_results
 from .store import JobStore
@@ -122,6 +124,7 @@ def run_daily_agent(
         store = JobStore(root)
         status_store = ApplicationStatusStore(root)
         ai_search_service = AiSearchService(root) if options.ai_enhanced_search else None
+        ai_search_configured = bool(ai_search_service and ai_search_service.is_configured())
         ai_search_missing_key_warned = False
         threshold = int(profile.get("thresholds", {}).get("minimum_digest_score", 45))
         run_date = date.today()
@@ -132,6 +135,8 @@ def run_daily_agent(
         processed_states = []
         processed_keys: set[str] = set()
         max_parallel_sources = _max_parallel_sources_from_profile(profile)
+        source_access_purpose = _source_access_purpose(options, source_id)
+        max_parallel_ai_matches = _max_parallel_ai_matches_from_profile(profile)
         fetch_options = SourceFetchOptions(
             fetch_details=False,
             use_source_job_limit=False,
@@ -140,6 +145,10 @@ def run_daily_agent(
             enforce_saved_readiness=True,
             require_setup_complete=not bool(source_id),
             max_parallel_sources=max_parallel_sources,
+            access_purpose=source_access_purpose,
+            wait_for_source_access=options.wait_for_source_access,
+            source_access_wait_timeout_seconds=options.source_access_wait_timeout_seconds,
+            source_access_wait_poll_seconds=options.source_access_wait_poll_seconds,
         )
         if options.full_source_ingestion:
             emit(
@@ -163,6 +172,13 @@ def run_daily_agent(
             "startup",
             counts={"max_parallel_sources": max_parallel_sources},
         )
+        if options.ai_enhanced_search:
+            emit(
+                "ai_parallelism_configured",
+                f"Using up to {max_parallel_ai_matches} parallel LLM match lane(s).",
+                "startup",
+                counts={"max_parallel_ai_matches": max_parallel_ai_matches},
+            )
 
         for source_fetch in iter_source_results(
             root,
@@ -223,92 +239,120 @@ def run_daily_agent(
                     },
                 )
 
-            for index, state in enumerate(candidate_states, start=1):
-                duplicate_key = state.stable_id
-                fuzzy_duplicate_key = f"fuzzy:{state.fuzzy_key}"
-                if duplicate_key in processed_keys or fuzzy_duplicate_key in processed_keys:
+            source_items: list[dict] = []
+            ai_futures = {}
+            ai_executor: ThreadPoolExecutor | None = None
+            try:
+                for index, state in enumerate(candidate_states, start=1):
+                    duplicate_key = state.stable_id
+                    fuzzy_duplicate_key = f"fuzzy:{state.fuzzy_key}"
+                    if duplicate_key in processed_keys or fuzzy_duplicate_key in processed_keys:
+                        emit(
+                            "job_duplicate_skipped",
+                            f"Skipped duplicate job from this run: {state.job.title}.",
+                            "classification",
+                            current_source=source_fetch.source_name,
+                            current_job=state.job.title,
+                            counts={
+                                "source_index": source_fetch.source_index,
+                                "source_count": source_fetch.source_count,
+                            },
+                        )
+                        source_counts["duplicates_skipped"] += 1
+                        continue
+                    processed_keys.add(duplicate_key)
+                    processed_keys.add(fuzzy_duplicate_key)
+
+                    job = state.job
                     emit(
-                        "job_duplicate_skipped",
-                        f"Skipped duplicate job from this run: {state.job.title}.",
+                        "job_classified",
+                        f"{job.title} classified as {state.status}.",
                         "classification",
-                        current_source=source_fetch.source_name,
-                        current_job=state.job.title,
-                        counts={
-                            "source_index": source_fetch.source_index,
-                            "source_count": source_fetch.source_count,
-                        },
-                    )
-                    source_counts["duplicates_skipped"] += 1
-                    continue
-                processed_keys.add(duplicate_key)
-                processed_keys.add(fuzzy_duplicate_key)
-
-                job = state.job
-                emit(
-                    "job_classified",
-                    f"{job.title} classified as {state.status}.",
-                    "classification",
-                    current_source=source_fetch.source_name,
-                    current_job=job.title,
-                    counts={
-                        "processed": index,
-                        "candidate_jobs": len(candidate_states),
-                        "source_index": source_fetch.source_index,
-                        "source_count": source_fetch.source_count,
-                    },
-                )
-                app_status = status_store.ensure_for_job(
-                    stable_id=state.stable_id,
-                    fuzzy_key=state.fuzzy_key,
-                    title=job.title,
-                    company=job.company,
-                    source=job.source,
-                    url=job.url,
-                    application_url=job.application_url,
-                )
-                match = score_job(job, profile)
-                emit(
-                    "job_scored",
-                    f"{job.title} scored {match.total_score}% ({match.category}).",
-                    "scoring",
-                    current_source=source_fetch.source_name,
-                    current_job=job.title,
-                )
-                item = {"job": job, "match": match, "state": state, "application_status": app_status}
-
-                should_include = (
-                    match.category in {"strong", "exploratory"}
-                    and match.total_score >= threshold
-                    and match.category != "excluded"
-                ) or options.include_weak
-
-                highlight_reasons = []
-                if match.category in {"strong", "exploratory"} or (should_include and match.category != "excluded"):
-                    highlight_reasons = build_match_highlights(job, match, profile)
-                if highlight_reasons:
-                    source_counts["highlighted_matches"] += 1
-                    emit(
-                        "match_highlight",
-                        _match_highlight_message(job.title, match.total_score, highlight_reasons),
-                        "scoring",
                         current_source=source_fetch.source_name,
                         current_job=job.title,
                         counts={
-                            "score": match.total_score,
+                            "processed": index,
+                            "candidate_jobs": len(candidate_states),
                             "source_index": source_fetch.source_index,
                             "source_count": source_fetch.source_count,
-                            "highlight_count": len(highlight_reasons),
                         },
                     )
-                ai_evaluation = AiSearchEvaluation(status="missing")
-                if options.ai_enhanced_search and should_ai_evaluate_job(job, match, profile, highlight_reasons):
-                    if ai_search_service and not ai_search_service.is_configured():
-                        ai_evaluation = ai_search_service.skipped("ANTHROPIC_API_KEY is missing or placeholder.")
-                        if not ai_search_missing_key_warned:
-                            ai_search_missing_key_warned = True
+                    app_status = status_store.ensure_for_job(
+                        stable_id=state.stable_id,
+                        fuzzy_key=state.fuzzy_key,
+                        title=job.title,
+                        company=job.company,
+                        source=job.source,
+                        url=job.url,
+                        application_url=job.application_url,
+                    )
+                    match = score_job(job, profile)
+                    emit(
+                        "job_scored",
+                        f"{job.title} scored {match.total_score}% ({match.category}).",
+                        "scoring",
+                        current_source=source_fetch.source_name,
+                        current_job=job.title,
+                    )
+
+                    should_include = (
+                        match.category in {"strong", "exploratory"}
+                        and match.total_score >= threshold
+                        and match.category != "excluded"
+                    ) or options.include_weak
+
+                    highlight_reasons = []
+                    if match.category in {"strong", "exploratory"} or (should_include and match.category != "excluded"):
+                        highlight_reasons = build_match_highlights(job, match, profile)
+                    if highlight_reasons:
+                        source_counts["highlighted_matches"] += 1
+                        emit(
+                            "match_highlight",
+                            _match_highlight_message(job.title, match.total_score, highlight_reasons),
+                            "scoring",
+                            current_source=source_fetch.source_name,
+                            current_job=job.title,
+                            counts={
+                                "score": match.total_score,
+                                "source_index": source_fetch.source_index,
+                                "source_count": source_fetch.source_count,
+                                "highlight_count": len(highlight_reasons),
+                            },
+                        )
+
+                    ai_evaluation = AiSearchEvaluation(status="missing")
+                    item = {
+                        "job": job,
+                        "match": match,
+                        "state": state,
+                        "application_status": app_status,
+                        "should_include": should_include,
+                        "ai_evaluation": ai_evaluation,
+                    }
+                    source_items.append(item)
+
+                    if options.ai_enhanced_search and should_ai_evaluate_job(job, match, profile, highlight_reasons):
+                        if ai_search_service and not ai_search_configured:
+                            ai_evaluation = ai_search_service.skipped("ANTHROPIC_API_KEY is missing or placeholder.")
+                            item["ai_evaluation"] = ai_evaluation
+                            if not ai_search_missing_key_warned:
+                                ai_search_missing_key_warned = True
+                                emit(
+                                    "ai_evaluation_skipped",
+                                    "AI-enhanced search skipped because ANTHROPIC_API_KEY is missing or placeholder.",
+                                    "scoring",
+                                    current_source=source_fetch.source_name,
+                                    current_job=job.title,
+                                    counts={
+                                        "score": match.total_score,
+                                        "source_index": source_fetch.source_index,
+                                        "source_count": source_fetch.source_count,
+                                    },
+                                )
+                        elif ai_search_service:
                             emit(
-                                "ai_evaluation_skipped",
-                                "AI-enhanced search skipped because ANTHROPIC_API_KEY is missing or placeholder.",
+                                "ai_evaluation_started",
+                                f"AI relevance summary started: {job.title}.",
                                 "scoring",
                                 current_source=source_fetch.source_name,
                                 current_job=job.title,
@@ -318,10 +362,71 @@ def run_daily_agent(
                                     "source_count": source_fetch.source_count,
                                 },
                             )
-                    elif ai_search_service:
+                            if ai_executor is None:
+                                ai_executor = ThreadPoolExecutor(
+                                    max_workers=max_parallel_ai_matches,
+                                    thread_name_prefix="run-ai-match",
+                                )
+                            future = ai_executor.submit(
+                                _evaluate_ai_match,
+                                root,
+                                job,
+                                match,
+                                profile,
+                                highlight_reasons,
+                                run_id,
+                                state.stable_id,
+                                options.llm_model,
+                            )
+                            ai_futures[future] = item
+
+                    source_counts["candidates_processed"] += 1
+                    if state.status == "new":
+                        source_counts["new_roles"] += 1
+                    elif state.status == "changed":
+                        source_counts["changed_roles"] += 1
+                    if match.category == "strong":
+                        source_counts["strong_matches"] += 1
+                    elif match.category == "exploratory":
+                        source_counts["exploratory_matches"] += 1
+                    elif match.category == "weak":
+                        source_counts["weak_matches"] += 1
+                    elif match.category == "excluded":
+                        source_counts["excluded_roles"] += 1
+                    processed_states.append(state)
+
+                for future in as_completed(ai_futures):
+                    item = ai_futures[future]
+                    job = item["job"]
+                    match = item["match"]
+                    state = item["state"]
+                    try:
+                        ai_evaluation = future.result()
+                        source_counts["ai_evaluations_completed"] += 1
+                        if ai_evaluation.should_prioritize:
+                            source_counts["ai_prioritized"] += 1
                         emit(
-                            "ai_evaluation_started",
-                            f"AI relevance summary started: {job.title}.",
+                            "ai_evaluation_completed",
+                            (
+                                f"AI relevance summary completed: {job.title} - "
+                                f"{ai_evaluation.fit_confidence or 'medium'} confidence"
+                            ),
+                            "scoring",
+                            current_source=source_fetch.source_name,
+                            current_job=job.title,
+                            counts={
+                                "score": match.total_score,
+                                "source_index": source_fetch.source_index,
+                                "source_count": source_fetch.source_count,
+                                "should_prioritize": int(ai_evaluation.should_prioritize),
+                            },
+                        )
+                    except Exception as exc:
+                        ai_evaluation = AiSearchService(root).failed(str(exc))
+                        source_counts["ai_evaluations_failed"] += 1
+                        emit(
+                            "ai_evaluation_failed",
+                            f"AI relevance summary failed for {job.title}: {exc}",
                             "scoring",
                             current_source=source_fetch.source_name,
                             current_job=job.title,
@@ -331,65 +436,19 @@ def run_daily_agent(
                                 "source_count": source_fetch.source_count,
                             },
                         )
-                        try:
-                            ai_evaluation = ai_search_service.evaluate(
-                                job,
-                                match,
-                                profile,
-                                highlight_reasons,
-                                run_id=run_id,
-                                stable_id=state.stable_id,
-                                llm_model=options.llm_model,
-                            )
-                            source_counts["ai_evaluations_completed"] += 1
-                            if ai_evaluation.should_prioritize:
-                                source_counts["ai_prioritized"] += 1
-                            emit(
-                                "ai_evaluation_completed",
-                                (
-                                    f"AI relevance summary completed: {job.title} - "
-                                    f"{ai_evaluation.fit_confidence or 'medium'} confidence"
-                                ),
-                                "scoring",
-                                current_source=source_fetch.source_name,
-                                current_job=job.title,
-                                counts={
-                                    "score": match.total_score,
-                                    "source_index": source_fetch.source_index,
-                                    "source_count": source_fetch.source_count,
-                                    "should_prioritize": int(ai_evaluation.should_prioritize),
-                                },
-                            )
-                        except Exception as exc:
-                            ai_evaluation = ai_search_service.failed(str(exc))
-                            source_counts["ai_evaluations_failed"] += 1
-                            emit(
-                                "ai_evaluation_failed",
-                                f"AI relevance summary failed for {job.title}: {exc}",
-                                "scoring",
-                                current_source=source_fetch.source_name,
-                                current_job=job.title,
-                                counts={
-                                    "score": match.total_score,
-                                    "source_index": source_fetch.source_index,
-                                    "source_count": source_fetch.source_count,
-                                },
-                            )
+                    item["ai_evaluation"] = ai_evaluation
+            finally:
+                if ai_executor:
+                    ai_executor.shutdown(wait=True, cancel_futures=False)
 
-                source_counts["candidates_processed"] += 1
-                if state.status == "new":
-                    source_counts["new_roles"] += 1
-                elif state.status == "changed":
-                    source_counts["changed_roles"] += 1
-                if match.category == "strong":
-                    source_counts["strong_matches"] += 1
-                elif match.category == "exploratory":
-                    source_counts["exploratory_matches"] += 1
-                elif match.category == "weak":
-                    source_counts["weak_matches"] += 1
-                elif match.category == "excluded":
-                    source_counts["excluded_roles"] += 1
-
+            for item in source_items:
+                job = item["job"]
+                match = item["match"]
+                state = item["state"]
+                app_status = item["application_status"]
+                ai_evaluation = item["ai_evaluation"]
+                should_include = bool(item["should_include"])
+                index_ai_evaluation = ai_evaluation.to_index_fields() if ai_evaluation.status != "missing" else None
                 if should_include and match.category != "excluded":
                     if options.generate_materials:
                         package = generate_materials(
@@ -414,9 +473,7 @@ def run_daily_agent(
                             fuzzy_key=state.fuzzy_key,
                             state=state.status,
                             application_status=app_status.status,
-                            ai_evaluation=ai_evaluation.to_index_fields()
-                            if ai_evaluation.status != "missing"
-                            else None,
+                            ai_evaluation=index_ai_evaluation,
                         )
                         emit(
                             "package_generated",
@@ -436,9 +493,7 @@ def run_daily_agent(
                             fuzzy_key=state.fuzzy_key,
                             state=state.status,
                             application_status=app_status.status,
-                            ai_evaluation=ai_evaluation.to_index_fields()
-                            if ai_evaluation.status != "missing"
-                            else None,
+                            ai_evaluation=index_ai_evaluation,
                         )
                         emit(
                             "package_skipped",
@@ -461,12 +516,11 @@ def run_daily_agent(
                         fuzzy_key=state.fuzzy_key,
                         state=state.status,
                         application_status=app_status.status,
-                        ai_evaluation=ai_evaluation.to_index_fields() if ai_evaluation.status != "missing" else None,
+                        ai_evaluation=index_ai_evaluation,
                         review_list=False,
                     )
                     item["paths"] = paths
                     excluded_items.append(item)
-                processed_states.append(state)
 
             emit(
                 "source_processed",
@@ -475,6 +529,14 @@ def run_daily_agent(
                 current_source=source_fetch.source_name,
                 counts=source_counts,
             )
+
+        _record_source_run_field_health(
+            processed_states,
+            run_id=run_id,
+            root=root,
+            all_warnings=all_warnings,
+            emit=emit,
+        )
 
         emit(
             "jobs_loaded",
@@ -552,6 +614,56 @@ def _store_nested_event(run_store: RunStore, event: RunEvent, progress_callback:
         progress_callback(event)
 
 
+def _record_source_run_field_health(
+    processed_states: list[JobState],
+    *,
+    run_id: str,
+    root: Path,
+    all_warnings: list[SourceWarning],
+    emit: Callable[..., None],
+) -> None:
+    jobs_by_source: dict[str, list] = {}
+    for state in processed_states:
+        source_id = str(state.job.source_id or "").strip()
+        if not source_id:
+            continue
+        jobs_by_source.setdefault(source_id, []).append(state.job)
+    if not jobs_by_source:
+        return
+    service = SourceRunFieldHealthService(root)
+    for source_id, jobs in sorted(jobs_by_source.items()):
+        source_name = str(jobs[0].source or source_id)
+        try:
+            record = service.update_from_jobs(source_id, source_name=source_name, jobs=jobs, run_id=run_id)
+        except Exception as exc:
+            warning = SourceWarning(source_name, f"Latest-run field health check failed: {exc}")
+            all_warnings.append(warning)
+            emit(
+                "source_field_health_failed",
+                warning.message,
+                "finalize",
+                current_source=source_name,
+            )
+            continue
+        if record.status == "not_applicable":
+            continue
+        emit(
+            "source_field_health_checked",
+            record.summary,
+            "finalize",
+            status="warning" if record.status == "needs_relearn" else "running",
+            current_source=source_name,
+            counts={
+                "jobs_checked": record.job_count,
+                "required_missing_field_count": len(record.required_missing_fields),
+                "advisory_missing_field_count": len(record.advisory_missing_fields),
+                "description_strong_count": record.description_strong_count,
+            },
+        )
+        if record.status == "needs_relearn":
+            all_warnings.append(SourceWarning(source_name, record.summary))
+
+
 def _run_label(options: RunOptions, source_id: str = "") -> str:
     if source_id:
         return f"Single-source run for {source_id}"
@@ -567,6 +679,44 @@ def _max_parallel_sources_from_profile(profile: dict) -> int:
     except (TypeError, ValueError):
         configured = 10
     return max(1, configured)
+
+
+def _source_access_purpose(options: RunOptions, source_id: str = "") -> str:
+    if options.full_source_ingestion:
+        return "full_ingest"
+    if source_id and options.detail_extraction_limit is None and options.mark_seen and not options.generate_materials:
+        return "detail_ingest"
+    return "daily_run"
+
+
+def _max_parallel_ai_matches_from_profile(profile: dict) -> int:
+    runtime = profile.get("runtime", {}) if isinstance(profile.get("runtime"), dict) else {}
+    try:
+        configured = int(runtime.get("max_parallel_ai_matches") or 3)
+    except (TypeError, ValueError):
+        configured = 3
+    return max(1, min(6, configured))
+
+
+def _evaluate_ai_match(
+    root: Path,
+    job,
+    match,
+    profile: dict,
+    highlight_reasons: list[str],
+    run_id: str,
+    stable_id: str,
+    llm_model: str,
+) -> AiSearchEvaluation:
+    return AiSearchService(root).evaluate(
+        job,
+        match,
+        profile,
+        highlight_reasons,
+        run_id=run_id,
+        stable_id=stable_id,
+        llm_model=llm_model,
+    )
 
 
 def _prepare_detail_review(
@@ -623,7 +773,7 @@ def _prepare_detail_review(
 
     emit(
         "detail_review_started",
-        f"Reviewing {len(jobs)} new job(s) in detail for {source_fetch.source_name}.",
+        f"Reviewing {len(jobs)} job(s) in detail for {source_fetch.source_name}.",
         "source_processing",
         current_source=source_fetch.source_name,
         counts={

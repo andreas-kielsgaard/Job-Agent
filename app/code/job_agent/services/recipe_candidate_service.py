@@ -46,6 +46,8 @@ class RecipeCandidate:
     unique_urls: int = 0
     average_description_length: int = 0
     quality_warnings: list[str] = field(default_factory=list)
+    learner_access_evidence: dict[str, Any] = field(default_factory=dict)
+    learner_detail_evidence: dict[str, Any] = field(default_factory=dict)
     rejected_at: str = ""
     rejection_reason: str = ""
     approved_at: str = ""
@@ -213,6 +215,22 @@ class RecipeCandidateStore:
         self._write(candidate)
         return candidate
 
+    def update_candidate_evidence(
+        self,
+        candidate_id: str,
+        *,
+        learner_access_evidence: dict[str, Any] | None = None,
+        learner_detail_evidence: dict[str, Any] | None = None,
+    ) -> RecipeCandidate:
+        candidate = self.load_candidate(candidate_id)
+        candidate.updated_at = _now()
+        if learner_access_evidence is not None:
+            candidate.learner_access_evidence = dict(learner_access_evidence)
+        if learner_detail_evidence is not None:
+            candidate.learner_detail_evidence = dict(learner_detail_evidence)
+        self._write(candidate)
+        return candidate
+
     def candidate_path(self, candidate_id: str) -> Path:
         return self._candidate_path(candidate_id)
 
@@ -267,6 +285,8 @@ def _candidate_to_dict(candidate: RecipeCandidate) -> dict[str, Any]:
         "unique_urls": candidate.unique_urls,
         "average_description_length": candidate.average_description_length,
         "quality_warnings": candidate.quality_warnings,
+        "learner_access_evidence": candidate.learner_access_evidence,
+        "learner_detail_evidence": candidate.learner_detail_evidence,
         "rejected_at": candidate.rejected_at,
         "rejection_reason": candidate.rejection_reason,
         "approved_at": candidate.approved_at,
@@ -302,6 +322,8 @@ def _candidate_fields(data: dict[str, Any]) -> dict[str, Any]:
     values.setdefault("referenced_artifact_files", [])
     values.setdefault("attempts", [])
     values.setdefault("quality_warnings", [])
+    values.setdefault("learner_access_evidence", {})
+    values.setdefault("learner_detail_evidence", {})
     values.setdefault("preview_warnings", [])
     return values
 

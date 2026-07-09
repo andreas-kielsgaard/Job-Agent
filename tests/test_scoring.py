@@ -212,6 +212,161 @@ class ScoringTests(unittest.TestCase):
 
         self.assertEqual(match.components["role_interest_fit"], 8)
 
+    def test_unified_keyword_groups_average_main_and_apply_highest_bonus_and_detractor(self) -> None:
+        profile = {
+            "match_engine": {
+                "keyword_groups": [
+                    {
+                        "label": "ABAP variants",
+                        "terms": ["abap", "sap abap"],
+                        "proficiency": 100,
+                        "mode": "main",
+                        "years": 6,
+                    },
+                    {"label": "RAP", "terms": ["rap"], "proficiency": 80, "mode": "main"},
+                    {"label": "Clean core", "terms": ["clean core"], "proficiency": 25, "mode": "bonus"},
+                    {"label": "Gateway", "terms": ["gateway"], "proficiency": 10, "mode": "bonus"},
+                    {"label": "Pure UI5", "terms": ["ui5"], "proficiency": -15, "mode": "detractor"},
+                ]
+            },
+            "language_policy": {"acceptable": [], "fluent": []},
+        }
+        job = Job(
+            title="SAP ABAP RAP Consultant",
+            description="ABAP RAP Gateway Clean Core with UI5 exposure. Requires 8 years experience.",
+        )
+
+        match = score_job(job, profile, today=date(2026, 5, 6))
+
+        self.assertEqual(match.components["main_proficiency"], 90)
+        self.assertEqual(match.components["bonus_boost"], 25)
+        self.assertEqual(match.components["detractor_penalty"], -15)
+        self.assertEqual(match.total_score, 100)
+        self.assertIn("ABAP variants", match.matched_keywords)
+        self.assertTrue(any("8+ years" in concern for concern in match.concerns))
+
+    def test_employment_conditions_flag_without_changing_proficiency_score(self) -> None:
+        profile = {
+            "match_engine": {
+                "keyword_groups": [{"label": "ABAP variants", "terms": ["abap"], "proficiency": 100, "mode": "main"}]
+            },
+            "employment_conditions": {
+                "employment_type": {"contract": "required", "employed": "excluded"},
+                "remote": {"remote": "preferred", "onsite": "excluded"},
+                "locations": [{"label": "Copenhagen", "kind": "city", "preference": "preferred"}],
+            },
+            "language_policy": {"acceptable": [], "fluent": []},
+        }
+        job = Job(
+            title="SAP ABAP Developer",
+            location="Berlin",
+            remote="On-site",
+            workload="Permanent",
+            description="ABAP role for a permanent employee.",
+        )
+
+        match = score_job(job, profile, today=date(2026, 5, 6))
+
+        self.assertEqual(match.total_score, 100)
+        self.assertEqual(match.category, "strong")
+        self.assertTrue(match.condition_exclusions)
+        self.assertTrue(match.condition_preferences)
+
+    def test_employment_preferences_do_not_become_scoring_concerns(self) -> None:
+        profile = {
+            "match_engine": {
+                "keyword_groups": [{"label": "ABAP variants", "terms": ["abap"], "proficiency": 100, "mode": "main"}]
+            },
+            "employment_conditions": {
+                "remote": {"remote": "preferred"},
+                "locations": [{"label": "Copenhagen", "kind": "city", "preference": "preferred"}],
+            },
+            "language_policy": {"acceptable": [], "fluent": []},
+        }
+        job = Job(
+            title="SAP ABAP Developer",
+            location="Berlin",
+            remote="Onsite",
+            description="ABAP role.",
+            source_confidence="high",
+        )
+
+        match = score_job(job, profile, today=date(2026, 5, 6))
+
+        self.assertEqual(match.total_score, 100)
+        self.assertEqual(match.deterministic_confidence, "high")
+        self.assertEqual(match.concerns, [])
+        self.assertTrue(match.condition_preferences)
+
+    def test_remote_condition_prefers_hybrid_over_remote_wording(self) -> None:
+        profile = {
+            "match_engine": {
+                "keyword_groups": [{"label": "ABAP variants", "terms": ["abap"], "proficiency": 100, "mode": "main"}]
+            },
+            "employment_conditions": {"remote": {"hybrid": "required", "remote": "excluded"}},
+            "language_policy": {"acceptable": [], "fluent": []},
+        }
+        job = Job(title="SAP ABAP Developer", remote="Hybrid remote", description="ABAP role.")
+
+        match = score_job(job, profile, today=date(2026, 5, 6))
+
+        self.assertEqual(match.condition_values["remote"], "hybrid")
+        self.assertEqual(match.condition_exclusions, [])
+
+    def test_required_eu_location_matches_remote_region_text(self) -> None:
+        profile = {
+            "match_engine": {
+                "keyword_groups": [{"label": "ABAP variants", "terms": ["abap"], "proficiency": 100, "mode": "main"}]
+            },
+            "employment_conditions": {
+                "locations": [{"label": "EU", "kind": "region", "preference": "required"}],
+            },
+            "language_policy": {"acceptable": [], "fluent": []},
+        }
+        job = Job(title="SAP ABAP Developer", location="Not listed", remote="Remote EU/UK", description="ABAP role.")
+
+        match = score_job(job, profile, today=date(2026, 5, 6))
+
+        self.assertEqual(match.condition_values["locations"], ["EU"])
+        self.assertEqual(match.condition_exclusions, [])
+
+    def test_preferred_location_tags_match_any_configured_preference(self) -> None:
+        profile = {
+            "match_engine": {
+                "keyword_groups": [{"label": "ABAP variants", "terms": ["abap"], "proficiency": 100, "mode": "main"}]
+            },
+            "employment_conditions": {
+                "locations": [
+                    {"label": "Copenhagen", "kind": "city", "preference": "preferred"},
+                    {"label": "Aarhus", "kind": "city", "preference": "preferred"},
+                ],
+            },
+            "language_policy": {"acceptable": [], "fluent": []},
+        }
+        job = Job(title="SAP ABAP Developer", location="Copenhagen", description="ABAP role.")
+
+        match = score_job(job, profile, today=date(2026, 5, 6))
+
+        self.assertFalse(any("Aarhus" in concern for concern in match.condition_preferences))
+        self.assertFalse(any("Location preference" in concern for concern in match.condition_preferences))
+
+    def test_not_preferred_language_is_not_an_employment_condition_exclusion(self) -> None:
+        profile = {
+            "match_engine": {
+                "keyword_groups": [{"label": "ABAP variants", "terms": ["abap"], "proficiency": 100, "mode": "main"}]
+            },
+            "employment_conditions": {
+                "languages": [{"label": "English", "preference": "not_preferred"}],
+            },
+            "language_policy": {"acceptable": [], "fluent": []},
+        }
+        job = Job(title="SAP ABAP Developer", description="ABAP role. English required.")
+
+        match = score_job(job, profile, today=date(2026, 5, 6))
+
+        self.assertEqual(match.condition_exclusions, [])
+        self.assertTrue(any("not-preferred language" in concern for concern in match.condition_preferences))
+
 
 if __name__ == "__main__":
     unittest.main()

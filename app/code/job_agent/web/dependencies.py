@@ -9,6 +9,7 @@ from fastapi.templating import Jinja2Templates
 from job_agent.application_status_store import ApplicationStatusStore
 from job_agent.config import ROOT
 from job_agent.llm import DEFAULT_CLAUDE_MODEL, LlmService, model_options, normalize_model
+from job_agent.services.application_tracker_service import ApplicationTrackerService
 from job_agent.services.cv_reference_service import CvReferenceService
 from job_agent.services.material_service import MaterialService
 from job_agent.services.package_index_service import PackageIndexService
@@ -49,6 +50,10 @@ def package_service() -> PackageIndexService:
 
 def application_status_store() -> ApplicationStatusStore:
     return ApplicationStatusStore(_current_root)
+
+
+def application_tracker_service() -> ApplicationTrackerService:
+    return ApplicationTrackerService(_current_root)
 
 
 def material_service() -> MaterialService:

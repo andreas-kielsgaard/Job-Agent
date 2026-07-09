@@ -11,6 +11,7 @@ from job_agent.run_service import run_daily_agent
 from job_agent.run_store import RunOptions, RunStore
 from job_agent.services.ai_search_service import AiSearchEvaluation
 from job_agent.services.source_listing_index_store import SourceListingIndexStore
+from job_agent.services.source_run_field_health_service import SourceRunFieldHealthService
 from job_agent.services.source_session_service import SourceSessionService
 
 
@@ -37,6 +38,7 @@ def test_run_options_ai_enhanced_search_defaults_false() -> None:
     assert RunOptions().generate_materials is False
     assert RunOptions().full_source_ingestion is False
     assert RunOptions().include_disabled_sources is False
+    assert RunOptions().wait_for_source_access is False
 
 
 def test_default_run_writes_placeholder_package_without_calling_generator(
@@ -94,6 +96,8 @@ def test_run_with_ai_enhanced_search_stores_package_fields_and_events(
                 summary="Strong ABAP fit with Gateway evidence.",
                 recommended_angle="Lead with ABAP/Gateway delivery.",
                 fit_confidence="high",
+                match_score=90,
+                employment_conditions={"employment_type": "contract", "remote": "hybrid"},
                 risk_flags=["Confirm rate"],
                 key_profile_evidence=["ABAP", "OData"],
                 should_prioritize=True,
@@ -117,6 +121,9 @@ def test_run_with_ai_enhanced_search_stores_package_fields_and_events(
     index = read_json(next((local_yaml_source_project / "output").glob("*/*/index.json")), {})
     assert index["ai_evaluation_status"] == "evaluated"
     assert index["ai_summary"] == "Strong ABAP fit with Gateway evidence."
+    assert index["ai_match_score"] == 90
+    assert index["match_score"] == round((index["deterministic_match_score"] + 90) / 2)
+    assert index["ai_employment_conditions"]["remote"] == "hybrid"
     assert index["ai_should_prioritize"] is True
 
 
@@ -384,6 +391,30 @@ def test_full_source_ingestion_reviews_all_detail_pages_with_batch_pause(
     assert any(event["event_type"] == "detail_review_pause" for event in events)
 
 
+def test_daily_run_records_latest_source_field_health_warning(
+    monkeypatch: pytest.MonkeyPatch, template_project: Path
+) -> None:
+    _write_recipe_source_project(template_project, job_count=1)
+
+    def fake_fetch_static(url: str, timeout_seconds: int):
+        return _listing_html(1), url, []
+
+    def fake_detail_get(url: str, *args, **kwargs):
+        return _FakeResponse("<main><div class='detail'>SAP ABAP Consultant 1</div></main>", url=url)
+
+    monkeypatch.setattr("job_agent.services.job_board_recipe_service._fetch_static_html", fake_fetch_static)
+    monkeypatch.setattr("requests.get", fake_detail_get)
+
+    result = run_daily_agent(RunOptions(mark_seen=True, generate_materials=False), root=template_project)
+
+    record = SourceRunFieldHealthService(template_project).get("detail-source")
+    events = RunStore(template_project).read_events(result.record.run_id)
+    assert record.status == "needs_relearn"
+    assert record.required_missing_fields == ["description"]
+    assert any(event["event_type"] == "source_field_health_checked" for event in events)
+    assert any("required field coverage failed" in warning.message for warning in result.source_warnings)
+
+
 def test_daily_run_reuses_connected_session_for_authenticated_detail_review(
     monkeypatch: pytest.MonkeyPatch, template_project: Path
 ) -> None:
@@ -422,6 +453,79 @@ def test_daily_run_reuses_connected_session_for_authenticated_detail_review(
     assert any("detail-source.storage-state.json" in path for path in listing_session_paths)
     assert "sid" in detail_cookie_names
     assert len(read_json(template_project / "jobs" / "seen_jobs.json", [])) == 1
+
+
+def test_mass_runs_skip_required_missing_session_before_fetch(
+    monkeypatch: pytest.MonkeyPatch, template_project: Path
+) -> None:
+    _write_recipe_source_project(template_project, job_count=1, requires_session=True)
+    fetch_calls = []
+
+    def fake_fetch_static(url: str, timeout_seconds: int, **kwargs):
+        fetch_calls.append(url)
+        return _listing_html(1), url, []
+
+    monkeypatch.setattr("job_agent.services.job_board_recipe_service._fetch_static_html", fake_fetch_static)
+
+    daily = run_daily_agent(RunOptions(mark_seen=True, generate_materials=False), root=template_project)
+    full = run_daily_agent(
+        RunOptions(mark_seen=True, generate_materials=False, full_source_ingestion=True),
+        root=template_project,
+    )
+
+    daily_events = RunStore(template_project).read_events(daily.record.run_id)
+    full_events = RunStore(template_project).read_events(full.record.run_id)
+    assert fetch_calls == []
+    assert daily.record.total_loaded == 0
+    assert full.record.total_loaded == 0
+    assert any("requires a connected session" in event["message"] for event in daily_events)
+    assert any("requires a connected session" in event["message"] for event in full_events)
+
+
+def test_daily_run_waits_for_required_session_and_resumes_fetch(
+    monkeypatch: pytest.MonkeyPatch, template_project: Path
+) -> None:
+    _write_recipe_source_project(template_project, job_count=1, requires_session=True)
+    fetch_calls = []
+
+    def fake_fetch_static(url: str, timeout_seconds: int, **kwargs):
+        fetch_calls.append(str(kwargs.get("session_state_path") or ""))
+        return _listing_html(1), url, []
+
+    monkeypatch.setattr("job_agent.services.job_board_recipe_service._fetch_static_html", fake_fetch_static)
+
+    def on_event(event):
+        if event.event_type != "source_access_waiting":
+            return
+        state_path = template_project / "sources" / "sessions" / "detail-source.storage-state.json"
+        state_path.parent.mkdir(parents=True, exist_ok=True)
+        state_path.write_text('{"cookies": [], "origins": []}', encoding="utf-8")
+        service = SourceSessionService(template_project)
+        service.record_storage_state(
+            "detail-source",
+            session_scope="example.com",
+            storage_state_path=state_path.relative_to(template_project).as_posix(),
+        )
+        service.mark_verified("detail-source", session_scope="example.com")
+
+    result = run_daily_agent(
+        RunOptions(
+            mark_seen=False,
+            generate_materials=False,
+            detail_extraction_limit=0,
+            wait_for_source_access=True,
+            source_access_wait_timeout_seconds=1.0,
+            source_access_wait_poll_seconds=0.01,
+        ),
+        progress_callback=on_event,
+        root=template_project,
+    )
+
+    events = RunStore(template_project).read_events(result.record.run_id)
+    assert result.record.total_loaded == 1
+    assert any("detail-source.storage-state.json" in path for path in fetch_calls)
+    assert any(event["event_type"] == "source_access_waiting" for event in events)
+    assert any(event["event_type"] == "source_access_resumed" for event in events)
 
 
 def test_daily_run_skips_setup_incomplete_source_before_fetch(
